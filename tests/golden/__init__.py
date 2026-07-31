@@ -1,0 +1,2 @@
+"""Golden-model tests."""
+
