@@ -2,6 +2,7 @@
 
 from .detector import DetectorConfig, GoldenPulseDetector
 from .receive import (
+    AdcSampleBatch,
     GoldenReceivePipeline,
     GoldenReceiveResult,
     PulseSpec,
@@ -14,6 +15,7 @@ from .transmit import GoldenLfmConfig, generate_lfm_samples, generate_lfm_wavefo
 
 __all__ = [
     "DetectorConfig",
+    "AdcSampleBatch",
     "GoldenLfmConfig",
     "GoldenPulseDetector",
     "GoldenReceivePipeline",
@@ -26,4 +28,3 @@ __all__ = [
     "generate_lfm_waveform",
     "unpack_dual_iq_words",
 ]
-

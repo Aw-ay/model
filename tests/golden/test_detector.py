@@ -5,7 +5,7 @@ import unittest
 
 import numpy as np
 
-from rfsoc_pulse_model.common.types import RangeId
+from rfsoc_pulse_model.common.types import RangeId, SampleDomain
 from rfsoc_pulse_model.golden.detector import DetectorConfig, GoldenPulseDetector
 
 
@@ -47,6 +47,8 @@ class GoldenPulseDetectorTest(unittest.TestCase):
         record = records[0]
         self.assertEqual(record.toa_samples, 16)
         self.assertEqual(record.pw_samples, 7)
+        self.assertEqual(record.sample_domain, SampleDomain.DETECTOR)
+        self.assertEqual(record.sample_rate_hz, 250_000_000)
         self.assertEqual(record.peak_power, 1_600_000)
         self.assertEqual(record.mean_power, 1_600_000)
         self.assertEqual(len(record.iq), 12)
@@ -92,6 +94,66 @@ class GoldenPulseDetectorTest(unittest.TestCase):
         )
 
         self.assertEqual(detector.detect(iq), [])
+
+    def test_saturation_boundary_distinguishes_minus_32767_from_adc_rail(self) -> None:
+        # This catches abs(sample) >= 32767, which incorrectly marks -32767
+        # as a negative rail hit. Signed-16 rails are +32767 and -32768.
+        config = DetectorConfig(
+            noise_boot_samples=2,
+            threshold_scale=2.0,
+            moving_average=1,
+            vote_window=1,
+            vote_required=1,
+        )
+        detector = GoldenPulseDetector(config)
+
+        negative_nonrail = detector.detect(np.array([0j, 0j, -32767 + 0j, 0j]))[0]
+        positive_rail = detector.detect(np.array([0j, 0j, 32767 + 0j, 0j]))[0]
+
+        self.assertFalse(negative_nonrail.saturated)
+        self.assertTrue(positive_rail.saturated)
+
+    def test_explicit_adc_clip_mask_overrides_ambiguous_rail_code(self) -> None:
+        # An exact +32767 input may be legitimate. When upstream supplies the
+        # real ADC clip sideband, it is authoritative.
+        detector = GoldenPulseDetector(
+            DetectorConfig(
+                noise_boot_samples=2,
+                threshold_scale=2.0,
+                moving_average=1,
+                vote_window=1,
+                vote_required=1,
+            )
+        )
+
+        record = detector.detect(
+            np.array([0j, 0j, 32767 + 0j, 0j]),
+            adc_clipped=np.zeros(4, dtype=np.bool_),
+        )[0]
+
+        self.assertFalse(record.saturated)
+
+    def test_fwhm_is_the_contiguous_half_peak_region_around_main_peak(self) -> None:
+        # The low valley remains above the adaptive detection threshold, so it
+        # belongs to one coarse region, but it is below half of the main peak.
+        # FWHM must stop at that valley instead of spanning the second lobe.
+        iq = np.array(
+            [0j] * 4 + [10 + 0j, 10 + 0j, 2 + 0j, 9 + 0j, 9 + 0j] + [0j] * 4
+        )
+        detector = GoldenPulseDetector(
+            DetectorConfig(
+                noise_boot_samples=4,
+                threshold_scale=2.0,
+                moving_average=1,
+                vote_window=1,
+                vote_required=1,
+            )
+        )
+
+        record = detector.detect(iq)[0]
+
+        self.assertEqual(record.toa_samples, 4)
+        self.assertEqual(record.pw_samples, 2)
 
 
 if __name__ == "__main__":

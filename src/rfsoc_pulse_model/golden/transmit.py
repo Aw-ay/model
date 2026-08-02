@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from ..common.fixed import round_array_ties_away_from_zero
+
 
 @dataclass(frozen=True)
 class GoldenLfmConfig:
@@ -39,10 +41,5 @@ def generate_lfm_samples(config: GoldenLfmConfig) -> np.ndarray:
     """Quantize the ideal waveform to the signed-16 DAC sample contract."""
 
     waveform = generate_lfm_waveform(config)
-    rounded = np.where(
-        waveform >= 0.0,
-        np.floor(waveform + 0.5),
-        np.ceil(waveform - 0.5),
-    )
+    rounded = round_array_ties_away_from_zero(waveform)
     return np.clip(rounded, -32_768, 32_767).astype(np.int16)
-

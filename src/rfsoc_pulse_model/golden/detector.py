@@ -1,61 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List, Mapping, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from ..common.config import DetectorConfig
+from ..common.fixed import round_array_ties_away_from_zero, round_ties_away_from_zero
 from ..common.types import IQSample, PulseRecord, RangeId
-
-
-@dataclass(frozen=True)
-class DetectorConfig:
-    noise_boot_samples: int = 16_384
-    threshold_scale: float = 13.815510557964274
-    noise_update_shift: int = 8
-    moving_average: int = 8
-    vote_window: int = 5
-    vote_required: int = 3
-    pre_samples: int = 16
-    post_samples: int = 16
-    min_pulse_samples: int = 1
-    max_pulse_samples: int = 65_535
-    full_scale: int = 32_767
-
-    @classmethod
-    def from_mapping(cls, values: Mapping[str, object]) -> "DetectorConfig":
-        names = (
-            "noise_boot_samples",
-            "threshold_scale",
-            "noise_update_shift",
-            "moving_average",
-            "vote_window",
-            "vote_required",
-            "pre_samples",
-            "post_samples",
-            "min_pulse_samples",
-            "max_pulse_samples",
-            "full_scale",
-        )
-        return cls(**{name: values[name] for name in names if name in values})
-
-    def __post_init__(self) -> None:
-        if self.noise_boot_samples < 1:
-            raise ValueError("noise_boot_samples must be positive")
-        if self.threshold_scale <= 0.0:
-            raise ValueError("threshold_scale must be positive")
-        if not 1 <= self.noise_update_shift <= 31:
-            raise ValueError("noise_update_shift must be between one and 31")
-        if self.moving_average < 1:
-            raise ValueError("moving_average must be positive")
-        if not 1 <= self.vote_required <= self.vote_window:
-            raise ValueError("vote_required must be within vote_window")
-        if self.pre_samples < 0 or self.post_samples < 0:
-            raise ValueError("guard sample counts cannot be negative")
-        if self.min_pulse_samples < 1:
-            raise ValueError("min_pulse_samples must be positive")
-        if self.max_pulse_samples < self.min_pulse_samples:
-            raise ValueError("max_pulse_samples must cover min_pulse_samples")
 
 
 def _as_complex_array(iq: Sequence[complex]) -> np.ndarray:
@@ -86,13 +37,17 @@ def _frequency_turns(iq: np.ndarray) -> float:
 
 
 def _frequency_word(turns_per_sample: float) -> int:
-    value = int(round(turns_per_sample * (1 << 31)))
+    value = round_ties_away_from_zero(turns_per_sample * (1 << 31))
     return max(-(1 << 31), min((1 << 31) - 1, value))
 
 
 def _payload(samples: np.ndarray) -> Tuple[IQSample, ...]:
-    i_values = np.clip(np.rint(samples.real), -32_768, 32_767).astype(np.int64)
-    q_values = np.clip(np.rint(samples.imag), -32_768, 32_767).astype(np.int64)
+    i_values = np.clip(
+        round_array_ties_away_from_zero(samples.real), -32_768, 32_767
+    ).astype(np.int64)
+    q_values = np.clip(
+        round_array_ties_away_from_zero(samples.imag), -32_768, 32_767
+    ).astype(np.int64)
     return tuple((int(i_value), int(q_value)) for i_value, q_value in zip(i_values, q_values))
 
 
@@ -110,11 +65,24 @@ class GoldenPulseDetector:
         channel: int = 0,
         range_id: RangeId = RangeId.ZERO_DB,
         start_index: int = 0,
+        adc_clipped: Optional[Sequence[bool]] = None,
     ) -> List[PulseRecord]:
         samples = _as_complex_array(iq)
         if samples.size == 0:
             self.last_thresholds = np.empty(0, dtype=np.float64)
             return []
+
+        if adc_clipped is None:
+            clipped = (
+                (samples.real >= 32_767)
+                | (samples.real <= -32_768)
+                | (samples.imag >= 32_767)
+                | (samples.imag <= -32_768)
+            )
+        else:
+            clipped = np.asarray(adc_clipped, dtype=np.bool_)
+            if clipped.ndim != 1 or clipped.size != samples.size:
+                raise ValueError("adc_clipped must contain one flag per IQ sample")
 
         powers = np.square(samples.real) + np.square(samples.imag)
         boot_count = min(self.config.noise_boot_samples, powers.size)
@@ -162,11 +130,21 @@ class GoldenPulseDetector:
                 continue
             peak = float(np.max(window_power))
             refine_threshold = max(float(thresholds[coarse_start]), peak / 2.0)
-            above_half = np.flatnonzero(window_power >= refine_threshold)
-            if above_half.size == 0:
-                continue
-            refined_start = search_start + int(above_half[0])
-            refined_end = search_start + int(above_half[-1])
+            peak_offset = int(np.argmax(window_power))
+            left_offset = peak_offset
+            while (
+                left_offset > 0
+                and window_power[left_offset - 1] >= refine_threshold
+            ):
+                left_offset -= 1
+            right_offset = peak_offset
+            while (
+                right_offset + 1 < window_power.size
+                and window_power[right_offset + 1] >= refine_threshold
+            ):
+                right_offset += 1
+            refined_start = search_start + left_offset
+            refined_end = search_start + right_offset
             width = refined_end - refined_start + 1
             if width < self.config.min_pulse_samples:
                 continue
@@ -186,16 +164,21 @@ class GoldenPulseDetector:
                 PulseRecord(
                     channel=channel,
                     range_id=range_id,
+                    sample_domain=self.config.sample_domain,
+                    sample_rate_hz=self.config.sample_rate_hz,
                     toa_samples=start_index + refined_start,
                     pw_samples=width,
-                    peak_power=min(0xFFFF_FFFF, int(round(float(np.max(pulse_powers))))),
-                    mean_power=min(0xFFFF_FFFF, int(round(float(np.mean(pulse_powers))))),
+                    peak_power=min(
+                        0xFFFF_FFFF,
+                        round_ties_away_from_zero(float(np.max(pulse_powers))),
+                    ),
+                    mean_power=min(
+                        0xFFFF_FFFF,
+                        round_ties_away_from_zero(float(np.mean(pulse_powers))),
+                    ),
                     freq_word=_frequency_word(frequency),
                     iq=_payload(samples[payload_start:payload_end]),
-                    saturated=bool(
-                        np.any(np.abs(pulse_samples.real) >= self.config.full_scale)
-                        or np.any(np.abs(pulse_samples.imag) >= self.config.full_scale)
-                    ),
+                    saturated=bool(np.any(clipped[refined_start : refined_end + 1])),
                     truncated=truncated,
                 )
             )

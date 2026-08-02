@@ -1,7 +1,32 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
+import math
 from typing import Literal
+
+import numpy as np
+
+
+class RoundingMode(str, Enum):
+    TIES_AWAY_FROM_ZERO = "ties_away_from_zero"
+
+
+PROJECT_ROUNDING_MODE = RoundingMode.TIES_AWAY_FROM_ZERO
+
+
+def round_ties_away_from_zero(value: float) -> int:
+    """Round to nearest; exact half steps move away from zero."""
+
+    magnitude = math.floor(abs(float(value)) + 0.5)
+    return magnitude if value >= 0 else -magnitude
+
+
+def round_array_ties_away_from_zero(values: np.ndarray) -> np.ndarray:
+    """NumPy form of the project-wide rounding rule."""
+
+    array = np.asarray(values, dtype=np.float64)
+    return np.where(array >= 0.0, np.floor(array + 0.5), np.ceil(array - 0.5))
 
 
 @dataclass(frozen=True)
@@ -32,7 +57,9 @@ class FixedFormat:
         return (1 << self.width) - 1
 
     def quantize(self, value: float) -> int:
-        return self.cast_integer(round(value * (1 << self.fraction_bits)))
+        return self.cast_integer(
+            round_ties_away_from_zero(value * (1 << self.fraction_bits))
+        )
 
     def cast_integer(self, value: int) -> int:
         if self.overflow == "saturate":
@@ -44,4 +71,3 @@ class FixedFormat:
 
     def to_float(self, value: int) -> float:
         return self.cast_integer(value) / float(1 << self.fraction_bits)
-

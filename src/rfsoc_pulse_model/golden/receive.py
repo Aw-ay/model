@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence, Tuple
+from typing import Iterator, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
 from ..common.tables import FIR_DECIMATOR_FLOAT
 from ..common.types import PulseRecord, RangeId
+from ..common.fixed import round_array_ties_away_from_zero
+from ..common.config import ModelConfig
 from .detector import DetectorConfig, GoldenPulseDetector
 
 
@@ -27,23 +29,49 @@ def unpack_dual_iq_words(i_word: int, q_word: int) -> np.ndarray:
     )
 
 
-def apply_range_gain(iq: Sequence[complex], gain_db: float) -> Tuple[np.ndarray, bool]:
+@dataclass(frozen=True)
+class AdcSampleBatch:
+    """ADC samples plus an authoritative per-sample clipping sideband."""
+
+    iq: np.ndarray
+    clipped: np.ndarray
+
+    def __post_init__(self) -> None:
+        if self.iq.ndim != 1 or self.clipped.ndim != 1:
+            raise ValueError("ADC IQ and clipping arrays must be one-dimensional")
+        if self.iq.size != self.clipped.size:
+            raise ValueError("ADC IQ and clipping arrays must have equal length")
+
+    @property
+    def any_clipped(self) -> bool:
+        return bool(np.any(self.clipped))
+
+    def __iter__(self) -> Iterator[object]:
+        """Preserve the earlier ``iq, any_clipped = result`` convenience."""
+
+        yield self.iq
+        yield self.any_clipped
+
+
+def apply_range_gain(iq: Sequence[complex], gain_db: float) -> AdcSampleBatch:
     """Apply ideal analogue gain followed by signed-16 ADC clipping."""
 
     samples = np.asarray(iq, dtype=np.complex128)
     scaled = samples * (10.0 ** (float(gain_db) / 20.0))
-    rounded_i = np.rint(scaled.real)
-    rounded_q = np.rint(scaled.imag)
-    clipped = bool(
-        np.any(rounded_i > 32_767)
-        or np.any(rounded_i < -32_768)
-        or np.any(rounded_q > 32_767)
-        or np.any(rounded_q < -32_768)
+    rounded_i = round_array_ties_away_from_zero(scaled.real)
+    rounded_q = round_array_ties_away_from_zero(scaled.imag)
+    clipped = (
+        (rounded_i > 32_767)
+        | (rounded_i < -32_768)
+        | (rounded_q > 32_767)
+        | (rounded_q < -32_768)
     )
-    return (
-        np.clip(rounded_i, -32_768, 32_767)
-        + 1j * np.clip(rounded_q, -32_768, 32_767),
-        clipped,
+    return AdcSampleBatch(
+        iq=(
+            np.clip(rounded_i, -32_768, 32_767)
+            + 1j * np.clip(rounded_q, -32_768, 32_767)
+        ),
+        clipped=np.asarray(clipped, dtype=np.bool_),
     )
 
 
@@ -105,6 +133,7 @@ def generate_iq(scenario: SignalScenario) -> np.ndarray:
 class GoldenReceiveResult:
     iq: np.ndarray
     source_sample_indices: np.ndarray
+    adc_clipped: np.ndarray
 
 
 class GoldenReceivePipeline:
@@ -113,17 +142,45 @@ class GoldenReceivePipeline:
     filter_length = len(FIR_DECIMATOR_FLOAT)
     group_delay_input_samples = (filter_length - 1) // 2
 
-    def __init__(self, detector_config: DetectorConfig = DetectorConfig()) -> None:
+    def __init__(
+        self,
+        config: Optional[Union[ModelConfig, DetectorConfig]] = None,
+    ) -> None:
+        if config is None:
+            config = ModelConfig.load_default()
+        if isinstance(config, ModelConfig):
+            self.model_config: Optional[ModelConfig] = config
+            detector_config = config.detector
+            self.decimation = config.pl_decimation
+            self.group_delay_input_samples = config.group_delay_input_samples
+        else:
+            self.model_config = None
+            detector_config = config
+            self.decimation = 2
         self.detector = GoldenPulseDetector(detector_config)
 
-    def decimate(self, source_iq: Sequence[complex]) -> GoldenReceiveResult:
-        samples = np.asarray(source_iq, dtype=np.complex128)
+    def decimate(
+        self,
+        source_iq: Union[Sequence[complex], AdcSampleBatch],
+    ) -> GoldenReceiveResult:
+        if isinstance(source_iq, AdcSampleBatch):
+            samples = np.asarray(source_iq.iq, dtype=np.complex128)
+            source_clipped = np.asarray(source_iq.clipped, dtype=np.bool_)
+        else:
+            samples = np.asarray(source_iq, dtype=np.complex128)
+            source_clipped = (
+                (samples.real >= 32_767)
+                | (samples.real <= -32_768)
+                | (samples.imag >= 32_767)
+                | (samples.imag <= -32_768)
+            )
         if samples.ndim != 1:
             raise ValueError("source_iq must be one-dimensional")
         if samples.size < self.filter_length:
             return GoldenReceiveResult(
                 iq=np.empty(0, dtype=np.complex128),
                 source_sample_indices=np.empty(0, dtype=np.int64),
+                adc_clipped=np.empty(0, dtype=np.bool_),
             )
         filtered = np.convolve(
             samples,
@@ -135,17 +192,23 @@ class GoldenReceivePipeline:
             samples.size,
             dtype=np.int64,
         )
-        select = (newest_indices & 1) == 0
+        select = (newest_indices % self.decimation) == 0
+        clip_windows = np.convolve(
+            source_clipped.astype(np.int64),
+            np.ones(self.filter_length, dtype=np.int64),
+            mode="valid",
+        )
         return GoldenReceiveResult(
             iq=np.asarray(filtered[select], dtype=np.complex128),
             source_sample_indices=(
                 newest_indices[select] - self.group_delay_input_samples
             ),
+            adc_clipped=np.asarray(clip_windows[select] > 0, dtype=np.bool_),
         )
 
     def detect(
         self,
-        source_iq: Sequence[complex],
+        source_iq: Union[Sequence[complex], AdcSampleBatch],
         *,
         channel: int = 0,
         range_id: RangeId = RangeId.ZERO_DB,
@@ -155,4 +218,5 @@ class GoldenReceivePipeline:
             result.iq,
             channel=channel,
             range_id=range_id,
+            adc_clipped=result.adc_clipped,
         )
