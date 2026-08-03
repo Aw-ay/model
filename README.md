@@ -41,7 +41,7 @@ FIR, 2:1 decimation, gain paths and ADC clipping. The transmit reference uses
 the same 32-bit phase increment law intended for the Cycle DDS while computing
 the mathematical sine with NumPy.
 
-### PulseRecord sampling contract
+### PulseRecord physical contract
 
 Every `PulseRecord` explicitly carries `sample_domain` and `sample_rate_hz`.
 Records emitted by `GoldenPulseDetector` use:
@@ -62,6 +62,23 @@ source_sample_index = 7 + 2 * detector_sample_index
 
 `toa_seconds` and `pw_seconds` provide explicit unit conversion. Event
 association rejects records from different sample domains or rates.
+
+Every record also carries the complete numeric interpretation of its payload
+and power statistics. The default contract is:
+
+| Field | Default representation | Meaning |
+| --- | --- | --- |
+| `iq` | signed 16-bit, 0 fractional bits | raw I/Q ADC codes |
+| `peak_power` | unsigned 32-bit, 0 fractional bits | maximum `I²+Q²`, in ADC-code² |
+| `mean_power` | unsigned 32-bit, 0 fractional bits | rounded mean `I²+Q²`, in ADC-code² |
+
+The corresponding record fields are `iq_width_bits`, `iq_fraction_bits`,
+`iq_signed`, `iq_unit`, `power_width_bits`, `power_fraction_bits` and
+`power_unit`. `power_definition` is fixed to `I^2+Q^2`. The stored value is
+therefore not watts, dBm, dBFS or a calibrated receiver-input power. Converting
+it to dBFS requires the declared code format; converting it to dBm additionally
+requires a board-specific calibration for RF gain/loss, ADC full scale and
+impedance. Event association rejects records with different physical formats.
 
 ### ADC clipping and FWHM
 
@@ -94,7 +111,9 @@ DAC_baseband_rate = DAC_fabric_clock * TX_samples_per_clock
 For the default configuration these resolve to 4 GSPS -> 500 MSPS complex ->
 250 MSPS detector, and 4 GSPS / 8 = 500 MSPS real TX baseband carried as two
 samples per 250 MHz clock. Inconsistent rates, FIR group delay, channel/range
-count or TX data type are rejected.
+count, IQ/power format or TX data type are rejected. `ModelConfig` is the
+single source for these fields and passes them into `DetectorConfig`, which in
+turn stamps every emitted `PulseRecord`.
 
 The authoritative installed resource is
 `rfsoc_pulse_model/config/default.json`. The root `config/default.json` is a

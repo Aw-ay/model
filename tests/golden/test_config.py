@@ -4,7 +4,7 @@ import unittest
 
 from rfsoc_pulse_model.common.config import ModelConfig
 from rfsoc_pulse_model.common.fixed import RoundingMode
-from rfsoc_pulse_model.common.types import SampleDomain
+from rfsoc_pulse_model.common.types import IQUnit, PowerUnit, SampleDomain
 
 
 class ModelConfigTest(unittest.TestCase):
@@ -25,6 +25,15 @@ class ModelConfigTest(unittest.TestCase):
         self.assertEqual(config.source_sample_index(3), 13)
         self.assertAlmostEqual(config.detector_sample_period_seconds, 4e-9)
         self.assertEqual(config.rounding_mode, RoundingMode.TIES_AWAY_FROM_ZERO)
+        self.assertEqual(config.iq_width_bits, 16)
+        self.assertTrue(config.iq_signed)
+        self.assertEqual(config.iq_fraction_bits, 0)
+        self.assertEqual(config.iq_unit, IQUnit.ADC_CODE)
+        self.assertEqual(config.power_width_bits, 32)
+        self.assertEqual(config.power_fraction_bits, 0)
+        self.assertEqual(config.power_unit, PowerUnit.ADC_CODE_SQUARED)
+        self.assertEqual(config.detector.iq_width_bits, config.iq_width_bits)
+        self.assertEqual(config.detector.power_unit, config.power_unit)
 
     def test_inconsistent_detector_rate_is_rejected(self) -> None:
         payload = self.root_payload()
@@ -43,8 +52,23 @@ class ModelConfigTest(unittest.TestCase):
     def test_installed_package_loads_its_default_config_resource(self) -> None:
         config = ModelConfig.load_default()
 
-        self.assertEqual(config.config_version, 5)
+        self.assertEqual(config.config_version, 6)
         self.assertEqual(config.channels, 4)
+
+    def test_unknown_power_unit_is_rejected(self) -> None:
+        payload = self.root_payload()
+        payload["power_unit"] = "watt"
+
+        with self.assertRaisesRegex(ValueError, "watt"):
+            ModelConfig.from_mapping(payload)
+
+    def test_adc_code_iq_rejects_an_undeclared_fractional_scale(self) -> None:
+        payload = self.root_payload()
+        payload["iq_fraction_bits"] = 1
+        payload["power_fraction_bits"] = 2
+
+        with self.assertRaisesRegex(ValueError, "zero fractional bits"):
+            ModelConfig.from_mapping(payload)
 
 
 if __name__ == "__main__":

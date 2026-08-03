@@ -9,7 +9,15 @@ from .fixed import (
     round_array_ties_away_from_zero,
     round_ties_away_from_zero,
 )
-from .types import IQSample, PulseEvent, PulseRecord, RangeId, SampleDomain
+from .types import (
+    IQSample,
+    IQUnit,
+    PowerUnit,
+    PulseEvent,
+    PulseRecord,
+    RangeId,
+    SampleDomain,
+)
 
 __all__ = [
     "FixedFormat",
@@ -17,6 +25,8 @@ __all__ = [
     "RoundingMode",
     "DetectorConfig",
     "IQSample",
+    "IQUnit",
+    "PowerUnit",
     "PulseEvent",
     "PulseRecord",
     "RangeId",

@@ -7,7 +7,7 @@ import math
 from typing import Mapping, Tuple
 
 from .tables import FIR_DECIMATOR_Q17
-from .types import SampleDomain
+from .types import IQUnit, PowerUnit, SampleDomain
 from .fixed import PROJECT_ROUNDING_MODE, RoundingMode
 
 
@@ -15,6 +15,13 @@ from .fixed import PROJECT_ROUNDING_MODE, RoundingMode
 class DetectorConfig:
     sample_domain: SampleDomain = SampleDomain.DETECTOR
     sample_rate_hz: int = 250_000_000
+    iq_width_bits: int = 16
+    iq_fraction_bits: int = 0
+    iq_signed: bool = True
+    iq_unit: IQUnit = IQUnit.ADC_CODE
+    power_width_bits: int = 32
+    power_fraction_bits: int = 0
+    power_unit: PowerUnit = PowerUnit.ADC_CODE_SQUARED
     noise_boot_samples: int = 16_384
     threshold_scale: float = 13.815510557964274
     noise_update_shift: int = 8
@@ -32,6 +39,13 @@ class DetectorConfig:
         names = (
             "sample_domain",
             "sample_rate_hz",
+            "iq_width_bits",
+            "iq_fraction_bits",
+            "iq_signed",
+            "iq_unit",
+            "power_width_bits",
+            "power_fraction_bits",
+            "power_unit",
             "noise_boot_samples",
             "threshold_scale",
             "noise_update_shift",
@@ -47,9 +61,17 @@ class DetectorConfig:
         selected = {name: values[name] for name in names if name in values}
         if "sample_rate_hz" not in selected and "detector_sample_rate_hz" in values:
             selected["sample_rate_hz"] = values["detector_sample_rate_hz"]
+        if "iq_width_bits" not in selected and "iq_width" in values:
+            selected["iq_width_bits"] = values["iq_width"]
         domain = selected.get("sample_domain")
         if domain is not None and not isinstance(domain, SampleDomain):
             selected["sample_domain"] = SampleDomain(str(domain))
+        iq_unit = selected.get("iq_unit")
+        if iq_unit is not None and not isinstance(iq_unit, IQUnit):
+            selected["iq_unit"] = IQUnit(str(iq_unit))
+        power_unit = selected.get("power_unit")
+        if power_unit is not None and not isinstance(power_unit, PowerUnit):
+            selected["power_unit"] = PowerUnit(str(power_unit))
         return cls(**selected)
 
     def __post_init__(self) -> None:
@@ -57,6 +79,31 @@ class DetectorConfig:
             raise ValueError("pulse detector records must use the detector sample domain")
         if self.sample_rate_hz <= 0:
             raise ValueError("sample_rate_hz must be positive")
+        if self.iq_width_bits < 2:
+            raise ValueError("iq_width_bits must be at least two")
+        if not self.iq_signed:
+            raise ValueError("complex detector IQ must use a signed representation")
+        if not 0 <= self.iq_fraction_bits < self.iq_width_bits:
+            raise ValueError("iq_fraction_bits must be within iq_width_bits")
+        if self.iq_unit != IQUnit.ADC_CODE:
+            raise ValueError("iq_unit must be adc_code")
+        if self.iq_fraction_bits != 0:
+            raise ValueError("raw ADC-code IQ must use zero fractional bits")
+        if self.power_width_bits < 1:
+            raise ValueError("power_width_bits must be positive")
+        if not 0 <= self.power_fraction_bits < self.power_width_bits:
+            raise ValueError("power_fraction_bits must be within power_width_bits")
+        if self.power_unit != PowerUnit.ADC_CODE_SQUARED:
+            raise ValueError("power_unit must be adc_code_squared")
+        if self.power_fraction_bits != 0:
+            raise ValueError("ADC-code-squared power must use zero fractional bits")
+        if self.power_fraction_bits != 2 * self.iq_fraction_bits:
+            raise ValueError("power_fraction_bits must equal twice iq_fraction_bits")
+        required_power_width = 2 * self.iq_width_bits
+        if self.power_width_bits < required_power_width:
+            raise ValueError(
+                "power_width_bits must hold the full I^2+Q^2 result"
+            )
         if self.noise_boot_samples < 1:
             raise ValueError("noise_boot_samples must be positive")
         if self.threshold_scale <= 0.0:
@@ -73,6 +120,20 @@ class DetectorConfig:
             raise ValueError("min_pulse_samples must be positive")
         if self.max_pulse_samples < self.min_pulse_samples:
             raise ValueError("max_pulse_samples must cover min_pulse_samples")
+        if self.full_scale != (1 << (self.iq_width_bits - 1)) - 1:
+            raise ValueError("full_scale must equal the positive signed-IQ rail")
+
+    @property
+    def iq_min_code(self) -> int:
+        return -(1 << (self.iq_width_bits - 1))
+
+    @property
+    def iq_max_code(self) -> int:
+        return (1 << (self.iq_width_bits - 1)) - 1
+
+    @property
+    def power_max_code(self) -> int:
+        return (1 << self.power_width_bits) - 1
 
 
 @dataclass(frozen=True)
@@ -96,7 +157,6 @@ class ModelConfig:
     detector_sample_period_seconds: float
     group_delay_input_samples: int
     channels: int
-    iq_width: int
     ranges_db: Tuple[int, ...]
     loopback_channel: int
     toa_tolerance: int
@@ -131,7 +191,6 @@ class ModelConfig:
             ),
             group_delay_input_samples=int(values["group_delay_input_samples"]),
             channels=int(values["channels"]),
-            iq_width=int(values["iq_width"]),
             ranges_db=tuple(int(value) for value in values["ranges_db"]),
             loopback_channel=int(values["loopback_channel"]),
             toa_tolerance=int(values["toa_tolerance"]),
@@ -143,6 +202,40 @@ class ModelConfig:
         )
         config.validate()
         return config
+
+    @property
+    def iq_width_bits(self) -> int:
+        return self.detector.iq_width_bits
+
+    @property
+    def iq_width(self) -> int:
+        """Compatibility alias; new code must use iq_width_bits."""
+
+        return self.iq_width_bits
+
+    @property
+    def iq_fraction_bits(self) -> int:
+        return self.detector.iq_fraction_bits
+
+    @property
+    def iq_signed(self) -> bool:
+        return self.detector.iq_signed
+
+    @property
+    def iq_unit(self) -> IQUnit:
+        return self.detector.iq_unit
+
+    @property
+    def power_width_bits(self) -> int:
+        return self.detector.power_width_bits
+
+    @property
+    def power_fraction_bits(self) -> int:
+        return self.detector.power_fraction_bits
+
+    @property
+    def power_unit(self) -> PowerUnit:
+        return self.detector.power_unit
 
     @classmethod
     def load_default(cls) -> "ModelConfig":

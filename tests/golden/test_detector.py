@@ -5,7 +5,7 @@ import unittest
 
 import numpy as np
 
-from rfsoc_pulse_model.common.types import RangeId, SampleDomain
+from rfsoc_pulse_model.common.types import IQUnit, PowerUnit, RangeId, SampleDomain
 from rfsoc_pulse_model.golden.detector import DetectorConfig, GoldenPulseDetector
 
 
@@ -51,6 +51,13 @@ class GoldenPulseDetectorTest(unittest.TestCase):
         self.assertEqual(record.sample_rate_hz, 250_000_000)
         self.assertEqual(record.peak_power, 1_600_000)
         self.assertEqual(record.mean_power, 1_600_000)
+        self.assertEqual(record.iq_width_bits, 16)
+        self.assertTrue(record.iq_signed)
+        self.assertEqual(record.iq_fraction_bits, 0)
+        self.assertEqual(record.iq_unit, IQUnit.ADC_CODE)
+        self.assertEqual(record.power_width_bits, 32)
+        self.assertEqual(record.power_fraction_bits, 0)
+        self.assertEqual(record.power_unit, PowerUnit.ADC_CODE_SQUARED)
         self.assertEqual(len(record.iq), 12)
 
     def test_detect_estimates_signed_frequency_in_turns_and_q31(self) -> None:

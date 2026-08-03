@@ -8,6 +8,8 @@ from rfsoc_pulse_model.common.fixed import (
     round_ties_away_from_zero,
 )
 from rfsoc_pulse_model.common.types import (
+    IQUnit,
+    PowerUnit,
     PulseEvent,
     PulseRecord,
     RangeId,
@@ -23,12 +25,20 @@ def make_record(
     *,
     saturated: bool = False,
     sample_rate_hz: int = 250_000_000,
+    iq_width_bits: int = 16,
 ) -> PulseRecord:
     return PulseRecord(
         channel=channel,
         range_id=range_id,
         sample_domain=SampleDomain.DETECTOR,
         sample_rate_hz=sample_rate_hz,
+        iq_width_bits=iq_width_bits,
+        iq_fraction_bits=0,
+        iq_signed=True,
+        iq_unit=IQUnit.ADC_CODE,
+        power_width_bits=32,
+        power_fraction_bits=0,
+        power_unit=PowerUnit.ADC_CODE_SQUARED,
         toa_samples=toa,
         pw_samples=width,
         peak_power=100,
@@ -40,6 +50,36 @@ def make_record(
 
 
 class CommonContractTest(unittest.TestCase):
+    def test_record_carries_complete_iq_and_power_format(self) -> None:
+        record = make_record(0, RangeId.PLUS_20_DB, 100, 10)
+
+        self.assertEqual(record.iq_width_bits, 16)
+        self.assertEqual(record.iq_fraction_bits, 0)
+        self.assertTrue(record.iq_signed)
+        self.assertEqual(record.iq_unit, IQUnit.ADC_CODE)
+        self.assertEqual(record.power_width_bits, 32)
+        self.assertEqual(record.power_fraction_bits, 0)
+        self.assertEqual(record.power_unit, PowerUnit.ADC_CODE_SQUARED)
+        self.assertEqual(record.power_definition, "I^2+Q^2")
+
+    def test_record_rejects_iq_outside_declared_width(self) -> None:
+        with self.assertRaisesRegex(ValueError, "IQ sample"):
+            PulseRecord(
+                **{
+                    **make_record(0, RangeId.PLUS_20_DB, 100, 10).__dict__,
+                    "iq": ((32_768, 0),),
+                }
+            )
+
+    def test_record_rejects_power_outside_declared_width(self) -> None:
+        with self.assertRaisesRegex(ValueError, "peak_power"):
+            PulseRecord(
+                **{
+                    **make_record(0, RangeId.PLUS_20_DB, 100, 10).__dict__,
+                    "peak_power": 1 << 32,
+                }
+            )
+
     def test_record_converts_detector_samples_to_seconds(self) -> None:
         record = make_record(0, RangeId.PLUS_20_DB, 100, 10)
 
@@ -64,6 +104,23 @@ class CommonContractTest(unittest.TestCase):
                     ),
                 ),
                 config_version=4,
+            )
+
+    def test_event_rejects_records_with_different_physical_formats(self) -> None:
+        with self.assertRaisesRegex(ValueError, "physical format"):
+            PulseEvent.from_records(
+                event_id=1,
+                records=(
+                    make_record(0, RangeId.PLUS_20_DB, 100, 10),
+                    make_record(
+                        1,
+                        RangeId.ZERO_DB,
+                        100,
+                        10,
+                        iq_width_bits=15,
+                    ),
+                ),
+                config_version=5,
             )
 
     def test_event_selects_highest_gain_unsaturated_range(self) -> None:

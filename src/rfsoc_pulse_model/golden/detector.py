@@ -41,12 +41,16 @@ def _frequency_word(turns_per_sample: float) -> int:
     return max(-(1 << 31), min((1 << 31) - 1, value))
 
 
-def _payload(samples: np.ndarray) -> Tuple[IQSample, ...]:
+def _payload(samples: np.ndarray, config: DetectorConfig) -> Tuple[IQSample, ...]:
     i_values = np.clip(
-        round_array_ties_away_from_zero(samples.real), -32_768, 32_767
+        round_array_ties_away_from_zero(samples.real),
+        config.iq_min_code,
+        config.iq_max_code,
     ).astype(np.int64)
     q_values = np.clip(
-        round_array_ties_away_from_zero(samples.imag), -32_768, 32_767
+        round_array_ties_away_from_zero(samples.imag),
+        config.iq_min_code,
+        config.iq_max_code,
     ).astype(np.int64)
     return tuple((int(i_value), int(q_value)) for i_value, q_value in zip(i_values, q_values))
 
@@ -74,10 +78,10 @@ class GoldenPulseDetector:
 
         if adc_clipped is None:
             clipped = (
-                (samples.real >= 32_767)
-                | (samples.real <= -32_768)
-                | (samples.imag >= 32_767)
-                | (samples.imag <= -32_768)
+                (samples.real >= self.config.iq_max_code)
+                | (samples.real <= self.config.iq_min_code)
+                | (samples.imag >= self.config.iq_max_code)
+                | (samples.imag <= self.config.iq_min_code)
             )
         else:
             clipped = np.asarray(adc_clipped, dtype=np.bool_)
@@ -166,18 +170,25 @@ class GoldenPulseDetector:
                     range_id=range_id,
                     sample_domain=self.config.sample_domain,
                     sample_rate_hz=self.config.sample_rate_hz,
+                    iq_width_bits=self.config.iq_width_bits,
+                    iq_fraction_bits=self.config.iq_fraction_bits,
+                    iq_signed=self.config.iq_signed,
+                    iq_unit=self.config.iq_unit,
+                    power_width_bits=self.config.power_width_bits,
+                    power_fraction_bits=self.config.power_fraction_bits,
+                    power_unit=self.config.power_unit,
                     toa_samples=start_index + refined_start,
                     pw_samples=width,
                     peak_power=min(
-                        0xFFFF_FFFF,
+                        self.config.power_max_code,
                         round_ties_away_from_zero(float(np.max(pulse_powers))),
                     ),
                     mean_power=min(
-                        0xFFFF_FFFF,
+                        self.config.power_max_code,
                         round_ties_away_from_zero(float(np.mean(pulse_powers))),
                     ),
                     freq_word=_frequency_word(frequency),
-                    iq=_payload(samples[payload_start:payload_end]),
+                    iq=_payload(samples[payload_start:payload_end], self.config),
                     saturated=bool(np.any(clipped[refined_start : refined_end + 1])),
                     truncated=truncated,
                 )
