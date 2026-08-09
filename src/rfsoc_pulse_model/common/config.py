@@ -4,11 +4,19 @@ from dataclasses import dataclass
 from importlib import resources
 import json
 import math
-from typing import Mapping, Tuple
+from typing import Mapping, Sequence, Tuple
 
 from .tables import FIR_DECIMATOR_Q17
-from .types import IQUnit, PowerUnit, SampleDomain
+from .types import (
+    ChannelRole,
+    GainRange,
+    IQUnit,
+    Polarization,
+    PowerUnit,
+    SampleDomain,
+)
 from .fixed import PROJECT_ROUNDING_MODE, RoundingMode
+from .reflection_types import PhysicalChannelMapEntry
 
 
 @dataclass(frozen=True)
@@ -156,6 +164,20 @@ class ModelConfig:
     detector_sample_rate_hz: int
     detector_sample_period_seconds: float
     group_delay_input_samples: int
+    adc_channels: int
+    dac_channels: int
+    polarizations: int
+    reflection_sample_rate_hz: int
+    maximum_targets: int
+    maximum_delay_samples: int
+    fractional_delay_taps: int
+    processing_representation: str
+    dac_output_mode: str
+    auto_range_high_water_fraction: float
+    auto_range_low_water_fraction: float
+    auto_range_hold_samples: int
+    adc_channel_map: Tuple[PhysicalChannelMapEntry, ...]
+    dac_channel_map: Tuple[PhysicalChannelMapEntry, ...]
     channels: int
     ranges_db: Tuple[int, ...]
     loopback_channel: int
@@ -190,6 +212,24 @@ class ModelConfig:
                 values["detector_sample_period_seconds"]
             ),
             group_delay_input_samples=int(values["group_delay_input_samples"]),
+            adc_channels=int(values["adc_channels"]),
+            dac_channels=int(values["dac_channels"]),
+            polarizations=int(values["polarizations"]),
+            reflection_sample_rate_hz=int(values["reflection_sample_rate_hz"]),
+            maximum_targets=int(values["maximum_targets"]),
+            maximum_delay_samples=int(values["maximum_delay_samples"]),
+            fractional_delay_taps=int(values["fractional_delay_taps"]),
+            processing_representation=str(values["processing_representation"]),
+            dac_output_mode=str(values["dac_output_mode"]),
+            auto_range_high_water_fraction=float(
+                values["auto_range_high_water_fraction"]
+            ),
+            auto_range_low_water_fraction=float(
+                values["auto_range_low_water_fraction"]
+            ),
+            auto_range_hold_samples=int(values["auto_range_hold_samples"]),
+            adc_channel_map=cls._channel_map(values["adc_channel_map"], "adc"),
+            dac_channel_map=cls._channel_map(values["dac_channel_map"], "dac"),
             channels=int(values["channels"]),
             ranges_db=tuple(int(value) for value in values["ranges_db"]),
             loopback_channel=int(values["loopback_channel"]),
@@ -202,6 +242,19 @@ class ModelConfig:
         )
         config.validate()
         return config
+
+    @staticmethod
+    def _channel_map(
+        values: object,
+        kind: str,
+    ) -> Tuple[PhysicalChannelMapEntry, ...]:
+        if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
+            raise ValueError(f"{kind}_channel_map must be a sequence")
+        return tuple(
+            PhysicalChannelMapEntry.from_mapping(value)
+            for value in values
+            if isinstance(value, Mapping)
+        )
 
     @property
     def iq_width_bits(self) -> int:
@@ -282,6 +335,35 @@ class ModelConfig:
         expected_group_delay = (len(FIR_DECIMATOR_Q17) - 1) // 2
         if self.group_delay_input_samples != expected_group_delay:
             raise ValueError("group_delay_input_samples does not match the FIR table")
+        if self.adc_channels != 8:
+            raise ValueError("adc_channels must equal eight")
+        if self.dac_channels != 8:
+            raise ValueError("dac_channels must equal eight")
+        if self.polarizations != 2:
+            raise ValueError("polarizations must equal two")
+        if self.reflection_sample_rate_hz != self.rfdc_complex_sample_rate_hz:
+            raise ValueError(
+                "reflection_sample_rate_hz must equal rfdc_complex_sample_rate_hz"
+            )
+        if self.maximum_targets < 1 or self.maximum_delay_samples < 1:
+            raise ValueError("reflection target and delay capacities must be positive")
+        if self.fractional_delay_taps < 1 or self.fractional_delay_taps % 2 == 0:
+            raise ValueError("fractional_delay_taps must be a positive odd value")
+        if self.processing_representation != "complex_baseband":
+            raise ValueError("processing_representation must be complex_baseband")
+        if self.dac_output_mode != "complex_baseband_reference":
+            raise ValueError("dac_output_mode must be complex_baseband_reference")
+        if not (
+            0.0
+            < self.auto_range_low_water_fraction
+            < self.auto_range_high_water_fraction
+            < 1.0
+        ):
+            raise ValueError("auto-range water marks must satisfy 0 < low < high < 1")
+        if self.auto_range_hold_samples < 1:
+            raise ValueError("auto_range_hold_samples must be positive")
+        self._validate_channel_map(self.adc_channel_map, self.adc_channels, "adc")
+        self._validate_channel_map(self.dac_channel_map, self.dac_channels, "dac")
         if self.channels < 1 or len(self.ranges_db) != self.channels:
             raise ValueError("ranges_db must contain one entry per channel")
         if not 0 <= self.loopback_channel < self.channels:
@@ -299,6 +381,41 @@ class ModelConfig:
             raise ValueError(
                 f"rounding_mode must be {PROJECT_ROUNDING_MODE.value}"
             )
+
+    @staticmethod
+    def _validate_channel_map(
+        entries: Tuple[PhysicalChannelMapEntry, ...],
+        expected_count: int,
+        kind: str,
+    ) -> None:
+        indices = [entry.index for entry in entries]
+        if len(entries) != expected_count or sorted(indices) != list(range(expected_count)):
+            raise ValueError(
+                f"{kind}_channel_map index values must contain each channel exactly once"
+            )
+        if kind == "adc":
+            for polarization in (Polarization.H, Polarization.V):
+                for gain_range in (GainRange.HIGH, GainRange.MID, GainRange.LOW):
+                    matches = [
+                        entry
+                        for entry in entries
+                        if entry.polarization == polarization
+                        and entry.gain_range == gain_range
+                        and ChannelRole.ECHO in entry.allowed_roles
+                    ]
+                    if len(matches) != 1:
+                        raise ValueError(
+                            "adc_channel_map must contain one echo path per "
+                            "polarization and gain range"
+                        )
+        if kind == "dac":
+            reference = {
+                entry.index: entry.polarization
+                for entry in entries
+                if entry.gain_range == GainRange.REFERENCE
+            }
+            if reference != {6: Polarization.V, 7: Polarization.H}:
+                raise ValueError("dac_channel_map reference paths must be DAC6 V and DAC7 H")
 
     def source_sample_index(self, detector_sample_index: int) -> int:
         if detector_sample_index < 0:

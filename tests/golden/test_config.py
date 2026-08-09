@@ -52,7 +52,7 @@ class ModelConfigTest(unittest.TestCase):
     def test_installed_package_loads_its_default_config_resource(self) -> None:
         config = ModelConfig.load_default()
 
-        self.assertEqual(config.config_version, 6)
+        self.assertEqual(config.config_version, 7)
         self.assertEqual(config.channels, 4)
 
     def test_unknown_power_unit_is_rejected(self) -> None:
@@ -69,6 +69,35 @@ class ModelConfigTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "zero fractional bits"):
             ModelConfig.from_mapping(payload)
+
+    def test_reflection_rate_and_capacity_are_static_contracts(self) -> None:
+        config = ModelConfig.load_default()
+
+        self.assertEqual(config.adc_channels, 8)
+        self.assertEqual(config.dac_channels, 8)
+        self.assertEqual(config.polarizations, 2)
+        self.assertEqual(config.reflection_sample_rate_hz, 500_000_000)
+        self.assertEqual(config.maximum_targets, 8)
+        self.assertEqual(config.maximum_delay_samples, 1_048_576)
+        self.assertEqual(config.fractional_delay_taps, 63)
+
+    def test_duplicate_adc_index_is_rejected(self) -> None:
+        payload = self.root_payload()
+        payload["adc_channel_map"][1]["index"] = 0
+
+        with self.assertRaisesRegex(ValueError, "adc_channel_map.*index"):
+            ModelConfig.from_mapping(payload)
+
+    def test_default_json_mirror_is_byte_identical(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+
+        self.assertEqual(
+            (project_root / "config/default.json").read_bytes(),
+            (
+                project_root
+                / "src/rfsoc_pulse_model/config/default.json"
+            ).read_bytes(),
+        )
 
 
 if __name__ == "__main__":

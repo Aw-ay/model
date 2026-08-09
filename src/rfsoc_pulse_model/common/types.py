@@ -17,6 +17,42 @@ class RangeId(IntEnum):
     LOOPBACK = 3
 
 
+class Polarization(str, Enum):
+    """Logical polarization order shared by reflection-model layers."""
+
+    H = "H"
+    V = "V"
+
+
+class GainRange(str, Enum):
+    """Physical high/mid/low path or the reference path."""
+
+    HIGH = "high"
+    MID = "mid"
+    LOW = "low"
+    REFERENCE = "reference"
+
+
+class ChannelRole(str, Enum):
+    """Allowed physical use of one ADC or DAC path."""
+
+    ECHO = "echo"
+    CALIBRATION = "calibration"
+    CANCELLATION = "cancellation"
+
+
+class RangeSelectionMode(str, Enum):
+    FIXED = "fixed"
+    AUTO_HOLD = "auto_hold"
+    FUSED = "fused"
+
+
+class AuxOutputMode(str, Enum):
+    OFF = "off"
+    CALIBRATION = "calibration"
+    CANCELLATION = "cancellation"
+
+
 class SampleDomain(str, Enum):
     """Timebase in which sample-index fields are expressed."""
 
