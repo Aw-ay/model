@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import math
 from typing import Mapping, Optional, Tuple
 
 import numpy as np
@@ -18,7 +17,7 @@ from ..common.types import (
     Polarization,
     RangeSelectionMode,
 )
-from .delay import apply_causal_delay
+from .delay import apply_relative_delay
 
 
 _POLARIZATIONS = (Polarization.H, Polarization.V)
@@ -49,6 +48,9 @@ class GoldenEightChannelAdcFrontend:
             for entry in config.adc_channel_map
             if entry.enabled and ChannelRole.ECHO in entry.allowed_roles
         }
+        self._channel_entries = {
+            entry.index: entry for entry in config.adc_channel_map
+        }
 
     def _correct_channels(
         self,
@@ -56,7 +58,12 @@ class GoldenEightChannelAdcFrontend:
     ) -> Tuple[np.ndarray, np.ndarray]:
         corrected = np.empty_like(frame.samples)
         for index, channel in enumerate(self.calibration.adc_channels):
-            corrected[index] = frame.samples[index] / channel.response_gain
+            nominal_voltage_gain = 10.0 ** (
+                self._channel_entries[index].nominal_gain_db / 20.0
+            )
+            corrected[index] = frame.samples[index] / (
+                nominal_voltage_gain * channel.response_gain
+            )
         corrected_clipped = np.array(frame.clipped, copy=True)
 
         response_delays = np.array(
@@ -76,8 +83,8 @@ class GoldenEightChannelAdcFrontend:
         aligned_clipped = np.empty_like(corrected_clipped)
         sample_count = corrected.shape[1]
         for index, response_delay in enumerate(response_delays):
-            compensation = center + maximum_delay - float(response_delay)
-            integer_delay = math.floor(compensation)
+            compensation = maximum_delay - float(response_delay)
+            integer_delay = int(np.floor(compensation))
             fractional_delay = compensation - integer_delay
             pair = np.vstack(
                 (
@@ -85,29 +92,30 @@ class GoldenEightChannelAdcFrontend:
                     np.zeros(sample_count, dtype=np.complex128),
                 )
             )
-            aligned[index] = apply_causal_delay(
+            aligned[index] = apply_relative_delay(
                 pair,
-                integer_delay,
-                fractional_delay,
+                compensation,
                 taps,
             )[0]
 
-            coarse_delay = integer_delay - center
             coarse_clip = np.zeros(sample_count, dtype=np.int64)
-            if coarse_delay == 0:
+            if integer_delay == 0:
                 coarse_clip[:] = corrected_clipped[index]
-            elif coarse_delay < sample_count:
-                coarse_clip[coarse_delay:] = corrected_clipped[
-                    index, : sample_count - coarse_delay
+            elif integer_delay < sample_count:
+                coarse_clip[integer_delay:] = corrected_clipped[
+                    index, : sample_count - integer_delay
                 ]
-            aligned_clipped[index] = (
-                np.convolve(
+            if fractional_delay <= 1e-15:
+                aligned_clipped[index] = coarse_clip > 0
+            else:
+                full_clip = np.convolve(
                     coarse_clip,
                     np.ones(taps, dtype=np.int64),
                     mode="full",
-                )[:sample_count]
-                > 0
-            )
+                )
+                aligned_clipped[index] = (
+                    full_clip[center : center + sample_count] > 0
+                )
         return aligned, aligned_clipped
 
     @staticmethod

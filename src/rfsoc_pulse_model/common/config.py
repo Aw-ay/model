@@ -158,7 +158,7 @@ class ModelConfig:
     rfdc_decimation: int
     rfdc_interpolation: int
     rx_fabric_clock_hz: int
-    rfdc_iq_stream_words_per_cycle: int
+    rfdc_complex_samples_per_cycle: int
     rfdc_complex_sample_rate_hz: int
     pl_decimation: int
     detector_sample_rate_hz: int
@@ -190,6 +190,11 @@ class ModelConfig:
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, object]) -> "ModelConfig":
+        if "rfdc_iq_stream_words_per_cycle" in values:
+            raise ValueError(
+                "rfdc_iq_stream_words_per_cycle was removed; use "
+                "rfdc_complex_samples_per_cycle"
+            )
         detector = DetectorConfig.from_mapping(values)
         config = cls(
             model_schema_version=int(values["model_schema_version"]),
@@ -202,8 +207,8 @@ class ModelConfig:
             rfdc_decimation=int(values["rfdc_decimation"]),
             rfdc_interpolation=int(values["rfdc_interpolation"]),
             rx_fabric_clock_hz=int(values["rx_fabric_clock_hz"]),
-            rfdc_iq_stream_words_per_cycle=int(
-                values["rfdc_iq_stream_words_per_cycle"]
+            rfdc_complex_samples_per_cycle=int(
+                values["rfdc_complex_samples_per_cycle"]
             ),
             rfdc_complex_sample_rate_hz=int(values["rfdc_complex_sample_rate_hz"]),
             pl_decimation=int(values["pl_decimation"]),
@@ -306,12 +311,12 @@ class ModelConfig:
                 "rfdc_complex_sample_rate_hz must equal adc_sample_rate_hz / rfdc_decimation"
             )
         expected_from_fabric = (
-            self.rx_fabric_clock_hz * self.rfdc_iq_stream_words_per_cycle
+            self.rx_fabric_clock_hz * self.rfdc_complex_samples_per_cycle
         )
         if self.rfdc_complex_sample_rate_hz != expected_from_fabric:
             raise ValueError(
                 "rfdc_complex_sample_rate_hz must equal rx_fabric_clock_hz "
-                "* rfdc_iq_stream_words_per_cycle"
+                "* rfdc_complex_samples_per_cycle"
             )
         if self.rfdc_complex_sample_rate_hz % self.pl_decimation:
             raise ValueError("rfdc_complex_sample_rate_hz must divide by pl_decimation")

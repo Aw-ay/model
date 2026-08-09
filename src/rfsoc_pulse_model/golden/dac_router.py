@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import math
-
 import numpy as np
 
 from ..common.calibration_types import CalibrationProfile
@@ -16,7 +14,7 @@ from ..common.types import (
     ChannelRole,
     Polarization,
 )
-from .delay import apply_causal_delay
+from .delay import apply_relative_delay
 
 
 _POLARIZATION_ROW = {
@@ -68,24 +66,18 @@ class GoldenEightChannelDacRouter:
             return drive
 
         taps = self.config.fractional_delay_taps
-        center = (taps - 1) // 2
         compensation = (
-            center
-            + maximum_response_delay
-            - channel.response_delay_samples
+            maximum_response_delay - channel.response_delay_samples
         )
-        integer_delay = math.floor(compensation)
-        fractional_delay = compensation - integer_delay
         pair = np.vstack(
             (
                 drive,
                 np.zeros(drive.size, dtype=np.complex128),
             )
         )
-        return apply_causal_delay(
+        return apply_relative_delay(
             pair,
-            integer_delay,
-            fractional_delay,
+            compensation,
             taps,
         )[0]
 

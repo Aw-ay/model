@@ -1,6 +1,6 @@
 {
-  "model_schema_version": 4,
-  "config_version": 7,
+  "model_schema_version": 5,
+  "config_version": 8,
   "board_revision": "XCZU27DR-v2.1",
   "device_part": "xczu27dr-fsve1156-2-i",
   "center_frequency_hz": 2800000000,
@@ -9,7 +9,7 @@
   "rfdc_decimation": 8,
   "rfdc_interpolation": 8,
   "rx_fabric_clock_hz": 250000000,
-  "rfdc_iq_stream_words_per_cycle": 2,
+  "rfdc_complex_samples_per_cycle": 2,
   "rfdc_complex_sample_rate_hz": 500000000,
   "pl_decimation": 2,
   "detector_sample_rate_hz": 250000000,

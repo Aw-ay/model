@@ -95,6 +95,75 @@ class GoldenReflectionTest(unittest.TestCase):
             -2.0 * 10.0 * 2.8e9 / 299_792_458.0,
         )
 
+    def test_compiler_exposes_full_device_range_carrier_phase(self) -> None:
+        config = ModelConfig.load_default()
+        fixed_delay_samples = 64.0
+        calibration = CalibrationProfile.identity(
+            frequency_hz=2.8e9,
+            temperature_c=25.0,
+            fixed_internal_delay_samples=fixed_delay_samples,
+            rcs_anchor=None,
+        )
+        device_delay_samples = 96.125
+        physical_range_m = 100.0
+        apparent_range_m = physical_range_m + (
+            299_792_458.0
+            * device_delay_samples
+            / config.reflection_sample_rate_hz
+            / 2.0
+        )
+        scenario = ReflectionScenario(
+            physical_range_m=physical_range_m,
+            carrier_frequency_hz=2.8e9,
+            targets=(
+                TargetRequest(
+                    apparent_range_m,
+                    0.0,
+                    1.0,
+                    np.eye(2),
+                ),
+            ),
+            temperature_c=25.0,
+            start_sample=0,
+            length=256,
+            require_absolute_rcs=False,
+        )
+
+        scatterer = TargetCompiler(config, calibration).compile(scenario)[0]
+
+        expected = np.remainder(
+            -2.0
+            * np.pi
+            * scenario.carrier_frequency_hz
+            * device_delay_samples
+            / config.reflection_sample_rate_hz
+            + np.pi,
+            2.0 * np.pi,
+        ) - np.pi
+        self.assertAlmostEqual(scatterer.range_carrier_phase_rad, expected)
+
+    def test_kernel_applies_compiled_range_carrier_phase(self) -> None:
+        samples = np.zeros((2, 96), dtype=np.complex128)
+        samples[0, 4] = 1.0
+        incident = PolarimetricWaveform(
+            samples,
+            SampleDomain.RFDC_COMPLEX_INPUT,
+            500_000_000,
+        )
+        scatterer = CompiledScatterer(
+            integer_delay_samples=40,
+            fractional_delay=0.0,
+            doppler_hz=0.0,
+            complex_scattering_matrix=np.eye(2, dtype=np.complex128),
+            range_carrier_phase_rad=np.pi / 2.0,
+        )
+
+        result = GoldenPolarimetricReflectionKernel(taps=63).process(
+            incident, (scatterer,)
+        )
+
+        self.assertAlmostEqual(result.samples[0, 44], 1.0j, places=12)
+
     def test_multiple_targets_add_linearly(self) -> None:
         incident = PolarimetricWaveform(
             np.vstack((np.ones(192), np.full(192, 2.0))).astype(

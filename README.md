@@ -20,9 +20,10 @@ record. It contains no clock, register, RAM, FIFO, AXI, `valid`, or `ready`.
 
 The Golden system entry also models the continuous dual-polarization active
 reflection path. It reconstructs H/V from eight ADC paths, applies causal
-delay, calibrated RCS, a 2x2 scattering matrix and Doppler, then routes the
-predistorted H/V envelopes to the configured eight DAC paths. Pulse detection
-remains a monitor branch and cannot control the reflection timing.
+delay, calibrated RCS, explicit carrier range phase, a 2x2 scattering matrix
+and Doppler, then routes the predistorted H/V envelopes to the configured eight
+DAC paths. Pulse detection remains a monitor branch and cannot control the
+reflection timing.
 
 ```python
 import numpy as np
@@ -40,8 +41,12 @@ from rfsoc_pulse_model import (
 config = ModelConfig.load_default()
 calibration = CalibrationProfile.identity(2.8e9, 25.0, 64.0, None)
 samples = np.zeros((8, 512), dtype=np.complex128)
-samples[0:3, 80:160] = 1000.0
-samples[4:7, 80:160] = 500.0j
+samples[0, 80:160] = 1000.0   # H high: +20 dB nominal voltage gain
+samples[1, 80:160] = 100.0    # H mid:    0 dB
+samples[2, 80:160] = 10.0     # H low:  -20 dB
+samples[4, 80:160] = 5000.0j  # V high: +20 dB
+samples[5, 80:160] = 500.0j   # V mid:    0 dB
+samples[6, 80:160] = 50.0j    # V low:  -20 dB
 adc_frame = EightChannelAdcFrame(
     samples=samples,
     clipped=np.zeros((8, 512), dtype=np.bool_),
@@ -150,7 +155,7 @@ these equations before any pipeline is created:
 
 ```text
 rfdc_complex_rate = adc_rate / RFDC_decimation
-rfdc_complex_rate = rx_fabric_clock * RFDC_complex_samples_per_clock
+rfdc_complex_rate = rx_fabric_clock * rfdc_complex_samples_per_cycle
 detector_rate     = rfdc_complex_rate / PL_decimation
 detector_period   = 1 / detector_rate
 DAC_baseband_rate = dac_rate / RFDC_interpolation
@@ -164,9 +169,42 @@ count, IQ/power format or TX data type are rejected. `ModelConfig` is the
 single source for these fields and passes them into `DetectorConfig`, which in
 turn stamps every emitted `PulseRecord`.
 
+The RFDC parallelism field is deliberately named
+`rfdc_complex_samples_per_cycle=2`: it counts complete complex samples, not
+AXI words or separate I/Q words. The removed
+`rfdc_iq_stream_words_per_cycle` spelling is rejected to prevent a different
+Cycle interface interpretation.
+
 The authoritative installed resource is
 `rfsoc_pulse_model/config/default.json`. The root `config/default.json` is a
 human-visible source-tree mirror and must remain byte-identical.
+
+### Reflection gain, delay, and phase contracts
+
+For each ADC path, `nominal_gain_db` is the ideal physical voltage gain and
+`ComplexChannelCalibration.response_gain` is only the measured residual
+complex response. Reconstruction uses:
+
+```text
+incident = adc_code / (10^(nominal_gain_db/20) * response_gain)
+```
+
+ADC and DAC channel alignment removes only relative path delay. The symmetric
+63-tap Golden interpolation kernel does not add its 31-sample center delay to
+the public time axis. Common hardware/pipeline latency remains part of the
+separately measured `fixed_internal_delay_samples` contract.
+
+Because delaying a complex envelope between coherent DDC and DUC stages does
+not by itself reproduce RF carrier propagation phase, each compiled target
+also carries:
+
+```text
+range_carrier_phase = wrap(-2*pi*fc*2*(apparent_range-physical_range)/c)
+```
+
+The reflection kernel applies this phase independently of Doppler and target
+`initial_phase_rad`. Future Cycle logic must quantize the explicit phase field;
+it must not rely on an implicit RFDC NCO phase assumption.
 
 ### Rounding rule
 

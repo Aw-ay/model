@@ -67,6 +67,18 @@ class TargetCompiler:
                 * scenario.carrier_frequency_hz
                 / SPEED_OF_LIGHT_MPS
             )
+            device_delay_seconds = (
+                2.0
+                * (target.apparent_range_m - scenario.physical_range_m)
+                / SPEED_OF_LIGHT_MPS
+            )
+            range_carrier_phase_rad = math.remainder(
+                -2.0
+                * math.pi
+                * scenario.carrier_frequency_hz
+                * device_delay_seconds,
+                2.0 * math.pi,
+            )
             reference_index = _REFERENCE_INDICES[target.rcs_reference_channel]
             reference_value = target.normalized_scattering_matrix[
                 reference_index
@@ -92,6 +104,7 @@ class TargetCompiler:
                     fractional_delay=fractional_delay,
                     doppler_hz=doppler_hz,
                     complex_scattering_matrix=matrix,
+                    range_carrier_phase_rad=range_carrier_phase_rad,
                 )
             )
             absolute_flags.append(calibrated)
@@ -138,7 +151,10 @@ class GoldenPolarimetricReflectionKernel:
                 scatterer.fractional_delay,
                 self.taps,
             )
-            polarized = scatterer.complex_scattering_matrix @ delayed
+            polarized = (
+                np.exp(1j * scatterer.range_carrier_phase_rad)
+                * (scatterer.complex_scattering_matrix @ delayed)
+            )
             rotation = np.exp(
                 2j
                 * math.pi

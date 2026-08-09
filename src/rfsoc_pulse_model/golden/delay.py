@@ -116,3 +116,46 @@ def apply_causal_delay(
             mode="full",
         )[:sample_count]
     return result
+
+
+def apply_relative_delay(
+    samples: np.ndarray,
+    delay_samples: float,
+    taps: int,
+) -> np.ndarray:
+    """Apply a Golden-only relative delay without exposing FIR group delay.
+
+    This helper aligns calibrated channels on one mathematical time axis.  It
+    deliberately removes the symmetric fractional-delay kernel's center delay;
+    hardware implementations must account for their common pipeline latency
+    separately from the relative channel correction.
+    """
+
+    values = np.asarray(samples, dtype=np.complex128)
+    if values.ndim != 2 or values.shape[0] != 2:
+        raise ValueError("samples must have shape (2, N)")
+    if not np.all(np.isfinite(values.real)) or not np.all(np.isfinite(values.imag)):
+        raise ValueError("samples must contain finite values")
+    if not math.isfinite(delay_samples) or delay_samples < 0.0:
+        raise ValueError("relative delay must be finite and nonnegative")
+    center = _validate_taps(taps)
+    sample_count = values.shape[1]
+    if sample_count == 0:
+        return np.empty((2, 0), dtype=np.complex128)
+
+    integer_delay = math.floor(delay_samples)
+    fractional_delay = delay_samples - integer_delay
+    coarse = np.zeros_like(values)
+    if integer_delay == 0:
+        coarse[:] = values
+    elif integer_delay < sample_count:
+        coarse[:, integer_delay:] = values[:, : sample_count - integer_delay]
+    if fractional_delay <= 1e-15:
+        return coarse
+
+    kernel = fractional_delay_kernel(fractional_delay, taps)
+    result = np.empty_like(values)
+    for polarization in range(2):
+        full = np.convolve(coarse[polarization], kernel, mode="full")
+        result[polarization] = full[center : center + sample_count]
+    return result

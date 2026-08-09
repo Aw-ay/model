@@ -5,6 +5,7 @@ import numpy as np
 from rfsoc_pulse_model.golden.delay import (
     CausalityError,
     apply_causal_delay,
+    apply_relative_delay,
     compile_target_delay,
 )
 
@@ -41,6 +42,17 @@ class GoldenDelayTest(unittest.TestCase):
         valid = slice(128, 400)
         expected = tone[valid] * np.exp(-2j * np.pi * 0.05 * 48.25)
         np.testing.assert_allclose(delayed[0, valid], expected, atol=2e-3)
+
+    def test_relative_delay_does_not_expose_fractional_filter_group_delay(self) -> None:
+        source = np.zeros((2, 96), dtype=np.complex128)
+        source[0, 10] = 1.0
+
+        unchanged = apply_relative_delay(source, 0.0, taps=63)
+        delayed = apply_relative_delay(source, 1.0, taps=63)
+
+        np.testing.assert_allclose(unchanged, source, atol=1e-12)
+        self.assertAlmostEqual(delayed[0, 11], 1.0, places=12)
+        self.assertLess(abs(delayed[0, 41]), 1e-12)
 
 
 if __name__ == "__main__":

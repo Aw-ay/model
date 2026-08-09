@@ -13,6 +13,8 @@ class CalibrationConditionError(ValueError):
 
 @dataclass(frozen=True)
 class ComplexChannelCalibration:
+    """Residual complex response after nominal channel gain is removed."""
+
     response_gain: complex = 1.0 + 0.0j
     response_delay_samples: float = 0.0
 

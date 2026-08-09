@@ -19,6 +19,7 @@ class ModelConfigTest(unittest.TestCase):
         config = ModelConfig.from_mapping(self.root_payload())
 
         self.assertEqual(config.rfdc_complex_sample_rate_hz, 500_000_000)
+        self.assertEqual(config.rfdc_complex_samples_per_cycle, 2)
         self.assertEqual(config.detector_sample_rate_hz, 250_000_000)
         self.assertEqual(config.detector.sample_domain, SampleDomain.DETECTOR)
         self.assertEqual(config.detector.sample_rate_hz, 250_000_000)
@@ -44,15 +45,28 @@ class ModelConfigTest(unittest.TestCase):
 
     def test_inconsistent_fabric_parallelism_is_rejected(self) -> None:
         payload = self.root_payload()
-        payload["rfdc_iq_stream_words_per_cycle"] = 1
+        payload["rfdc_complex_samples_per_cycle"] = 1
 
         with self.assertRaisesRegex(ValueError, "rx_fabric_clock_hz"):
+            ModelConfig.from_mapping(payload)
+
+    def test_ambiguous_rfdc_words_per_cycle_name_is_rejected(self) -> None:
+        payload = self.root_payload()
+        payload["rfdc_iq_stream_words_per_cycle"] = payload.pop(
+            "rfdc_complex_samples_per_cycle"
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "rfdc_iq_stream_words_per_cycle.*removed",
+        ):
             ModelConfig.from_mapping(payload)
 
     def test_installed_package_loads_its_default_config_resource(self) -> None:
         config = ModelConfig.load_default()
 
-        self.assertEqual(config.config_version, 7)
+        self.assertEqual(config.model_schema_version, 5)
+        self.assertEqual(config.config_version, 8)
         self.assertEqual(config.channels, 4)
 
     def test_unknown_power_unit_is_rejected(self) -> None:

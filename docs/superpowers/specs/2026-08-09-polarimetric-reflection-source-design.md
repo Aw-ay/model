@@ -174,6 +174,7 @@ adc_channels = 8
 dac_channels = 8
 polarizations = 2
 reflection_sample_rate_hz = 500_000_000
+rfdc_complex_samples_per_cycle = 2
 maximum_targets = 8
 maximum_delay_samples = 1_048_576
 fractional_delay_taps = 63
@@ -187,6 +188,7 @@ dac_channel_map
 
 ```text
 reflection_sample_rate_hz == rfdc_complex_sample_rate_hz
+rfdc_complex_sample_rate_hz == rx_fabric_clock_hz * rfdc_complex_samples_per_cycle
 adc_channels == 8
 dac_channels == 8
 polarizations == 2
@@ -307,6 +309,7 @@ class CompiledScatterer:
     fractional_delay: float       # 0 <= value < 1
     doppler_hz: float
     complex_scattering_matrix: np.ndarray
+    range_carrier_phase_rad: float
 ```
 
 目标编译负责距离、速度、RCS和标定换算。反射内核只接受 `CompiledScatterer`，不理解米、平方米或 UAV 位置。
@@ -316,6 +319,15 @@ class CompiledScatterer:
 ```text
 doppler_hz = -2 * radial_velocity_mps * carrier_frequency_hz / c
 ```
+
+复基带延迟不会自动产生真实 RF 载波传播相位。目标编译器必须显式计算：
+
+```text
+device_delay = 2 * (apparent_range - physical_range) / c
+range_carrier_phase_rad = wrap(-2 * pi * carrier_frequency_hz * device_delay)
+```
+
+该相位包含固定内部延迟与可编程延迟的总等效效果，由反射内核独立于多普勒和 `initial_phase_rad` 应用。Cycle 必须将其量化为显式相位字，不能假定 RFDC NCO 自动补足。
 
 ### 8.3 因果延迟
 
@@ -336,6 +348,8 @@ programmable_delay
 负可编程延迟抛出 `CausalityError`。超出 `maximum_delay_samples` 也明确拒绝。
 
 整数延迟必须零填充，禁止 `np.roll()`。63 抽头分数延迟使用因果窗化 sinc；实现将滤波器固有群时延与粗延迟共同核算，使 `CompiledScatterer` 声明的总延迟是对外可观察的延迟。若给定总延迟不足以容纳因果滤波器支持区间，则拒绝而不是使用未来输入样点。
+
+目标回波的因果延迟与通道相对校准必须分开。ADC/DAC 通道对齐只补偿 `max(response_delay)-response_delay[channel]`，Golden 对称插值器的中心延迟不进入公共时间轴。实际硬件为实现相对分数延迟所需的共同流水延迟必须由 `fixed_internal_delay_samples` 标定，不得再次叠加 31 样点。
 
 ### 8.4 RCS 数字增益
 
@@ -448,6 +462,8 @@ C_TX * P_TX ~= I
 ```
 
 幅度、相位和相对时延都是标定结果的一部分。单一“固定延迟”不能替代频率和温度相关复传递函数。第一阶段在一个标定频点和温度上运行；输入场景超出配置允许偏差时状态标记为 `calibration_out_of_range`，不宣称绝对指标有效。
+
+ADC 三档增益采用两级定义：`nominal_gain_db` 是 +20/0/-20 dB 理想模拟电压增益，`ComplexChannelCalibration.response_gain` 是移除名义增益后的残余复响应。因此 identity calibration 的残差为 1，重构公式固定为 `adc_code / (10^(nominal_gain_db/20) * response_gain)`。
 
 ## 10. 错误和状态
 

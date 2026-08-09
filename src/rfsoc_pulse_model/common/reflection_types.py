@@ -198,6 +198,7 @@ class CompiledScatterer:
     fractional_delay: float
     doppler_hz: float
     complex_scattering_matrix: np.ndarray
+    range_carrier_phase_rad: float = 0.0
 
     def __post_init__(self) -> None:
         if self.integer_delay_samples < 0:
@@ -206,6 +207,8 @@ class CompiledScatterer:
             raise ValueError("fractional_delay must be within [0, 1)")
         if not math.isfinite(self.doppler_hz):
             raise ValueError("doppler_hz must be finite")
+        if not math.isfinite(self.range_carrier_phase_rad):
+            raise ValueError("range_carrier_phase_rad must be finite")
         object.__setattr__(
             self,
             "complex_scattering_matrix",
