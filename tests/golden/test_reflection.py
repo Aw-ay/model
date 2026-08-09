@@ -1,0 +1,129 @@
+import unittest
+
+import numpy as np
+
+from rfsoc_pulse_model.common.calibration_types import CalibrationProfile
+from rfsoc_pulse_model.common.config import ModelConfig
+from rfsoc_pulse_model.common.reflection_types import (
+    CompiledScatterer,
+    PolarimetricWaveform,
+    ReflectionScenario,
+    TargetRequest,
+)
+from rfsoc_pulse_model.common.types import SampleDomain
+from rfsoc_pulse_model.golden.reflection import (
+    GoldenPolarimetricReflectionKernel,
+    TargetCompiler,
+)
+
+
+class GoldenReflectionTest(unittest.TestCase):
+    def test_h_input_produces_hh_and_vh_outputs(self) -> None:
+        samples = np.zeros((2, 128), dtype=np.complex128)
+        samples[0, 4] = 1.0
+        incident = PolarimetricWaveform(
+            samples,
+            SampleDomain.RFDC_COMPLEX_INPUT,
+            500_000_000,
+        )
+        scatterer = CompiledScatterer(
+            integer_delay_samples=40,
+            fractional_delay=0.0,
+            doppler_hz=0.0,
+            complex_scattering_matrix=np.array(
+                [[2, 0], [3j, 0]], dtype=np.complex128
+            ),
+        )
+
+        result = GoldenPolarimetricReflectionKernel(taps=63).process(
+            incident, (scatterer,)
+        )
+
+        self.assertAlmostEqual(result.samples[0, 44], 2.0, places=12)
+        self.assertAlmostEqual(result.samples[1, 44], 3.0j, places=12)
+
+    def test_doppler_uses_absolute_sample_index(self) -> None:
+        samples = np.ones((2, 256), dtype=np.complex128)
+        samples[1] = 0.0
+        incident = PolarimetricWaveform(
+            samples,
+            SampleDomain.RFDC_COMPLEX_INPUT,
+            500_000_000,
+            start_sample=1000,
+        )
+        scatterer = CompiledScatterer(
+            40,
+            0.0,
+            5_000_000.0,
+            np.eye(2, dtype=np.complex128),
+        )
+
+        output = GoldenPolarimetricReflectionKernel(63).process(
+            incident, (scatterer,)
+        )
+
+        phase_step = np.angle(
+            output.samples[0, 101] * np.conj(output.samples[0, 100])
+        )
+        self.assertAlmostEqual(
+            phase_step,
+            2 * np.pi * 5_000_000 / 500_000_000,
+        )
+
+    def test_compiler_uses_receding_negative_doppler_convention(self) -> None:
+        config = ModelConfig.load_default()
+        calibration = CalibrationProfile.identity(
+            frequency_hz=2.8e9,
+            temperature_c=25.0,
+            fixed_internal_delay_samples=64.0,
+            rcs_anchor=None,
+        )
+        scenario = ReflectionScenario(
+            physical_range_m=100.0,
+            carrier_frequency_hz=2.8e9,
+            targets=(TargetRequest(1000.0, 10.0, 1.0, np.eye(2)),),
+            temperature_c=25.0,
+            start_sample=0,
+            length=256,
+            require_absolute_rcs=False,
+        )
+
+        result = TargetCompiler(config, calibration).compile(scenario)
+
+        self.assertAlmostEqual(
+            result[0].doppler_hz,
+            -2.0 * 10.0 * 2.8e9 / 299_792_458.0,
+        )
+
+    def test_multiple_targets_add_linearly(self) -> None:
+        incident = PolarimetricWaveform(
+            np.vstack((np.ones(192), np.full(192, 2.0))).astype(
+                np.complex128
+            ),
+            SampleDomain.RFDC_COMPLEX_INPUT,
+            500_000_000,
+        )
+        first = CompiledScatterer(
+            40, 0.0, 0.0, np.eye(2, dtype=np.complex128)
+        )
+        second = CompiledScatterer(
+            48,
+            0.0,
+            0.0,
+            np.array([[0.5, 0.25], [0.0, -1.0]], dtype=np.complex128),
+        )
+        kernel = GoldenPolarimetricReflectionKernel(taps=63)
+
+        first_only = kernel.process(incident, (first,)).samples
+        second_only = kernel.process(incident, (second,)).samples
+        combined = kernel.process(incident, (first, second)).samples
+
+        np.testing.assert_allclose(
+            combined,
+            first_only + second_only,
+            atol=1e-12,
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
