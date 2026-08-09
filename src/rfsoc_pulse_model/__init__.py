@@ -31,6 +31,7 @@ from .common.types import (
     RangeSelectionMode,
     SampleDomain,
 )
+from .golden.system import GoldenReflectionSource, ReflectionSourceResult
 
 __all__ = [
     "DetectorConfig",
@@ -59,4 +60,6 @@ __all__ = [
     "ReflectionScenario",
     "ReflectionStatus",
     "TargetRequest",
+    "GoldenReflectionSource",
+    "ReflectionSourceResult",
 ]

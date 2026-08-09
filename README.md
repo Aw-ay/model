@@ -18,6 +18,55 @@ a pulse is detected, its refined ToA and FWHM width, its peak/mean power and
 frequency, whether a range clipped, and which hit-only IQ samples belong to the
 record. It contains no clock, register, RAM, FIFO, AXI, `valid`, or `ready`.
 
+The Golden system entry also models the continuous dual-polarization active
+reflection path. It reconstructs H/V from eight ADC paths, applies causal
+delay, calibrated RCS, a 2x2 scattering matrix and Doppler, then routes the
+predistorted H/V envelopes to the configured eight DAC paths. Pulse detection
+remains a monitor branch and cannot control the reflection timing.
+
+```python
+import numpy as np
+
+from rfsoc_pulse_model import (
+    CalibrationProfile,
+    EightChannelAdcFrame,
+    GoldenReflectionSource,
+    ModelConfig,
+    ReflectionScenario,
+    SampleDomain,
+    TargetRequest,
+)
+
+config = ModelConfig.load_default()
+calibration = CalibrationProfile.identity(2.8e9, 25.0, 64.0, None)
+samples = np.zeros((8, 512), dtype=np.complex128)
+samples[0:3, 80:160] = 1000.0
+samples[4:7, 80:160] = 500.0j
+adc_frame = EightChannelAdcFrame(
+    samples=samples,
+    clipped=np.zeros((8, 512), dtype=np.bool_),
+    sample_domain=SampleDomain.RFDC_COMPLEX_INPUT,
+    sample_rate_hz=500_000_000,
+)
+scenario = ReflectionScenario(
+    physical_range_m=100.0,
+    carrier_frequency_hz=2.8e9,
+    targets=(TargetRequest(150.0, 0.0, 1.0, np.eye(2)),),
+    temperature_c=25.0,
+    start_sample=0,
+    length=512,
+    require_absolute_rcs=False,
+)
+
+result = GoldenReflectionSource(config, calibration).run(adc_frame, scenario)
+print(result.dac_frame.samples.shape)
+```
+
+`result.dac_frame` is an eight-channel complex-baseband mathematical
+reference. This milestone does not define RFDC DAC AXI words and does not
+validate Cycle timing, generated RTL, Vivado Block Design, CDC or board RF
+performance.
+
 ```python
 import numpy as np
 
