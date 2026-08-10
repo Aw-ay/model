@@ -7,13 +7,13 @@
 - Python executable: `C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe`
 - Source path: `D:\AWAY\RFSOC\model\src`
 - Golden test command: `python -m unittest discover -s tests\golden -v`
-- Golden result: 108 tests passed
-- Full Python result: 116 tests passed (108 Golden + 8 Cycle/generator)
+- Golden result: 111 tests passed
+- Full Python result: 119 tests passed (111 Golden + 8 Cycle/generator)
 - Config mirrors: byte-identical
 - Public imports: `GoldenReflectionSource` and `GoldenReflectionStream`
 - Main reflection domain: `RFDC_COMPLEX_INPUT` at 500 MSPS complex
 - Monitor domain: `DETECTOR` at 250 MSPS
-- Config schema/version: `10/17`
+- Config schema/version: `11/17`
 - RFDC fabric contract: two complete complex samples per 250 MHz cycle
 
 The verified Golden path is:
@@ -108,6 +108,11 @@ The fixed-internal-delay checkpoint additionally verifies:
   Golden implementation rather than appearing on the public time axis;
 - the fixed value includes measured common hardware latency exactly once and
   excludes the target-programmed delay.
+- Golden DAC frames declare `latency_normalized` time and carry their typed
+  fixed-delay mapping; with the 64-sample test placeholder, offset 60 maps to
+  physical sample 124;
+- the generated manifest records kernel center 31 and the calibration-profile
+  source but contains no fabricated `fixed_internal_delay_samples` value.
 
 The fixed-point-width checkpoint additionally verifies:
 

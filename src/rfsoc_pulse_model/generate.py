@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Iterable
 
 from .common.config import ModelConfig
+from .common.types import SampleTimeReference
 from .cycle.dsl.emitter import VerilogEmitter
 from .cycle.registry import HARDWARE_MODULES
 
@@ -89,6 +90,13 @@ def generate(output_root: Path) -> dict[str, object]:
         "single_clock_ingress_integration_ready": (
             config.single_clock_ingress_integration_ready
         ),
+        "golden_dac_time_reference": (
+            SampleTimeReference.LATENCY_NORMALIZED.value
+        ),
+        "fractional_delay_kernel_center_samples": (
+            config.fractional_delay_taps - 1
+        ) // 2,
+        "fixed_internal_delay_source": "calibration_profile_measurement",
         "numeric_formats_sha256": _sha256(numeric_bytes),
         "modules": modules,
     }

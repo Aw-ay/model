@@ -1,6 +1,6 @@
 # Cycle 2SPC RFDC Ingress Contract
 
-Status: implemented armed fail-closed Cycle checkpoint for ModelConfig `10/17`.
+Status: implemented armed fail-closed Cycle checkpoint for ModelConfig `11/17`.
 
 ## Clock and throughput
 

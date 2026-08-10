@@ -6,12 +6,14 @@ from typing import Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
+from .calibration_types import FixedInternalDelay
 from .types import (
     AuxOutputMode,
     ChannelRole,
     GainRange,
     Polarization,
     SampleDomain,
+    SampleTimeReference,
 )
 
 
@@ -151,6 +153,8 @@ class EightChannelDacFrame:
     sample_domain: SampleDomain
     sample_rate_hz: int
     representation: str
+    fixed_internal_delay: FixedInternalDelay
+    time_reference: SampleTimeReference
     start_sample: int = 0
 
     def __post_init__(self) -> None:
@@ -170,8 +174,36 @@ class EightChannelDacFrame:
             raise ValueError("sample_rate_hz must be positive")
         if self.representation != "complex_baseband_reference":
             raise ValueError("unsupported DAC mathematical representation")
+        if not isinstance(self.fixed_internal_delay, FixedInternalDelay):
+            raise ValueError("DAC frame fixed_internal_delay has the wrong type")
+        if self.fixed_internal_delay.sample_domain != self.sample_domain:
+            raise ValueError("DAC frame delay and samples must share one domain")
+        if self.fixed_internal_delay.sample_rate_hz != self.sample_rate_hz:
+            raise ValueError("DAC frame delay and samples must share one rate")
+        if not isinstance(self.time_reference, SampleTimeReference):
+            raise ValueError("time_reference must be a SampleTimeReference")
+        if self.time_reference != SampleTimeReference.LATENCY_NORMALIZED:
+            raise ValueError("Golden DAC frame must use latency_normalized time")
         if self.start_sample < 0:
             raise ValueError("start_sample cannot be negative")
+
+    def sample_index(
+        self,
+        offset: int,
+        reference: SampleTimeReference,
+    ) -> float:
+        """Return one frame offset on the normalized or physical time axis."""
+
+        if not isinstance(offset, int) or isinstance(offset, bool):
+            raise ValueError("DAC frame offset must be an integer")
+        if not 0 <= offset < self.samples.shape[1]:
+            raise ValueError("DAC frame offset is outside the frame")
+        if not isinstance(reference, SampleTimeReference):
+            raise ValueError("reference must be a SampleTimeReference")
+        normalized = float(self.start_sample + offset)
+        if reference == SampleTimeReference.LATENCY_NORMALIZED:
+            return normalized
+        return self.fixed_internal_delay.normalized_to_physical_sample(normalized)
 
 
 @dataclass(frozen=True)

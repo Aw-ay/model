@@ -33,6 +33,15 @@ class GoldenCalibrationTest(unittest.TestCase):
             profile.fixed_internal_delay.includes_golden_fractional_kernel_center
         )
 
+    def test_fixed_internal_delay_maps_normalized_to_physical_sample_time(self) -> None:
+        delay = FixedInternalDelay(
+            samples=64.25,
+            sample_rate_hz=500_000_000,
+        )
+
+        self.assertEqual(delay.normalized_to_physical_sample(60), 124.25)
+        self.assertEqual(delay.physical_to_normalized_sample(124.25), 60.0)
+
     def test_predistortion_recovers_desired_hv_after_forward_matrix(self) -> None:
         profile = CalibrationProfile.identity(2.8e9, 25.0, 64.0, None)
         profile = CalibrationProfile(

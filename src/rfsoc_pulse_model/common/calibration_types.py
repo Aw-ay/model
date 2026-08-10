@@ -51,6 +51,22 @@ class FixedInternalDelay:
     def includes_golden_fractional_kernel_center(self) -> bool:
         return False
 
+    def normalized_to_physical_sample(self, sample_index: float) -> float:
+        """Add measured common latency to one Golden-normalized index."""
+
+        value = float(sample_index)
+        if not math.isfinite(value):
+            raise ValueError("normalized sample index must be finite")
+        return value + self.samples
+
+    def physical_to_normalized_sample(self, sample_index: float) -> float:
+        """Remove measured common latency from one physical output index."""
+
+        value = float(sample_index)
+        if not math.isfinite(value):
+            raise ValueError("physical sample index must be finite")
+        return value - self.samples
+
 
 @dataclass(frozen=True)
 class ComplexChannelCalibration:

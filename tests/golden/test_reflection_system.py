@@ -15,6 +15,7 @@ from rfsoc_pulse_model.common.types import (
     Polarization,
     RangeId,
     SampleDomain,
+    SampleTimeReference,
 )
 from rfsoc_pulse_model.golden.system import (
     GoldenReflectionSource,
@@ -74,6 +75,31 @@ class GoldenReflectionSystemTest(unittest.TestCase):
         )
         self.assertEqual(result.dac_frame.samples.shape, (8, 512))
         self.assertEqual(len(result.compiled_targets), 1)
+
+    def test_dac_frame_exposes_normalized_and_physical_sample_time(self) -> None:
+        config = ModelConfig.load_default()
+        profile = CalibrationProfile.identity(2.8e9, 25.0, 64.0, None)
+
+        result = GoldenReflectionSource(config, profile).run(
+            self.make_input(), self.make_scenario()
+        )
+
+        self.assertEqual(
+            result.dac_frame.time_reference,
+            SampleTimeReference.LATENCY_NORMALIZED,
+        )
+        self.assertIs(
+            result.dac_frame.fixed_internal_delay,
+            profile.fixed_internal_delay,
+        )
+        self.assertEqual(
+            result.dac_frame.sample_index(60, SampleTimeReference.LATENCY_NORMALIZED),
+            60.0,
+        )
+        self.assertEqual(
+            result.dac_frame.sample_index(60, SampleTimeReference.PHYSICAL),
+            124.0,
+        )
 
     def test_detector_threshold_cannot_move_or_change_dac_output(self) -> None:
         config = ModelConfig.load_default()

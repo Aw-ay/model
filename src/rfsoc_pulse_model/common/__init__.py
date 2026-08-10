@@ -26,6 +26,7 @@ from .types import (
     RangeId,
     RangeSelectionMode,
     SampleDomain,
+    SampleTimeReference,
 )
 from .calibration_types import (
     CalibrationConditionError,
@@ -66,6 +67,7 @@ __all__ = [
     "RangeId",
     "RangeSelectionMode",
     "SampleDomain",
+    "SampleTimeReference",
     "ModelConfig",
     "CalibrationConditionError",
     "CalibrationProfile",

@@ -28,6 +28,19 @@ class GenerateTest(unittest.TestCase):
                 "unverified",
             )
             self.assertFalse(manifest["single_clock_ingress_integration_ready"])
+            self.assertEqual(
+                manifest["golden_dac_time_reference"],
+                "latency_normalized",
+            )
+            self.assertEqual(
+                manifest["fractional_delay_kernel_center_samples"],
+                31,
+            )
+            self.assertEqual(
+                manifest["fixed_internal_delay_source"],
+                "calibration_profile_measurement",
+            )
+            self.assertNotIn("fixed_internal_delay_samples", manifest)
             self.assertIn("always @(*)", rtl)
             self.assertIn("always @(posedge clk_i)", rtl)
 

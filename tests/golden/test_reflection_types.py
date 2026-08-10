@@ -3,12 +3,14 @@ import unittest
 import numpy as np
 
 from rfsoc_pulse_model.common.config import ModelConfig
+from rfsoc_pulse_model.common.calibration_types import FixedInternalDelay
 from rfsoc_pulse_model.common.reflection_types import (
+    EightChannelDacFrame,
     GainRange,
     Polarization,
     PolarimetricWaveform,
 )
-from rfsoc_pulse_model.common.types import SampleDomain
+from rfsoc_pulse_model.common.types import SampleDomain, SampleTimeReference
 
 
 class ReflectionContractTest(unittest.TestCase):
@@ -29,6 +31,17 @@ class ReflectionContractTest(unittest.TestCase):
                 samples=np.zeros((8, 4), dtype=np.complex128),
                 sample_domain=SampleDomain.RFDC_COMPLEX_INPUT,
                 sample_rate_hz=500_000_000,
+            )
+
+    def test_dac_frame_rejects_untyped_time_reference(self) -> None:
+        with self.assertRaisesRegex(ValueError, "SampleTimeReference"):
+            EightChannelDacFrame(
+                samples=np.zeros((8, 4), dtype=np.complex128),
+                sample_domain=SampleDomain.RFDC_COMPLEX_INPUT,
+                sample_rate_hz=500_000_000,
+                representation="complex_baseband_reference",
+                fixed_internal_delay=FixedInternalDelay(64.0, 500_000_000),
+                time_reference="latency_normalized",
             )
 
     def test_default_physical_channel_maps_match_the_board_contract(self) -> None:

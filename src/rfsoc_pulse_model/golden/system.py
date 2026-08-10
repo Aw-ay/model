@@ -417,11 +417,13 @@ class GoldenReflectionStream:
             )
 
         dac_frame = EightChannelDacFrame(
-            result.dac_frame.samples[:, start:stop],
-            result.dac_frame.sample_domain,
-            result.dac_frame.sample_rate_hz,
-            result.dac_frame.representation,
-            result.dac_frame.start_sample + start,
+            samples=result.dac_frame.samples[:, start:stop],
+            sample_domain=result.dac_frame.sample_domain,
+            sample_rate_hz=result.dac_frame.sample_rate_hz,
+            representation=result.dac_frame.representation,
+            fixed_internal_delay=result.dac_frame.fixed_internal_delay,
+            time_reference=result.dac_frame.time_reference,
+            start_sample=result.dac_frame.start_sample + start,
         )
         return ReflectionSourceResult(
             incident=waveform_slice(result.incident),

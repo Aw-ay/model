@@ -34,6 +34,7 @@ from .common.types import (
     RangeId,
     RangeSelectionMode,
     SampleDomain,
+    SampleTimeReference,
 )
 from .golden.system import (
     GoldenReflectionSource,
@@ -57,6 +58,7 @@ __all__ = [
     "RangeId",
     "RangeSelectionMode",
     "SampleDomain",
+    "SampleTimeReference",
     "CalibrationConditionError",
     "CalibrationProfile",
     "ComplexChannelCalibration",

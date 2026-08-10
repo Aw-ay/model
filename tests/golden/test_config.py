@@ -199,7 +199,7 @@ class ModelConfigTest(unittest.TestCase):
     def test_installed_package_loads_its_default_config_resource(self) -> None:
         config = ModelConfig.load_default()
 
-        self.assertEqual(config.model_schema_version, 10)
+        self.assertEqual(config.model_schema_version, 11)
         self.assertEqual(config.config_version, 17)
         self.assertEqual(config.channels, 4)
 

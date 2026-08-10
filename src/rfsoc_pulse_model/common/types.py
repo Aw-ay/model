@@ -75,6 +75,13 @@ class SampleDomain(str, Enum):
     DAC_BASEBAND = "dac_baseband"
 
 
+class SampleTimeReference(str, Enum):
+    """Whether a sample index includes measured common hardware latency."""
+
+    LATENCY_NORMALIZED = "latency_normalized"
+    PHYSICAL = "physical"
+
+
 class IQUnit(str, Enum):
     """Physical meaning of one decoded I or Q component."""
 

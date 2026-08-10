@@ -1,7 +1,7 @@
 # RFDC ADC/DAC AXI Word Format Contract
 
 Status: word layout frozen at ModelConfig schema/config `8/11`, carried
-unchanged into the armed Cycle ingress at `10/17`, and tied to RF Data Converter IP
+unchanged into the armed Cycle ingress at `11/17`, and tied to RF Data Converter IP
 `xilinx.com:ip:usp_rf_data_converter:2.6`.
 
 This is the only word-level authority allowed at the Golden/Cycle/Block Design

@@ -1,5 +1,5 @@
 {
-  "model_schema_version": 10,
+  "model_schema_version": 11,
   "config_version": 17,
   "board_revision": "XCZU27DR-v2.1",
   "device_part": "xczu27dr-fsve1156-2-i",

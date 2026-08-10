@@ -77,9 +77,13 @@ oracle only; Cycle must replace it with bounded delay RAM, FIR state, detector
 state and explicit 2SPC pipelines.
 
 `result.dac_frame` is an eight-channel complex-baseband mathematical
-reference. The RFDC DAC AXI boundary is separately frozen as two signed-16
-real samples per 32-bit word; this does not imply that the mathematical complex
-frame can be connected directly to the DAC. The first Cycle checkpoint now
+reference on `SampleTimeReference.LATENCY_NORMALIZED`. Use
+`result.dac_frame.sample_index(offset, SampleTimeReference.PHYSICAL)` to map an
+array offset onto the measured 500-MSPS-equivalent physical Cycle/DAC time
+axis; it is not a raw 4-GSPS converter sample number. The RFDC DAC AXI
+boundary is separately frozen as two signed-16 real samples per 32-bit word;
+this does not imply that the mathematical complex frame can be connected
+directly to the DAC. The first Cycle checkpoint now
 implements only the 8-channel RFDC 2SPC ingress; the rest of the reflection,
 detection and TX data paths, Vivado Block Design, CDC and board RF performance
 remain unvalidated.
@@ -257,6 +261,18 @@ filter latency measured for the deployed build, and excludes target-programmed
 delay. A calibration profile whose delay rate differs from
 `reflection_sample_rate_hz` is rejected before target compilation. See
 [`docs/contracts/fixed-internal-delay.md`](docs/contracts/fixed-internal-delay.md).
+
+Golden DAC arrays remain latency-normalized. For equivalence, convert a
+physical Cycle output coordinate with:
+
+```text
+normalized_cycle_index = physical_cycle_index - fixed_internal_delay.samples
+```
+
+The generated manifest records the normalized Golden time reference, the
+31-sample internal kernel center and that the numeric fixed delay must come
+from a measured calibration profile; it deliberately does not invent a fixed
+delay value.
 
 Because delaying a complex envelope between coherent DDC and DUC stages does
 not by itself reproduce RF carrier propagation phase, each compiled target
