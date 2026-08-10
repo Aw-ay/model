@@ -33,6 +33,7 @@ from ..common.types import (
 from .adc_frontend import GoldenEightChannelAdcFrontend
 from .calibration import GoldenTxPredistorter
 from .dac_router import GoldenEightChannelDacRouter
+from .delay import fractional_delay_center_samples
 from .receive import AdcSampleBatch, GoldenReceivePipeline
 from .reflection import (
     GoldenPolarimetricReflectionKernel,
@@ -307,7 +308,7 @@ class GoldenReflectionStream:
         self._lookahead = self._relative_lookahead()
 
     def _relative_lookahead(self) -> int:
-        center = (self.config.fractional_delay_taps - 1) // 2
+        center = fractional_delay_center_samples(self.config.fractional_delay_taps)
 
         def needs_fractional_alignment(channels: tuple) -> bool:
             delays = [channel.response_delay_samples for channel in channels]

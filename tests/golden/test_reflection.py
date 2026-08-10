@@ -1,9 +1,11 @@
+from dataclasses import replace
 import unittest
 
 import numpy as np
 
 from rfsoc_pulse_model.common.calibration_types import (
     CalibrationProfile,
+    FixedInternalDelay,
     RcsCalibrationAnchor,
 )
 from rfsoc_pulse_model.common.config import ModelConfig
@@ -22,6 +24,20 @@ from rfsoc_pulse_model.golden.rcs import RcsCalibrationError
 
 
 class GoldenReflectionTest(unittest.TestCase):
+    def test_compiler_rejects_fixed_delay_from_a_different_sample_rate(self) -> None:
+        config = ModelConfig.load_default()
+        calibration = CalibrationProfile.identity(2.8e9, 25.0, 64.0, None)
+        calibration = replace(
+            calibration,
+            fixed_internal_delay=FixedInternalDelay(
+                samples=64.0,
+                sample_rate_hz=250_000_000,
+            ),
+        )
+
+        with self.assertRaisesRegex(ValueError, "fixed internal delay sample rate"):
+            TargetCompiler(config, calibration)
+
     def test_compiler_fails_closed_when_absolute_anchor_is_out_of_frequency(self) -> None:
         config = ModelConfig.load_default()
         anchor = RcsCalibrationAnchor(

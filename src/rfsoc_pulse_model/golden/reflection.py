@@ -39,6 +39,13 @@ class TargetCompiler:
     ) -> None:
         self.config = config
         self.calibration = calibration
+        if (
+            calibration.fixed_internal_delay.sample_rate_hz
+            != config.reflection_sample_rate_hz
+        ):
+            raise ValueError(
+                "fixed internal delay sample rate must equal reflection_sample_rate_hz"
+            )
         self.last_absolute_rcs_calibrated = False
 
     def compile(

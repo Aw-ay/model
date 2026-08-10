@@ -187,7 +187,7 @@ Cycle interface interpretation.
 
 `ModelConfig` validates in `__post_init__`, so direct construction,
 `from_mapping()` and `dataclasses.replace()` cannot create different validity
-rules. The current package schema/config version is `8/14`.
+rules. The current package schema/config version is `8/15`.
 
 The XCZU27DR v2.1 RFDC tile/slice, package-bank, board-net and carrier-endpoint
 mapping is frozen in `ModelConfig` and documented in
@@ -243,9 +243,18 @@ incident = adc_code / (10^(nominal_gain_db/20) * response_gain)
 ```
 
 ADC and DAC channel alignment removes only relative path delay. The symmetric
-63-tap Golden interpolation kernel does not add its 31-sample center delay to
-the public time axis. Common hardware/pipeline latency remains part of the
-separately measured `fixed_internal_delay_samples` contract.
+63-tap Golden interpolation kernel has an internal center of 31 samples, but
+that center is removed from the public time axis in both the causal target
+delay and the Golden-only relative alignment helpers. It is never added to
+`fixed_internal_delay`.
+
+`FixedInternalDelay` is measured from the mathematical RFDC ADC complex input
+to the mathematical DAC baseband output. Its `samples` value is expressed in
+`RFDC_COMPLEX_INPUT` at 500 MSPS. It includes common Cycle pipeline, RAM and
+filter latency measured for the deployed build, and excludes target-programmed
+delay. A calibration profile whose delay rate differs from
+`reflection_sample_rate_hz` is rejected before target compilation. See
+[`docs/contracts/fixed-internal-delay.md`](docs/contracts/fixed-internal-delay.md).
 
 Because delaying a complex envelope between coherent DDC and DUC stages does
 not by itself reproduce RF carrier propagation phase, each compiled target

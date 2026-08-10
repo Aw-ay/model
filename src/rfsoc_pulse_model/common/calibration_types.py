@@ -6,9 +6,50 @@ from typing import Optional, Tuple
 
 import numpy as np
 
+from .types import SampleDomain
+
 
 class CalibrationConditionError(ValueError):
     """A measured polarization matrix cannot be inverted reliably."""
+
+
+@dataclass(frozen=True)
+class FixedInternalDelay:
+    """Measured common device delay on the public RFDC complex time axis.
+
+    The boundary is the mathematical RFDC ADC complex input to the
+    mathematical DAC baseband output. The measurement includes common Cycle
+    pipeline/RAM/filter latency. It excludes both the programmed target delay
+    and the symmetric Golden fractional-delay kernel center, whose group delay
+    is removed inside the Golden implementation.
+    """
+
+    samples: float
+    sample_rate_hz: int
+    sample_domain: SampleDomain = SampleDomain.RFDC_COMPLEX_INPUT
+    reference_boundary: str = "rfdc_adc_complex_input_to_dac_baseband_output"
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.samples) or self.samples < 0.0:
+            raise ValueError("fixed internal delay samples must be finite and nonnegative")
+        if self.sample_rate_hz <= 0:
+            raise ValueError("fixed internal delay sample rate must be positive")
+        if self.sample_domain != SampleDomain.RFDC_COMPLEX_INPUT:
+            raise ValueError("fixed internal delay must use RFDC_COMPLEX_INPUT")
+        if self.reference_boundary != "rfdc_adc_complex_input_to_dac_baseband_output":
+            raise ValueError("unsupported fixed internal delay reference boundary")
+
+    @property
+    def includes_common_hardware_latency(self) -> bool:
+        return True
+
+    @property
+    def includes_programmable_target_delay(self) -> bool:
+        return False
+
+    @property
+    def includes_golden_fractional_kernel_center(self) -> bool:
+        return False
 
 
 @dataclass(frozen=True)
@@ -98,7 +139,7 @@ class CalibrationProfile:
     temperature_c: float
     frequency_tolerance_hz: float
     temperature_tolerance_c: float
-    fixed_internal_delay_samples: float
+    fixed_internal_delay: FixedInternalDelay
     adc_channels: Tuple[ComplexChannelCalibration, ...]
     dac_channels: Tuple[ComplexChannelCalibration, ...]
     rx_polarization_matrix: np.ndarray
@@ -117,8 +158,8 @@ class CalibrationProfile:
                 raise ValueError(f"{name} must be finite and positive")
         if not math.isfinite(self.temperature_c):
             raise ValueError("temperature_c must be finite")
-        if not math.isfinite(self.fixed_internal_delay_samples) or self.fixed_internal_delay_samples < 0.0:
-            raise ValueError("fixed_internal_delay_samples must be finite and nonnegative")
+        if not isinstance(self.fixed_internal_delay, FixedInternalDelay):
+            raise ValueError("fixed_internal_delay has the wrong type")
         if len(self.adc_channels) != 8 or len(self.dac_channels) != 8:
             raise ValueError("calibration profile requires eight ADC and eight DAC channels")
         if not all(isinstance(value, ComplexChannelCalibration) for value in self.adc_channels + self.dac_channels):
@@ -146,6 +187,7 @@ class CalibrationProfile:
         temperature_c: float,
         fixed_internal_delay_samples: float,
         rcs_anchor: Optional[RcsCalibrationAnchor],
+        fixed_internal_delay_sample_rate_hz: int = 500_000_000,
     ) -> "CalibrationProfile":
         channels = tuple(ComplexChannelCalibration() for _ in range(8))
         return cls(
@@ -153,7 +195,10 @@ class CalibrationProfile:
             temperature_c=temperature_c,
             frequency_tolerance_hz=1_000_000.0,
             temperature_tolerance_c=5.0,
-            fixed_internal_delay_samples=fixed_internal_delay_samples,
+            fixed_internal_delay=FixedInternalDelay(
+                samples=fixed_internal_delay_samples,
+                sample_rate_hz=fixed_internal_delay_sample_rate_hz,
+            ),
             adc_channels=channels,
             dac_channels=channels,
             rx_polarization_matrix=np.eye(2, dtype=np.complex128),
@@ -161,3 +206,9 @@ class CalibrationProfile:
             rcs_anchor=rcs_anchor,
             maximum_condition_number=1.0e6,
         )
+
+    @property
+    def fixed_internal_delay_samples(self) -> float:
+        """Compatibility accessor for the explicitly qualified delay value."""
+
+        return self.fixed_internal_delay.samples

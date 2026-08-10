@@ -19,6 +19,12 @@ def _validate_taps(taps: int) -> int:
     return (taps - 1) // 2
 
 
+def fractional_delay_center_samples(taps: int) -> int:
+    """Return the internal kernel center removed from the public time axis."""
+
+    return _validate_taps(taps)
+
+
 def compile_target_delay(
     apparent_range_m: float,
     physical_range_m: float,
@@ -29,7 +35,7 @@ def compile_target_delay(
 ) -> Tuple[int, float]:
     """Compile apparent range into a realizable causal sample delay."""
 
-    center = _validate_taps(taps)
+    center = fractional_delay_center_samples(taps)
     for name, value in (
         ("apparent_range_m", apparent_range_m),
         ("physical_range_m", physical_range_m),
@@ -66,7 +72,7 @@ def compile_target_delay(
 def fractional_delay_kernel(fractional_delay: float, taps: int) -> np.ndarray:
     """Return a normalized causal Blackman-windowed sinc reference."""
 
-    center = _validate_taps(taps)
+    center = fractional_delay_center_samples(taps)
     if not math.isfinite(fractional_delay) or not 0.0 <= fractional_delay < 1.0:
         raise ValueError("fractional_delay must be within [0, 1)")
     positions = np.arange(taps, dtype=np.float64)
@@ -93,7 +99,7 @@ def apply_causal_delay(
         raise ValueError("samples must have shape (2, N)")
     if not np.all(np.isfinite(values.real)) or not np.all(np.isfinite(values.imag)):
         raise ValueError("samples must contain finite values")
-    center = _validate_taps(taps)
+    center = fractional_delay_center_samples(taps)
     if integer_delay_samples < center:
         raise CausalityError("integer delay cannot cover fractional-filter support")
     kernel = fractional_delay_kernel(fractional_delay, taps)
@@ -138,7 +144,7 @@ def apply_relative_delay(
         raise ValueError("samples must contain finite values")
     if not math.isfinite(delay_samples) or delay_samples < 0.0:
         raise ValueError("relative delay must be finite and nonnegative")
-    center = _validate_taps(taps)
+    center = fractional_delay_center_samples(taps)
     sample_count = values.shape[1]
     if sample_count == 0:
         return np.empty((2, 0), dtype=np.complex128)

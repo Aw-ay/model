@@ -7,12 +7,12 @@
 - Python executable: `C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe`
 - Source path: `D:\AWAY\RFSOC\model\src`
 - Golden test command: `python -m unittest discover -s tests\golden -v`
-- Golden result: 100 tests passed
+- Golden result: 103 tests passed
 - Config mirrors: byte-identical
 - Public imports: `GoldenReflectionSource` and `GoldenReflectionStream`
 - Main reflection domain: `RFDC_COMPLEX_INPUT` at 500 MSPS complex
 - Monitor domain: `DETECTOR` at 250 MSPS
-- Config schema/version: `8/14`
+- Config schema/version: `8/15`
 - RFDC fabric contract: two complete complex samples per 250 MHz cycle
 
 The verified Golden path is:
@@ -96,6 +96,17 @@ The stream-status/online-PDW checkpoint additionally verifies:
   to the exact one-shot ordering;
 - per-call and cumulative PDW counts are distinct;
 - accepted-input, stable-output and final-state sample fronts are explicit.
+
+The fixed-internal-delay checkpoint additionally verifies:
+
+- the delay is a typed 500 MSPS `RFDC_COMPLEX_INPUT` quantity measured from
+  the ADC complex-input mathematical boundary to the DAC baseband-output
+  mathematical boundary;
+- a profile from another sample rate is rejected before target compilation;
+- the 63-tap kernel center is exactly 31 samples and remains internal to the
+  Golden implementation rather than appearing on the public time axis;
+- the fixed value includes measured common hardware latency exactly once and
+  excludes the target-programmed delay.
 
 The stream implementation is deliberately a buffer-backed Golden oracle. It
 defines chunk-invariant observable mathematics, but does not claim bounded

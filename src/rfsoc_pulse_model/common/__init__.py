@@ -31,6 +31,7 @@ from .calibration_types import (
     CalibrationConditionError,
     CalibrationProfile,
     ComplexChannelCalibration,
+    FixedInternalDelay,
     RcsCalibrationAnchor,
 )
 from .reflection_types import (
@@ -68,6 +69,7 @@ __all__ = [
     "CalibrationConditionError",
     "CalibrationProfile",
     "ComplexChannelCalibration",
+    "FixedInternalDelay",
     "RcsCalibrationAnchor",
     "CompiledScatterer",
     "DacAuxRequest",
