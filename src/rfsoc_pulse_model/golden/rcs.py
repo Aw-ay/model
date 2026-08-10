@@ -16,6 +16,9 @@ def digital_gain_for_target(
     apparent_range_m: float,
     anchor: Optional[RcsCalibrationAnchor],
     require_absolute: bool,
+    *,
+    operating_frequency_hz: float,
+    operating_temperature_c: float,
 ) -> Tuple[float, bool]:
     """Convert target RCS and range into a digital voltage gain."""
 
@@ -23,18 +26,28 @@ def digital_gain_for_target(
         ("target_rcs_m2", target_rcs_m2),
         ("physical_range_m", physical_range_m),
         ("apparent_range_m", apparent_range_m),
+        ("operating_frequency_hz", operating_frequency_hz),
     ):
         if not math.isfinite(value) or value <= 0.0:
             raise ValueError(f"{name} must be finite and positive")
+    if not math.isfinite(operating_temperature_c):
+        raise ValueError("operating_temperature_c must be finite")
 
     equivalent_rcs = target_rcs_m2 * (
         physical_range_m / apparent_range_m
     ) ** 4
-    if anchor is None:
+    invalid_reason = (
+        "absolute RCS conversion requires a calibration anchor"
+        if anchor is None
+        else anchor.invalid_reason(
+            frequency_hz=operating_frequency_hz,
+            temperature_c=operating_temperature_c,
+            physical_range_m=physical_range_m,
+        )
+    )
+    if invalid_reason is not None:
         if require_absolute:
-            raise RcsCalibrationError(
-                "absolute RCS conversion requires a calibration anchor"
-            )
+            raise RcsCalibrationError(invalid_reason)
         return math.sqrt(target_rcs_m2) * (
             physical_range_m / apparent_range_m
         ) ** 2, False

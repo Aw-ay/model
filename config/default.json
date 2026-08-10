@@ -1,6 +1,6 @@
 {
   "model_schema_version": 8,
-  "config_version": 12,
+  "config_version": 13,
   "board_revision": "XCZU27DR-v2.1",
   "device_part": "xczu27dr-fsve1156-2-i",
   "center_frequency_hz": 2800000000,

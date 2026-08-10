@@ -18,7 +18,7 @@ from .delay import (
     apply_causal_delay,
     compile_target_delay,
 )
-from .rcs import digital_gain_for_target
+from .rcs import RcsCalibrationError, digital_gain_for_target
 
 
 _REFERENCE_INDICES = {
@@ -47,6 +47,46 @@ class TargetCompiler:
     ) -> Tuple[CompiledScatterer, ...]:
         if len(scenario.targets) > self.config.maximum_targets:
             raise ValueError("target count exceeds maximum_targets")
+
+        anchor = self.calibration.rcs_anchor
+        anchor_invalid_reason = (
+            "absolute RCS conversion requires a calibration anchor"
+            if anchor is None
+            else anchor.invalid_reason(
+                frequency_hz=scenario.carrier_frequency_hz,
+                temperature_c=scenario.temperature_c,
+                physical_range_m=scenario.physical_range_m,
+            )
+        )
+        profile_invalid_reason = None
+        if (
+            abs(scenario.carrier_frequency_hz - self.calibration.frequency_hz)
+            > self.calibration.frequency_tolerance_hz
+        ):
+            profile_invalid_reason = (
+                "RCS calibration profile frequency is out of tolerance"
+            )
+        elif (
+            abs(scenario.temperature_c - self.calibration.temperature_c)
+            > self.calibration.temperature_tolerance_c
+        ):
+            profile_invalid_reason = (
+                "RCS calibration profile temperature is out of tolerance"
+            )
+        calibration_invalid_reason = (
+            profile_invalid_reason
+            if profile_invalid_reason is not None
+            else anchor_invalid_reason
+        )
+        if (
+            scenario.require_absolute_rcs
+            and calibration_invalid_reason is not None
+        ):
+            raise RcsCalibrationError(calibration_invalid_reason)
+        effective_anchor = (
+            anchor if calibration_invalid_reason is None else None
+        )
+        anchor_valid = calibration_invalid_reason is None
 
         compiled = []
         absolute_flags = []
@@ -89,8 +129,10 @@ class TargetCompiler:
                 target_rcs_m2=target.target_rcs_m2,
                 physical_range_m=scenario.physical_range_m,
                 apparent_range_m=target.apparent_range_m,
-                anchor=self.calibration.rcs_anchor,
+                anchor=effective_anchor,
                 require_absolute=scenario.require_absolute_rcs,
+                operating_frequency_hz=scenario.carrier_frequency_hz,
+                operating_temperature_c=scenario.temperature_c,
             )
             matrix = (
                 target.normalized_scattering_matrix
@@ -112,7 +154,7 @@ class TargetCompiler:
         self.last_absolute_rcs_calibrated = (
             all(absolute_flags)
             if absolute_flags
-            else self.calibration.rcs_anchor is not None
+            else anchor_valid
         )
         return tuple(compiled)
 

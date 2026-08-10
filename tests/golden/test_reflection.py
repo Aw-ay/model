@@ -2,7 +2,10 @@ import unittest
 
 import numpy as np
 
-from rfsoc_pulse_model.common.calibration_types import CalibrationProfile
+from rfsoc_pulse_model.common.calibration_types import (
+    CalibrationProfile,
+    RcsCalibrationAnchor,
+)
 from rfsoc_pulse_model.common.config import ModelConfig
 from rfsoc_pulse_model.common.reflection_types import (
     CompiledScatterer,
@@ -15,9 +18,66 @@ from rfsoc_pulse_model.golden.reflection import (
     GoldenPolarimetricReflectionKernel,
     TargetCompiler,
 )
+from rfsoc_pulse_model.golden.rcs import RcsCalibrationError
 
 
 class GoldenReflectionTest(unittest.TestCase):
+    def test_compiler_fails_closed_when_absolute_anchor_is_out_of_frequency(self) -> None:
+        config = ModelConfig.load_default()
+        anchor = RcsCalibrationAnchor(
+            calibration_id="anechoic-2026-08-10-a",
+            valid=True,
+            frequency_hz=2.8e9,
+            frequency_tolerance_hz=1.0e6,
+            temperature_c=25.0,
+            temperature_tolerance_c=2.0,
+            physical_range_m=100.0,
+            physical_range_tolerance_m=0.1,
+            equivalent_rcs_m2=1.0,
+            digital_voltage_gain=0.5,
+        )
+        calibration = CalibrationProfile.identity(2.8e9, 25.0, 64.0, anchor)
+        scenario = ReflectionScenario(
+            physical_range_m=100.0,
+            carrier_frequency_hz=2.802e9,
+            targets=(TargetRequest(1000.0, 0.0, 1.0, np.eye(2)),),
+            temperature_c=25.0,
+            start_sample=0,
+            length=256,
+            require_absolute_rcs=True,
+        )
+
+        with self.assertRaisesRegex(RcsCalibrationError, "frequency"):
+            TargetCompiler(config, calibration).compile(scenario)
+
+    def test_compiler_fails_closed_when_profile_is_out_of_frequency(self) -> None:
+        config = ModelConfig.load_default()
+        anchor = RcsCalibrationAnchor(
+            calibration_id="wide-anchor",
+            valid=True,
+            frequency_hz=2.8e9,
+            frequency_tolerance_hz=10.0e6,
+            temperature_c=25.0,
+            temperature_tolerance_c=10.0,
+            physical_range_m=100.0,
+            physical_range_tolerance_m=1.0,
+            equivalent_rcs_m2=1.0,
+            digital_voltage_gain=0.5,
+        )
+        calibration = CalibrationProfile.identity(2.8e9, 25.0, 64.0, anchor)
+        scenario = ReflectionScenario(
+            physical_range_m=100.0,
+            carrier_frequency_hz=2.802e9,
+            targets=(TargetRequest(1000.0, 0.0, 1.0, np.eye(2)),),
+            temperature_c=25.0,
+            start_sample=0,
+            length=256,
+            require_absolute_rcs=True,
+        )
+
+        with self.assertRaisesRegex(RcsCalibrationError, "profile frequency"):
+            TargetCompiler(config, calibration).compile(scenario)
+
     def test_h_input_produces_hh_and_vh_outputs(self) -> None:
         samples = np.zeros((2, 128), dtype=np.complex128)
         samples[0, 4] = 1.0

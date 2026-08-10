@@ -31,20 +31,55 @@ class ComplexChannelCalibration:
 
 @dataclass(frozen=True)
 class RcsCalibrationAnchor:
+    calibration_id: str
+    valid: bool
     frequency_hz: float
+    frequency_tolerance_hz: float
+    temperature_c: float
+    temperature_tolerance_c: float
     physical_range_m: float
+    physical_range_tolerance_m: float
     equivalent_rcs_m2: float
     digital_voltage_gain: float
 
     def __post_init__(self) -> None:
         for name, value in (
             ("frequency_hz", self.frequency_hz),
+            ("frequency_tolerance_hz", self.frequency_tolerance_hz),
+            ("temperature_tolerance_c", self.temperature_tolerance_c),
             ("physical_range_m", self.physical_range_m),
+            ("physical_range_tolerance_m", self.physical_range_tolerance_m),
             ("equivalent_rcs_m2", self.equivalent_rcs_m2),
             ("digital_voltage_gain", self.digital_voltage_gain),
         ):
             if not math.isfinite(value) or value <= 0.0:
                 raise ValueError(f"{name} must be finite and positive")
+        if not self.calibration_id.strip():
+            raise ValueError("calibration_id must be nonempty")
+        if not isinstance(self.valid, bool):
+            raise ValueError("valid must be boolean")
+        if not math.isfinite(self.temperature_c):
+            raise ValueError("temperature_c must be finite")
+
+    def invalid_reason(
+        self,
+        *,
+        frequency_hz: float,
+        temperature_c: float,
+        physical_range_m: float,
+    ) -> Optional[str]:
+        if not self.valid:
+            return "RCS calibration anchor is marked invalid"
+        if abs(frequency_hz - self.frequency_hz) > self.frequency_tolerance_hz:
+            return "RCS calibration anchor frequency is out of tolerance"
+        if abs(temperature_c - self.temperature_c) > self.temperature_tolerance_c:
+            return "RCS calibration anchor temperature is out of tolerance"
+        if (
+            abs(physical_range_m - self.physical_range_m)
+            > self.physical_range_tolerance_m
+        ):
+            return "RCS calibration anchor physical range is out of tolerance"
+        return None
 
 
 def _matrix(values: object, name: str) -> np.ndarray:
@@ -88,6 +123,10 @@ class CalibrationProfile:
             raise ValueError("calibration profile requires eight ADC and eight DAC channels")
         if not all(isinstance(value, ComplexChannelCalibration) for value in self.adc_channels + self.dac_channels):
             raise ValueError("channel calibration entries have the wrong type")
+        if self.rcs_anchor is not None and not isinstance(
+            self.rcs_anchor, RcsCalibrationAnchor
+        ):
+            raise ValueError("rcs_anchor has the wrong type")
         rx_matrix = _matrix(self.rx_polarization_matrix, "rx_polarization_matrix")
         tx_matrix = _matrix(self.tx_polarization_matrix, "tx_polarization_matrix")
         for name, matrix in (

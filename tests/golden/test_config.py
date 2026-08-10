@@ -122,7 +122,7 @@ class ModelConfigTest(unittest.TestCase):
         config = ModelConfig.load_default()
 
         self.assertEqual(config.model_schema_version, 8)
-        self.assertEqual(config.config_version, 12)
+        self.assertEqual(config.config_version, 13)
         self.assertEqual(config.channels, 4)
 
     def test_unknown_power_unit_is_rejected(self) -> None:

@@ -187,7 +187,7 @@ Cycle interface interpretation.
 
 `ModelConfig` validates in `__post_init__`, so direct construction,
 `from_mapping()` and `dataclasses.replace()` cannot create different validity
-rules. The current package schema/config version is `8/12`.
+rules. The current package schema/config version is `8/13`.
 
 The XCZU27DR v2.1 RFDC tile/slice, package-bank, board-net and carrier-endpoint
 mapping is frozen in `ModelConfig` and documented in
@@ -210,6 +210,13 @@ acquisition. Range decisions use delay-aligned raw ADC codes and the matching
 aligned clipping sideband, while the selected output uses the calibrated value
 at that same aligned sample. Thus channel delay calibration cannot make the
 range decision and returned sample refer to different physical instants.
+
+Absolute RCS is fail-closed. An `RcsCalibrationAnchor` must carry a nonempty
+calibration ID, an explicit validity flag, frequency/temperature/physical-range
+conditions and their tolerances. Absolute mode rejects a missing, invalid,
+out-of-anchor-condition or out-of-profile-condition calibration before target
+gain is emitted. Only explicitly non-absolute mode may fall back to relative
+gain, and then `absolute_rcs_calibrated` remains false.
 
 The authoritative installed resource is
 `rfsoc_pulse_model/config/default.json`. The root `config/default.json` is a
