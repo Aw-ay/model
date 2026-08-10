@@ -1,6 +1,6 @@
 {
-  "model_schema_version": 7,
-  "config_version": 10,
+  "model_schema_version": 8,
+  "config_version": 11,
   "board_revision": "XCZU27DR-v2.1",
   "device_part": "xczu27dr-fsve1156-2-i",
   "center_frequency_hz": 2800000000,
@@ -29,6 +29,23 @@
   "auto_range_high_water_fraction": 0.9,
   "auto_range_low_water_fraction": 0.25,
   "auto_range_hold_samples": 64,
+  "rfdc_axis_format": {
+    "adc_data_type": "iq_separate_streams",
+    "adc_component_width_bits": 16,
+    "adc_component_stream_width_bits": 32,
+    "adc_component_samples_per_cycle": 2,
+    "adc_sample_order": "sample0_lsb_sample1_msb",
+    "adc_i_axis_names": ["m00_axis", "m02_axis", "m10_axis", "m12_axis", "m20_axis", "m22_axis", "m30_axis", "m32_axis"],
+    "adc_q_axis_names": ["m01_axis", "m03_axis", "m11_axis", "m13_axis", "m21_axis", "m23_axis", "m31_axis", "m33_axis"],
+    "complex_packed_width_bits": 64,
+    "complex_packed_order": "q1_i1_q0_i0_msb_to_lsb",
+    "dac_data_type": "real",
+    "dac_sample_width_bits": 16,
+    "dac_axis_width_bits": 32,
+    "dac_samples_per_cycle": 2,
+    "dac_sample_order": "sample0_lsb_sample1_msb",
+    "dac_axis_names": ["s00_axis", "s01_axis", "s02_axis", "s03_axis", "s10_axis", "s11_axis", "s12_axis", "s13_axis"]
+  },
   "adc_channel_map": [
     {"index": 0, "rfdc_tile": 0, "rfdc_slice": 0, "package_bank": 224, "board_net": "ADC224_VIN01", "board_endpoint": "U13", "polarization": "H", "gain_range": "high", "allowed_roles": ["echo"], "nominal_gain_db": 20, "digital_scale": 1.0, "enabled": true},
     {"index": 1, "rfdc_tile": 0, "rfdc_slice": 2, "package_bank": 224, "board_net": "ADC224_VIN23", "board_endpoint": "U11", "polarization": "H", "gain_range": "mid", "allowed_roles": ["echo"], "nominal_gain_db": 0, "digital_scale": 1.0, "enabled": true},

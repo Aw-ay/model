@@ -7,12 +7,12 @@
 - Python executable: `C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe`
 - Source path: `D:\AWAY\RFSOC\model\src`
 - Golden test command: `python -m unittest discover -s tests\golden -v`
-- Golden result: 86 tests passed
+- Golden result: 90 tests passed
 - Config mirrors: byte-identical
 - Public imports: `GoldenReflectionSource` and `GoldenReflectionStream`
 - Main reflection domain: `RFDC_COMPLEX_INPUT` at 500 MSPS complex
 - Monitor domain: `DETECTOR` at 250 MSPS
-- Config schema/version: `7/10`
+- Config schema/version: `8/11`
 - RFDC fabric contract: two complete complex samples per 250 MHz cycle
 
 The verified Golden path is:
@@ -63,6 +63,18 @@ The physical-channel checkpoint additionally verifies:
 - every default route carries its package bank, board net and carrier endpoint;
 - the two installed default-config copies remain byte-identical.
 
+The RFDC AXI word-format checkpoint additionally verifies:
+
+- ADC0..7 map to the exact even-I/adjacent-odd-Q stream pairs from
+  `m00/m01` through `m32/m33`;
+- every component stream is two signed-16 samples in a 32-bit word with the
+  earlier sample in bits `[15:0]`;
+- the paired complex beat is exactly `{Q1,I1,Q0,I0}`;
+- DAC0..7 map to `s00..s13`, use real data and pack
+  `{sample1,sample0}` into 32 bits;
+- known signed-rail words catch byte, half-word, I/Q and time-order swaps;
+- the current partial 125 MHz/64-bit ADC BD is rejected as the target format.
+
 The stream implementation is deliberately a buffer-backed Golden oracle. It
 defines chunk-invariant observable mathematics, but does not claim bounded
 memory or Cycle architecture equivalence.
@@ -71,7 +83,6 @@ Explicitly not verified by this acceptance:
 
 - Cycle timing or fixed-point equivalence;
 - generated Verilog bit/cycle equivalence;
-- RFDC DAC AXI word representation;
 - Vivado Block Design interfaces, clocks, reset or CDC;
 - synthesis, implementation or timing closure;
 - J4 expansion hardware population;

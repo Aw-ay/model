@@ -77,9 +77,10 @@ oracle only; Cycle must replace it with bounded delay RAM, FIR state, detector
 state and explicit 2SPC pipelines.
 
 `result.dac_frame` is an eight-channel complex-baseband mathematical
-reference. This milestone does not define RFDC DAC AXI words and does not
-validate Cycle timing, generated RTL, Vivado Block Design, CDC or board RF
-performance.
+reference. The RFDC DAC AXI boundary is separately frozen as two signed-16
+real samples per 32-bit word; this does not imply that the mathematical complex
+frame can be connected directly to the DAC. This milestone does not validate
+Cycle timing, generated RTL, Vivado Block Design, CDC or board RF performance.
 
 ```python
 import numpy as np
@@ -186,13 +187,21 @@ Cycle interface interpretation.
 
 `ModelConfig` validates in `__post_init__`, so direct construction,
 `from_mapping()` and `dataclasses.replace()` cannot create different validity
-rules. The current package schema/config version is `7/10`.
+rules. The current package schema/config version is `8/11`.
 
 The XCZU27DR v2.1 RFDC tile/slice, package-bank, board-net and carrier-endpoint
 mapping is frozen in `ModelConfig` and documented in
 `docs/contracts/zu27dr-v2.1-physical-channel-map.md`. External H/V and
 +20/0/-20 dB wiring still requires the documented board continuity and
 low-power tone acceptance before normal RF operation.
+
+The RFDC AXI word contract is frozen in `ModelConfig.rfdc_axis` and documented
+in `docs/contracts/rfdc-axis-word-format.md`. Each physical dual ADC uses an
+even I stream and its adjacent odd Q stream, each 32-bit at 250 MHz with two
+signed-16 component samples. The paired detector ingress word is exactly
+`{Q1,I1,Q0,I0}`. Every DAC uses a 32-bit real stream `{sample1,sample0}`.
+Vivado readback shows the existing BD is still a partial 125 MHz/64-bit ADC
+configuration, so it is deliberately rejected as the target integration.
 
 The authoritative installed resource is
 `rfsoc_pulse_model/config/default.json`. The root `config/default.json` is a

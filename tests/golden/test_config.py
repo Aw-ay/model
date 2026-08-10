@@ -41,6 +41,57 @@ class ModelConfigTest(unittest.TestCase):
         self.assertEqual(config.detector.iq_width_bits, config.iq_width_bits)
         self.assertEqual(config.detector.power_unit, config.power_unit)
 
+    def test_rfdc_axis_format_freezes_dual_adc_iq_and_real_dac_words(self) -> None:
+        config = ModelConfig.from_mapping(self.root_payload())
+        axis = config.rfdc_axis
+
+        self.assertEqual(axis.adc_data_type, "iq_separate_streams")
+        self.assertEqual(axis.adc_component_width_bits, 16)
+        self.assertEqual(axis.adc_component_stream_width_bits, 32)
+        self.assertEqual(axis.adc_component_samples_per_cycle, 2)
+        self.assertEqual(axis.adc_i_axis(0), "m00_axis")
+        self.assertEqual(axis.adc_q_axis(0), "m01_axis")
+        self.assertEqual(axis.adc_i_axis(7), "m32_axis")
+        self.assertEqual(axis.adc_q_axis(7), "m33_axis")
+        self.assertEqual(axis.dac_data_type, "real")
+        self.assertEqual(axis.dac_sample_width_bits, 16)
+        self.assertEqual(axis.dac_axis_width_bits, 32)
+        self.assertEqual(axis.dac_samples_per_cycle, 2)
+        self.assertEqual(axis.dac_axis(0), "s00_axis")
+        self.assertEqual(axis.dac_axis(7), "s13_axis")
+
+    def test_rfdc_axis_known_words_have_sample_zero_in_least_significant_bits(self) -> None:
+        axis = ModelConfig.from_mapping(self.root_payload()).rfdc_axis
+
+        i_word = axis.pack_adc_component_samples((-32_768, 12_345))
+        q_word = axis.pack_adc_component_samples((-1, 32_767))
+        self.assertEqual(i_word, 0x3039_8000)
+        self.assertEqual(q_word, 0x7FFF_FFFF)
+        self.assertEqual(
+            axis.pack_complex_samples(i_word, q_word),
+            0x7FFF_3039_FFFF_8000,
+        )
+        self.assertEqual(
+            axis.unpack_complex_samples(0x7FFF_3039_FFFF_8000),
+            ((-32_768, -1), (12_345, 32_767)),
+        )
+        self.assertEqual(axis.pack_dac_samples((-32_768, 32_767)), 0x7FFF_8000)
+
+    def test_rfdc_axis_rejects_old_64_bit_125_mhz_component_stream_contract(self) -> None:
+        payload = self.root_payload()
+        payload["rfdc_axis_format"]["adc_component_stream_width_bits"] = 64
+        payload["rfdc_axis_format"]["adc_component_samples_per_cycle"] = 4
+
+        with self.assertRaisesRegex(ValueError, "two signed-16 samples"):
+            ModelConfig.from_mapping(payload)
+
+    def test_rfdc_axis_rejects_q_stream_detached_from_physical_adc(self) -> None:
+        payload = self.root_payload()
+        payload["rfdc_axis_format"]["adc_q_axis_names"][0] = "m02_axis"
+
+        with self.assertRaisesRegex(ValueError, "I/Q AXI interface names"):
+            ModelConfig.from_mapping(payload)
+
     def test_inconsistent_detector_rate_is_rejected(self) -> None:
         payload = self.root_payload()
         payload["detector_sample_rate_hz"] = 125_000_000
@@ -70,8 +121,8 @@ class ModelConfigTest(unittest.TestCase):
     def test_installed_package_loads_its_default_config_resource(self) -> None:
         config = ModelConfig.load_default()
 
-        self.assertEqual(config.model_schema_version, 7)
-        self.assertEqual(config.config_version, 10)
+        self.assertEqual(config.model_schema_version, 8)
+        self.assertEqual(config.config_version, 11)
         self.assertEqual(config.channels, 4)
 
     def test_unknown_power_unit_is_rejected(self) -> None:

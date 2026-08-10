@@ -1,6 +1,7 @@
 # ZU27DR v2.1 Physical Channel Mapping Contract
 
-Status: frozen for ModelConfig schema/config `7/10`.
+Status: originally frozen at ModelConfig schema/config `7/10`; carried
+unchanged by the current `8/11` authority.
 
 This contract separates two kinds of evidence:
 

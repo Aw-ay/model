@@ -17,6 +17,7 @@ from .types import (
 )
 from .fixed import PROJECT_ROUNDING_MODE, RoundingMode
 from .reflection_types import PhysicalChannelMapEntry
+from .rfdc_axis import RfdcAxisWordFormat
 
 
 @dataclass(frozen=True)
@@ -177,6 +178,7 @@ class ModelConfig:
     auto_range_high_water_fraction: float
     auto_range_low_water_fraction: float
     auto_range_hold_samples: int
+    rfdc_axis: RfdcAxisWordFormat
     adc_channel_map: Tuple[PhysicalChannelMapEntry, ...]
     dac_channel_map: Tuple[PhysicalChannelMapEntry, ...]
     channels: int
@@ -238,6 +240,7 @@ class ModelConfig:
                 values["auto_range_low_water_fraction"]
             ),
             auto_range_hold_samples=int(values["auto_range_hold_samples"]),
+            rfdc_axis=RfdcAxisWordFormat.from_mapping(values["rfdc_axis_format"]),
             adc_channel_map=cls._channel_map(values["adc_channel_map"], "adc"),
             dac_channel_map=cls._channel_map(values["dac_channel_map"], "dac"),
             channels=int(values["channels"]),
@@ -375,6 +378,13 @@ class ModelConfig:
             raise ValueError("auto-range water marks must satisfy 0 < low < high < 1")
         if self.auto_range_hold_samples < 1:
             raise ValueError("auto_range_hold_samples must be positive")
+        if (
+            self.rfdc_axis.adc_component_samples_per_cycle
+            != self.rfdc_complex_samples_per_cycle
+        ):
+            raise ValueError("RFDC ADC AXI samples/cycle must match the sample-rate contract")
+        if self.rfdc_axis.dac_samples_per_cycle != self.tx_samples_per_cycle:
+            raise ValueError("RFDC DAC AXI samples/cycle must match the TX rate contract")
         self._validate_channel_map(self.adc_channel_map, self.adc_channels, "adc")
         self._validate_channel_map(self.dac_channel_map, self.dac_channels, "dac")
         if self.channels < 1 or len(self.ranges_db) != self.channels:

@@ -44,6 +44,7 @@ from .reflection_types import (
     ReflectionStatus,
     TargetRequest,
 )
+from .rfdc_axis import RfdcAxisWordFormat
 
 __all__ = [
     "FixedFormat",
@@ -77,6 +78,7 @@ __all__ = [
     "ReflectionScenario",
     "ReflectionStatus",
     "TargetRequest",
+    "RfdcAxisWordFormat",
     "associate_range_records",
     "associate_polarimetric_range_records",
     "round_array_ties_away_from_zero",

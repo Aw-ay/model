@@ -18,6 +18,7 @@ from .common.reflection_types import (
     ReflectionStatus,
     TargetRequest,
 )
+from .common.rfdc_axis import RfdcAxisWordFormat
 from .common.types import (
     AuxOutputMode,
     ChannelRole,
@@ -66,6 +67,7 @@ __all__ = [
     "ReflectionScenario",
     "ReflectionStatus",
     "TargetRequest",
+    "RfdcAxisWordFormat",
     "GoldenReflectionSource",
     "GoldenReflectionStream",
     "ReflectionSourceResult",
