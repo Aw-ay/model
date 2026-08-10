@@ -42,6 +42,7 @@ from .golden.system import (
     ReflectionSourceResult,
 )
 from .golden.adc_frontend import AutoHoldState, GoldenEightChannelAdcFrontend
+from .golden.transmit import DacIq16Codes, quantize_complex_iq16
 
 __all__ = [
     "DetectorConfig",
@@ -66,6 +67,7 @@ __all__ = [
     "RcsCalibrationAnchor",
     "CompiledScatterer",
     "DacAuxRequest",
+    "DacIq16Codes",
     "EightChannelAdcFrame",
     "EightChannelDacFrame",
     "PhysicalChannelMapEntry",
@@ -80,4 +82,5 @@ __all__ = [
     "AutoHoldState",
     "GoldenReflectionStream",
     "ReflectionSourceResult",
+    "quantize_complex_iq16",
 ]

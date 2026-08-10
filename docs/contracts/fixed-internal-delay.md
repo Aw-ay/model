@@ -1,6 +1,7 @@
 # Fixed Internal Delay Contract
 
-Status: executable two-axis contract for ModelConfig schema/config `11/17`.
+Status: executable two-axis contract introduced at ModelConfig schema/config
+`11/17` and carried unchanged by the current `12/18` authority.
 
 ## Public quantity
 

@@ -1,7 +1,7 @@
 # RFDC ADC/DAC AXI Word Format Contract
 
-Status: word layout frozen at ModelConfig schema/config `8/11`, carried
-unchanged into the armed Cycle ingress at `11/17`, and tied to RF Data Converter IP
+Status: ADC layout frozen at ModelConfig schema/config `8/11`, armed ingress
+semantics added at `11/17`, DAC I/Q-to-real layout frozen at `12/18`, and tied to RF Data Converter IP
 `xilinx.com:ip:usp_rf_data_converter:2.6`.
 
 This is the only word-level authority allowed at the Golden/Cycle/Block Design
@@ -14,10 +14,10 @@ pair data from a later clock.
 | Path | Converter rate | RFDC rate change | PL AXI clock | Samples/clock |
 |---|---:|---:|---:|---:|
 | ADC | 4.000 GSPS real | DDC/decimation x8 | 250 MHz | 2 complex |
-| DAC | 4.000 GSPS real | DUC/interpolation x8 | 250 MHz | 2 real |
+| DAC | 4.000 GSPS real analogue | DUC/interpolation x8 plus fine mixer | 250 MHz | 2 complex I/Q |
 
 The RFDC ADC output is 500 MSPS complex before the PL 2:1 decimator. The DAC
-input is 500 MSPS real before RFDC interpolation.
+PL input is 500 MSPS complex before RFDC interpolation and I/Q-to-real mixing.
 
 ## Dual RF-ADC stream identity
 
@@ -67,40 +67,64 @@ That clock proof is separate from this word-layout contract.
 
 ## RF-DAC stream identity
 
-All eight RF-DAC paths use real data:
+All eight RF-DAC paths use complex I/Q PL input data and independent real
+analogue output:
 
 ```text
 DAC0..DAC7 = s00_axis, s01_axis, s02_axis, s03_axis,
              s10_axis, s11_axis, s12_axis, s13_axis
 ```
 
-Each stream is 32 bits:
+Each stream is 64 bits and contains two signed-I16/Q16 samples:
 
 ```text
-dac_tdata[15:0]  = signed real sample 0 (earlier)
-dac_tdata[31:16] = signed real sample 1 (later)
+dac_tdata[15:0]  = I0 (earlier)
+dac_tdata[31:16] = Q0 (earlier)
+dac_tdata[47:32] = I1 (later)
+dac_tdata[63:48] = Q1 (later)
 
-MSB -> LSB spelling: {sample1, sample0}
+MSB -> LSB spelling: {Q1, I1, Q0, I0}
 ```
 
-The Golden reflection engine's complex-baseband DAC frame remains a
-mathematical reference. Conversion to the real RFDC input word is a separate
-TX waveform/DUC contract; no Cycle module may feed a Python complex value
-directly to an RFDC AXI port.
+The Golden reflection engine keeps the mathematical complex envelope and
+rounds I and Q independently to signed 16-bit codes using project-wide
+ties-away-from-zero rounding and saturation. Cycle receives only those fixed
+I/Q codes; it packs them into the word above and never feeds a Python complex
+value to an RFDC port.
+
+The RFDC fine mixer contract is `I/Q -> real`, NCO frequency 2.8 GHz and
+manual unity (`0 dB`) mixer scaling. RFDC is therefore responsible for RF
+carrier translation; PL preserves the complex envelope, including scattering
+phase and Doppler. This does not configure two physical DACs as an analogue
+I/Q pair: `s00_axis` through `s13_axis` still map one-to-one onto DAC0..DAC7.
+
+The single-clock Cycle boundary assumes both DAC tiles use one common 250 MHz
+PL clock plus MTS/SYSREF phase synchronization. The configuration records this
+architecture but its proof status remains `unverified`; only RFDC property
+readback, clock/reset inspection and Vivado CDC/timing reports may change that
+status to `vivado_verified`. A per-tile-clock design requires explicit CDC and
+must not instantiate this boundary.
+
+RF-DAC `TVALID` is not used by the converter core to suppress invalid data.
+The generated boundary drives `TVALID=1` after reset, waits for all eight
+`TREADY` signals before starting, advances all channels atomically and drives
+zero with sticky `underrun` if ready or source data disappears after start.
+It cannot silently resume until disabled and explicitly cleared.
 
 ## Evidence and current-design mismatch
 
 - AMD PG269 defines configurable 16-bit AXI words, dual-ADC I/Q stream
   separation and the even-I/odd-Q convention.
-- Vivado 2025.2 readback of the current `/rfdc` cell proves that the existing
-  design is still ADC 125 MHz with 64-bit component streams and only ADC tiles
-  0/1 enabled. Its DAC ports are 32-bit but only tile 1 is enabled.
+- Vivado 2025.2 readback/current Tcl shows the existing design still uses a
+  partial ADC setup and 32-bit real DAC inputs. That is incompatible with the
+  64-bit complex-I/Q PL input frozen here.
 - The generated RFDC wrapper independently labels `mXY_axis` as the stream for
   converter XY and shows the same current port widths.
 
 Consequently the current Block Design is not accepted as the target 8 ADC / 8
 DAC design. The later BD checkpoint must enable ADC tiles 0..3, DAC tiles 0..1,
-set the target rates, and read back all 24 data interfaces before connection.
+set the target rates and DAC I/Q-to-real mixer mode, and read back all 24 data
+interfaces before connection.
 
 ## Machine-readable authority and tests
 

@@ -3,9 +3,11 @@ import unittest
 import numpy as np
 
 from rfsoc_pulse_model.golden.transmit import (
+    DacIq16Codes,
     GoldenLfmConfig,
     generate_lfm_samples,
     generate_lfm_waveform,
+    quantize_complex_iq16,
 )
 
 
@@ -46,7 +48,46 @@ class GoldenTransmitTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "pulse_samples"):
             GoldenLfmConfig(0, 0, 0, 32767)
 
+    def test_complex_dac_boundary_rounds_and_saturates_i_and_q_separately(self) -> None:
+        samples = np.array(
+            [
+                [
+                    32767.49 + 0.5j,
+                    32767.5 - 0.5j,
+                    -32768.49 + 1.5j,
+                    -32768.5 - 1.5j,
+                ]
+            ],
+            dtype=np.complex128,
+        )
+
+        codes = quantize_complex_iq16(samples)
+
+        np.testing.assert_array_equal(
+            codes.i,
+            np.array([[32767, 32767, -32768, -32768]], dtype=np.int16),
+        )
+        np.testing.assert_array_equal(
+            codes.q,
+            np.array([[1, -1, 2, -2]], dtype=np.int16),
+        )
+        np.testing.assert_array_equal(
+            codes.clipped,
+            np.array([[False, True, False, True]], dtype=np.bool_),
+        )
+
+    def test_complex_dac_boundary_rejects_nonfinite_codes(self) -> None:
+        with self.assertRaisesRegex(ValueError, "finite"):
+            quantize_complex_iq16(np.array([[complex(np.nan, 0.0)]]))
+
+    def test_dac_iq_code_container_rejects_implicit_integer_wrap(self) -> None:
+        with self.assertRaisesRegex(ValueError, "int16"):
+            DacIq16Codes(
+                i=np.array([[65_535]], dtype=np.int64),
+                q=np.array([[0]], dtype=np.int16),
+                clipped=np.array([[False]], dtype=np.bool_),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -15,6 +15,7 @@ from .types import (
     Polarization,
     PowerUnit,
     RfdcAdcClockingMode,
+    RfdcDacClockingMode,
     SampleDomain,
 )
 from .fixed import PROJECT_ROUNDING_MODE, RoundingMode
@@ -165,6 +166,8 @@ class ModelConfig:
     rfdc_complex_samples_per_cycle: int
     rfdc_adc_clocking_mode: RfdcAdcClockingMode
     rfdc_adc_clocking_proof_status: ClockingProofStatus
+    rfdc_dac_clocking_mode: RfdcDacClockingMode
+    rfdc_dac_clocking_proof_status: ClockingProofStatus
     rfdc_complex_sample_rate_hz: int
     pl_decimation: int
     detector_sample_rate_hz: int
@@ -227,6 +230,12 @@ class ModelConfig:
             ),
             rfdc_adc_clocking_proof_status=ClockingProofStatus(
                 str(values["rfdc_adc_clocking_proof_status"])
+            ),
+            rfdc_dac_clocking_mode=RfdcDacClockingMode(
+                str(values["rfdc_dac_clocking_mode"])
+            ),
+            rfdc_dac_clocking_proof_status=ClockingProofStatus(
+                str(values["rfdc_dac_clocking_proof_status"])
             ),
             rfdc_complex_sample_rate_hz=int(values["rfdc_complex_sample_rate_hz"]),
             pl_decimation=int(values["pl_decimation"]),
@@ -334,6 +343,17 @@ class ModelConfig:
             == ClockingProofStatus.VIVADO_VERIFIED
         )
 
+    @property
+    def single_clock_tx_integration_ready(self) -> bool:
+        """True only after Vivado proves the common-clock MTS/SYSREF TX path."""
+
+        return (
+            self.rfdc_dac_clocking_mode
+            == RfdcDacClockingMode.COMMON_PL_CLOCK_MTS_SYSREF
+            and self.rfdc_dac_clocking_proof_status
+            == ClockingProofStatus.VIVADO_VERIFIED
+        )
+
     @classmethod
     def load_default(cls) -> "ModelConfig":
         resource = resources.files("rfsoc_pulse_model.config").joinpath("default.json")
@@ -350,6 +370,17 @@ class ModelConfig:
         ):
             raise ValueError(
                 "rfdc_adc_clocking_proof_status must be a ClockingProofStatus"
+            )
+        if not isinstance(self.rfdc_dac_clocking_mode, RfdcDacClockingMode):
+            raise ValueError(
+                "rfdc_dac_clocking_mode must be an RfdcDacClockingMode"
+            )
+        if not isinstance(
+            self.rfdc_dac_clocking_proof_status,
+            ClockingProofStatus,
+        ):
+            raise ValueError(
+                "rfdc_dac_clocking_proof_status must be a ClockingProofStatus"
             )
         if self.rfdc_decimation < 1 or self.rfdc_interpolation < 1:
             raise ValueError("RFDC interpolation and decimation must be positive")
@@ -426,7 +457,10 @@ class ModelConfig:
             != self.rfdc_complex_samples_per_cycle
         ):
             raise ValueError("RFDC ADC AXI samples/cycle must match the sample-rate contract")
-        if self.rfdc_axis.dac_samples_per_cycle != self.tx_samples_per_cycle:
+        if (
+            self.rfdc_axis.dac_complex_samples_per_cycle
+            != self.tx_samples_per_cycle
+        ):
             raise ValueError("RFDC DAC AXI samples/cycle must match the TX rate contract")
         if self.numeric_formats["adc_component"].width != self.iq_width_bits:
             raise ValueError("ADC numeric format must match detector IQ width")
@@ -465,8 +499,10 @@ class ModelConfig:
             raise ValueError(
                 "DAC baseband rate must equal rx_fabric_clock_hz * tx_samples_per_cycle"
             )
-        if self.tx_data_type != "real":
-            raise ValueError("tx_data_type must be real")
+        if self.tx_data_type != "complex_iq":
+            raise ValueError("tx_data_type must be complex_iq")
+        if self.rfdc_axis.dac_nco_frequency_hz != self.center_frequency_hz:
+            raise ValueError("DAC NCO frequency must equal center_frequency_hz")
         if self.rounding_mode != PROJECT_ROUNDING_MODE:
             raise ValueError(
                 f"rounding_mode must be {PROJECT_ROUNDING_MODE.value}"

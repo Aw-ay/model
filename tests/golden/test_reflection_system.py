@@ -74,6 +74,12 @@ class GoldenReflectionSystemTest(unittest.TestCase):
             result.predistorted_reflection.samples.shape, (2, 512)
         )
         self.assertEqual(result.dac_frame.samples.shape, (8, 512))
+        self.assertEqual(result.dac_iq_codes.i.shape, (8, 512))
+        self.assertEqual(result.dac_iq_codes.q.shape, (8, 512))
+        self.assertEqual(result.dac_iq_codes.clipped.shape, (8, 512))
+        self.assertEqual(result.dac_iq_codes.i.dtype, np.int16)
+        self.assertEqual(result.dac_iq_codes.q.dtype, np.int16)
+        self.assertFalse(np.any(result.dac_iq_codes.clipped))
         self.assertEqual(len(result.compiled_targets), 1)
 
     def test_dac_frame_exposes_normalized_and_physical_sample_time(self) -> None:

@@ -81,12 +81,24 @@ reference on `SampleTimeReference.LATENCY_NORMALIZED`. Use
 `result.dac_frame.sample_index(offset, SampleTimeReference.PHYSICAL)` to map an
 array offset onto the measured 500-MSPS-equivalent physical Cycle/DAC time
 axis; it is not a raw 4-GSPS converter sample number. The RFDC DAC AXI
-boundary is separately frozen as two signed-16 real samples per 32-bit word;
-this does not imply that the mathematical complex frame can be connected
-directly to the DAC. The first Cycle checkpoint now
-implements only the 8-channel RFDC 2SPC ingress; the rest of the reflection,
-detection and TX data paths, Vivado Block Design, CDC and board RF performance
-remain unvalidated.
+boundary preserves that envelope as two signed-I16/Q16 complex samples per
+64-bit word. The RFDC fine mixer performs I/Q-to-real conversion at the frozen
+2.8 GHz NCO frequency with unity (0 dB) mixer scaling, while every physical
+DAC remains one independent real analogue output. Golden now owns I/Q16
+rounding and clipping; Cycle owns 2SPC packing and deterministic ready/
+underrun behavior. The reflection DSP pipeline, Vivado Block Design, CDC,
+timing and board RF performance remain unvalidated.
+
+`result.dac_iq_codes` is the corresponding executable Golden boundary. Its
+`i` and `q` arrays are immutable signed-16 codes and `clipped` marks samples
+where either component saturated. The arrays retain the same `(8, N)` shape
+and normalized sample timeline as `result.dac_frame`; Cycle consumes two
+adjacent code columns per 250 MHz clock.
+
+The registered TX boundary assumes a common 250 MHz clock across both DAC
+tiles with MTS/SYSREF synchronization. `ModelConfig` deliberately reports
+`single_clock_tx_integration_ready=False` until Vivado readback, CDC and timing
+evidence changes the DAC clocking proof status from `unverified`.
 
 ```python
 import numpy as np
@@ -179,8 +191,8 @@ DAC_baseband_rate = DAC_fabric_clock * TX_samples_per_clock
 ```
 
 For the default configuration these resolve to 4 GSPS -> 500 MSPS complex ->
-250 MSPS detector, and 4 GSPS / 8 = 500 MSPS real TX baseband carried as two
-samples per 250 MHz clock. Inconsistent rates, FIR group delay, channel/range
+250 MSPS detector, and 4 GSPS / 8 = 500 MSPS complex TX baseband carried as
+two I/Q samples per 250 MHz clock. Inconsistent rates, FIR group delay, channel/range
 count, IQ/power format or TX data type are rejected. `ModelConfig` is the
 single source for these fields and passes them into `DetectorConfig`, which in
 turn stamps every emitted `PulseRecord`.
@@ -193,7 +205,7 @@ Cycle interface interpretation.
 
 `ModelConfig` validates in `__post_init__`, so direct construction,
 `from_mapping()` and `dataclasses.replace()` cannot create different validity
-rules. The current package schema/config version is `9/16`.
+rules. The current package schema/config version is `12/18`.
 
 The XCZU27DR v2.1 RFDC tile/slice, package-bank, board-net and carrier-endpoint
 mapping is frozen in `ModelConfig` and documented in
@@ -205,9 +217,10 @@ The RFDC AXI word contract is frozen in `ModelConfig.rfdc_axis` and documented
 in `docs/contracts/rfdc-axis-word-format.md`. Each physical dual ADC uses an
 even I stream and its adjacent odd Q stream, each 32-bit at 250 MHz with two
 signed-16 component samples. The paired detector ingress word is exactly
-`{Q1,I1,Q0,I0}`. Every DAC uses a 32-bit real stream `{sample1,sample0}`.
-Vivado readback shows the existing BD is still a partial 125 MHz/64-bit ADC
-configuration, so it is deliberately rejected as the target integration.
+`{Q1,I1,Q0,I0}`. Every DAC also uses a 64-bit I/Q stream
+`{Q1,I1,Q0,I0}` feeding the RFDC I/Q-to-real fine mixer. Vivado readback shows
+the existing BD still uses 32-bit real DAC streams and a partial ADC setup, so
+it is deliberately rejected as the target integration.
 
 `AUTO_HOLD` uses the absolute RFDC input-sample timeline. H and V each retain
 their current range and last absolute switch sample across contiguous frames;

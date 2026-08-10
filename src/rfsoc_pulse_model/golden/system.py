@@ -39,6 +39,7 @@ from .reflection import (
     GoldenPolarimetricReflectionKernel,
     TargetCompiler,
 )
+from .transmit import DacIq16Codes, quantize_complex_iq16
 
 
 _LEGACY_RANGE = {
@@ -55,6 +56,7 @@ class ReflectionSourceResult:
     actual_uncompensated: PolarimetricWaveform
     predistorted_reflection: PolarimetricWaveform
     dac_frame: EightChannelDacFrame
+    dac_iq_codes: DacIq16Codes
     pulse_records: Tuple[PulseRecord, ...]
     pulse_events: Tuple[PulseEvent, ...]
     compiled_targets: Tuple[CompiledScatterer, ...]
@@ -237,6 +239,7 @@ class GoldenReflectionSource:
         )
         predistorted = self.predistorter.predistort(desired)
         dac_frame = self.dac_router.route(predistorted, auxiliary_request)
+        dac_iq_codes = quantize_complex_iq16(dac_frame.samples)
 
         pulse_records = self._run_monitor(adc_frame)
         pulse_events = tuple(
@@ -260,6 +263,7 @@ class GoldenReflectionSource:
             actual_uncompensated=actual_uncompensated,
             predistorted_reflection=predistorted,
             dac_frame=dac_frame,
+            dac_iq_codes=dac_iq_codes,
             pulse_records=pulse_records,
             pulse_events=pulse_events,
             compiled_targets=scatterers,
@@ -425,6 +429,11 @@ class GoldenReflectionStream:
             time_reference=result.dac_frame.time_reference,
             start_sample=result.dac_frame.start_sample + start,
         )
+        dac_iq_codes = DacIq16Codes(
+            i=result.dac_iq_codes.i[:, start:stop],
+            q=result.dac_iq_codes.q[:, start:stop],
+            clipped=result.dac_iq_codes.clipped[:, start:stop],
+        )
         return ReflectionSourceResult(
             incident=waveform_slice(result.incident),
             desired_reflection=waveform_slice(result.desired_reflection),
@@ -433,6 +442,7 @@ class GoldenReflectionStream:
                 result.predistorted_reflection
             ),
             dac_frame=dac_frame,
+            dac_iq_codes=dac_iq_codes,
             pulse_records=pulse_records,
             pulse_events=pulse_events,
             compiled_targets=result.compiled_targets,

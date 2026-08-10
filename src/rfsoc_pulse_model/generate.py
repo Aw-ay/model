@@ -83,12 +83,28 @@ def generate(output_root: Path) -> dict[str, object]:
         "device_part": config.device_part,
         "rx_fabric_clock_hz": config.rx_fabric_clock_hz,
         "rfdc_complex_samples_per_cycle": config.rfdc_complex_samples_per_cycle,
+        "rfdc_dac_pl_data_type": config.rfdc_axis.dac_data_type,
+        "rfdc_dac_analog_output_type": config.rfdc_axis.dac_analog_output_type,
+        "rfdc_dac_mixer_mode": config.rfdc_axis.dac_mixer_mode,
+        "rfdc_dac_mixer_scale_mode": config.rfdc_axis.dac_mixer_scale_mode,
+        "rfdc_dac_nco_frequency_hz": config.rfdc_axis.dac_nco_frequency_hz,
+        "rfdc_dac_axis_width_bits": config.rfdc_axis.dac_axis_width_bits,
+        "rfdc_dac_complex_samples_per_cycle": (
+            config.rfdc_axis.dac_complex_samples_per_cycle
+        ),
         "rfdc_adc_clocking_mode": config.rfdc_adc_clocking_mode.value,
         "rfdc_adc_clocking_proof_status": (
             config.rfdc_adc_clocking_proof_status.value
         ),
+        "rfdc_dac_clocking_mode": config.rfdc_dac_clocking_mode.value,
+        "rfdc_dac_clocking_proof_status": (
+            config.rfdc_dac_clocking_proof_status.value
+        ),
         "single_clock_ingress_integration_ready": (
             config.single_clock_ingress_integration_ready
+        ),
+        "single_clock_tx_integration_ready": (
+            config.single_clock_tx_integration_ready
         ),
         "golden_dac_time_reference": (
             SampleTimeReference.LATENCY_NORMALIZED.value

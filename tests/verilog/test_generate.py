@@ -12,13 +12,27 @@ class GenerateTest(unittest.TestCase):
             root = Path(temporary)
             manifest = generate(root)
 
-            rtl = (root / "rtl/rx_group_ingress_2spc.v").read_text(encoding="utf-8")
+            rx_rtl = (root / "rtl/rx_group_ingress_2spc.v").read_text(
+                encoding="utf-8"
+            )
+            tx_rtl = (root / "rtl/tx_iq_axis_boundary_2spc.v").read_text(
+                encoding="utf-8"
+            )
             on_disk = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(on_disk, manifest)
-            self.assertEqual(len(manifest["modules"]), 1)
-            self.assertEqual(manifest["modules"][0]["latency_cycles"], 1)
-            self.assertEqual(manifest["modules"][0]["samples_per_cycle"], 2)
-            self.assertFalse(manifest["modules"][0]["accepts_backpressure"])
+            modules = {
+                module["module_name"]: module for module in manifest["modules"]
+            }
+            self.assertEqual(
+                set(modules),
+                {"rx_group_ingress_2spc", "tx_iq_axis_boundary_2spc"},
+            )
+            self.assertEqual(modules["rx_group_ingress_2spc"]["latency_cycles"], 1)
+            self.assertEqual(modules["tx_iq_axis_boundary_2spc"]["latency_cycles"], 0)
+            self.assertEqual(modules["tx_iq_axis_boundary_2spc"]["samples_per_cycle"], 2)
+            self.assertFalse(
+                modules["tx_iq_axis_boundary_2spc"]["accepts_backpressure"]
+            )
             self.assertEqual(
                 manifest["rfdc_adc_clocking_mode"],
                 "common_pl_clock_mts",
@@ -28,6 +42,22 @@ class GenerateTest(unittest.TestCase):
                 "unverified",
             )
             self.assertFalse(manifest["single_clock_ingress_integration_ready"])
+            self.assertEqual(
+                manifest["rfdc_dac_clocking_mode"],
+                "common_pl_clock_mts_sysref",
+            )
+            self.assertEqual(
+                manifest["rfdc_dac_clocking_proof_status"],
+                "unverified",
+            )
+            self.assertFalse(manifest["single_clock_tx_integration_ready"])
+            self.assertEqual(manifest["rfdc_dac_pl_data_type"], "iq_interleaved")
+            self.assertEqual(manifest["rfdc_dac_analog_output_type"], "real")
+            self.assertEqual(manifest["rfdc_dac_mixer_mode"], "iq_to_real")
+            self.assertEqual(manifest["rfdc_dac_mixer_scale_mode"], "unity_0db")
+            self.assertEqual(manifest["rfdc_dac_nco_frequency_hz"], 2_800_000_000)
+            self.assertEqual(manifest["rfdc_dac_axis_width_bits"], 64)
+            self.assertEqual(manifest["rfdc_dac_complex_samples_per_cycle"], 2)
             self.assertEqual(
                 manifest["golden_dac_time_reference"],
                 "latency_normalized",
@@ -41,8 +71,9 @@ class GenerateTest(unittest.TestCase):
                 "calibration_profile_measurement",
             )
             self.assertNotIn("fixed_internal_delay_samples", manifest)
-            self.assertIn("always @(*)", rtl)
-            self.assertIn("always @(posedge clk_i)", rtl)
+            for rtl in (rx_rtl, tx_rtl):
+                self.assertIn("always @(*)", rtl)
+                self.assertIn("always @(posedge clk_i)", rtl)
 
     def test_unregistered_rtl_is_rejected_instead_of_silently_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

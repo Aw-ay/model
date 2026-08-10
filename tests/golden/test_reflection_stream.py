@@ -118,6 +118,14 @@ class GoldenReflectionStreamTest(unittest.TestCase):
             np.concatenate([chunk.dac_frame.samples for chunk in chunks], axis=1),
             whole.dac_frame.samples,
         )
+        for field in ("i", "q", "clipped"):
+            np.testing.assert_array_equal(
+                np.concatenate(
+                    [getattr(chunk.dac_iq_codes, field) for chunk in chunks],
+                    axis=1,
+                ),
+                getattr(whole.dac_iq_codes, field),
+            )
         self.assertEqual(
             tuple(record for chunk in chunks for record in chunk.pulse_records),
             whole.pulse_records,

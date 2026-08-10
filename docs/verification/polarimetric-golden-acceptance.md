@@ -7,13 +7,13 @@
 - Python executable: `C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe`
 - Source path: `D:\AWAY\RFSOC\model\src`
 - Golden test command: `python -m unittest discover -s tests\golden -v`
-- Golden result: 111 tests passed
-- Full Python result: 119 tests passed (111 Golden + 8 Cycle/generator)
+- Golden result: 114 tests passed
+- Full Python result: 128 tests passed (114 Golden + 14 Cycle/generator)
 - Config mirrors: byte-identical
 - Public imports: `GoldenReflectionSource` and `GoldenReflectionStream`
 - Main reflection domain: `RFDC_COMPLEX_INPUT` at 500 MSPS complex
 - Monitor domain: `DETECTOR` at 250 MSPS
-- Config schema/version: `11/17`
+- Config schema/version: `12/18`
 - RFDC fabric contract: two complete complex samples per 250 MHz cycle
 
 The verified Golden path is:
@@ -74,8 +74,9 @@ The RFDC AXI word-format checkpoint additionally verifies:
 - every component stream is two signed-16 samples in a 32-bit word with the
   earlier sample in bits `[15:0]`;
 - the paired complex beat is exactly `{Q1,I1,Q0,I0}`;
-- DAC0..7 map to `s00..s13`, use real data and pack
-  `{sample1,sample0}` into 32 bits;
+- DAC0..7 map to `s00..s13`, accept complex I/Q PL data and pack
+  `{Q1,I1,Q0,I0}` into 64 bits while producing independent real analogue
+  outputs through the RFDC I/Q-to-real mixer;
 - known signed-rail words catch byte, half-word, I/Q and time-order swaps;
 - the current partial 125 MHz/64-bit ADC BD is rejected as the target format.
 

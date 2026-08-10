@@ -17,7 +17,7 @@ class VerilogEmitter:
         for port in module.ports:
             if port.direction == "input":
                 kind = "input wire"
-            elif port.registered:
+            elif port.registered or port in module.comb_assignments:
                 kind = "output reg"
             else:
                 kind = "output wire"

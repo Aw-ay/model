@@ -53,6 +53,11 @@ class RTLModule:
         self.ports.append(signal)
         return signal
 
+    def output(self, name: str, width: int = 1) -> Signal:
+        signal = Signal(name, width, direction="output")
+        self.ports.append(signal)
+        return signal
+
     def wire(self, name: str, width: int = 1) -> Signal:
         signal = Signal(name, width)
         self.internal_signals.append(signal)
@@ -118,4 +123,3 @@ class RTLModule:
         self.clock()
         for signal in self.ports + self.internal_signals:
             signal.pending = None
-

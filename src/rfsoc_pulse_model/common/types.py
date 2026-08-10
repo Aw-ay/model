@@ -60,6 +60,13 @@ class RfdcAdcClockingMode(str, Enum):
     PER_TILE_CDC = "per_tile_cdc"
 
 
+class RfdcDacClockingMode(str, Enum):
+    """Structural clock architecture at the RF-DAC/Cycle boundary."""
+
+    COMMON_PL_CLOCK_MTS_SYSREF = "common_pl_clock_mts_sysref"
+    PER_TILE_CDC = "per_tile_cdc"
+
+
 class ClockingProofStatus(str, Enum):
     """Whether the selected RFDC clock architecture has Vivado evidence."""
 

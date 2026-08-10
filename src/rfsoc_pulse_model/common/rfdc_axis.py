@@ -38,10 +38,14 @@ class RfdcAxisWordFormat:
     complex_packed_width_bits: int
     complex_packed_order: str
     dac_data_type: str
-    dac_sample_width_bits: int
+    dac_analog_output_type: str
+    dac_mixer_mode: str
+    dac_mixer_scale_mode: str
+    dac_nco_frequency_hz: int
+    dac_component_width_bits: int
     dac_axis_width_bits: int
-    dac_samples_per_cycle: int
-    dac_sample_order: str
+    dac_complex_samples_per_cycle: int
+    dac_component_order: str
     dac_axis_names: Tuple[str, ...]
 
     @classmethod
@@ -65,10 +69,16 @@ class RfdcAxisWordFormat:
             complex_packed_width_bits=int(values["complex_packed_width_bits"]),
             complex_packed_order=str(values["complex_packed_order"]),
             dac_data_type=str(values["dac_data_type"]),
-            dac_sample_width_bits=int(values["dac_sample_width_bits"]),
+            dac_analog_output_type=str(values["dac_analog_output_type"]),
+            dac_mixer_mode=str(values["dac_mixer_mode"]),
+            dac_mixer_scale_mode=str(values["dac_mixer_scale_mode"]),
+            dac_nco_frequency_hz=int(values["dac_nco_frequency_hz"]),
+            dac_component_width_bits=int(values["dac_component_width_bits"]),
             dac_axis_width_bits=int(values["dac_axis_width_bits"]),
-            dac_samples_per_cycle=int(values["dac_samples_per_cycle"]),
-            dac_sample_order=str(values["dac_sample_order"]),
+            dac_complex_samples_per_cycle=int(
+                values["dac_complex_samples_per_cycle"]
+            ),
+            dac_component_order=str(values["dac_component_order"]),
             dac_axis_names=_string_tuple(values["dac_axis_names"], "dac_axis_names"),
         )
 
@@ -104,16 +114,27 @@ class RfdcAxisWordFormat:
             raise ValueError("packed complex ADC beat must be 64 bits")
         if self.complex_packed_order != "q1_i1_q0_i0_msb_to_lsb":
             raise ValueError("packed complex ADC order must be {Q1,I1,Q0,I0}")
-        if self.dac_data_type != "real":
-            raise ValueError("DAC data type must be real")
+        if self.dac_data_type != "iq_interleaved":
+            raise ValueError("DAC PL data type must be iq_interleaved")
+        if self.dac_analog_output_type != "real":
+            raise ValueError("DAC analog output type must be real")
+        if self.dac_mixer_mode != "iq_to_real":
+            raise ValueError("DAC mixer mode must be iq_to_real")
+        if self.dac_mixer_scale_mode != "unity_0db":
+            raise ValueError("DAC mixer scale mode must be unity_0db")
+        if self.dac_nco_frequency_hz <= 0:
+            raise ValueError("DAC NCO frequency must be positive")
         if (
-            self.dac_sample_width_bits != 16
-            or self.dac_axis_width_bits != 32
-            or self.dac_samples_per_cycle != 2
+            self.dac_component_width_bits != 16
+            or self.dac_axis_width_bits != 64
+            or self.dac_complex_samples_per_cycle != 2
         ):
-            raise ValueError("DAC AXI format must be two signed-16 real samples per 32-bit stream")
-        if self.dac_sample_order != "sample0_lsb_sample1_msb":
-            raise ValueError("DAC sample order must place the earlier sample in bits 15:0")
+            raise ValueError(
+                "DAC AXI format must be two signed-I16/Q16 complex samples "
+                "per 64-bit stream"
+            )
+        if self.dac_component_order != "q1_i1_q0_i0_msb_to_lsb":
+            raise ValueError("DAC component order must be {Q1,I1,Q0,I0}")
         if self.dac_axis_names != expected_dac:
             raise ValueError("DAC AXI interface names must match all eight physical DAC routes")
 
@@ -148,7 +169,27 @@ class RfdcAxisWordFormat:
             (_decode_signed16(word >> 32), _decode_signed16(word >> 48)),
         )
 
-    def pack_dac_samples(self, samples: Sequence[int]) -> int:
-        if len(samples) != 2:
-            raise ValueError("DAC stream requires exactly two samples")
-        return _signed16(int(samples[0])) | (_signed16(int(samples[1])) << 16)
+    def pack_dac_complex_samples(
+        self,
+        samples: Sequence[Sequence[int]],
+    ) -> int:
+        if len(samples) != 2 or any(len(sample) != 2 for sample in samples):
+            raise ValueError("DAC stream requires exactly two I/Q sample pairs")
+        (i0, q0), (i1, q1) = samples
+        return (
+            _signed16(int(i0))
+            | (_signed16(int(q0)) << 16)
+            | (_signed16(int(i1)) << 32)
+            | (_signed16(int(q1)) << 48)
+        )
+
+    def unpack_dac_complex_samples(
+        self,
+        word: int,
+    ) -> Tuple[Tuple[int, int], ...]:
+        if not 0 <= word <= 0xFFFF_FFFF_FFFF_FFFF:
+            raise ValueError("packed DAC complex word must be unsigned 64-bit")
+        return (
+            (_decode_signed16(word), _decode_signed16(word >> 16)),
+            (_decode_signed16(word >> 32), _decode_signed16(word >> 48)),
+        )

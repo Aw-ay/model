@@ -10,6 +10,7 @@ from rfsoc_pulse_model.common.types import (
     IQUnit,
     PowerUnit,
     RfdcAdcClockingMode,
+    RfdcDacClockingMode,
     SampleDomain,
 )
 
@@ -36,6 +37,15 @@ class ModelConfigTest(unittest.TestCase):
             ClockingProofStatus.UNVERIFIED,
         )
         self.assertFalse(config.single_clock_ingress_integration_ready)
+        self.assertEqual(
+            config.rfdc_dac_clocking_mode,
+            RfdcDacClockingMode.COMMON_PL_CLOCK_MTS_SYSREF,
+        )
+        self.assertEqual(
+            config.rfdc_dac_clocking_proof_status,
+            ClockingProofStatus.UNVERIFIED,
+        )
+        self.assertFalse(config.single_clock_tx_integration_ready)
         self.assertEqual(
             config.dac_nominal_gain_policy,
             "external_analog_path",
@@ -119,7 +129,7 @@ class ModelConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "numeric format"):
             ModelConfig.from_mapping(payload)
 
-    def test_rfdc_axis_format_freezes_dual_adc_iq_and_real_dac_words(self) -> None:
+    def test_rfdc_axis_format_freezes_dual_adc_and_dac_iq_words(self) -> None:
         config = ModelConfig.from_mapping(self.root_payload())
         axis = config.rfdc_axis
 
@@ -131,10 +141,15 @@ class ModelConfigTest(unittest.TestCase):
         self.assertEqual(axis.adc_q_axis(0), "m01_axis")
         self.assertEqual(axis.adc_i_axis(7), "m32_axis")
         self.assertEqual(axis.adc_q_axis(7), "m33_axis")
-        self.assertEqual(axis.dac_data_type, "real")
-        self.assertEqual(axis.dac_sample_width_bits, 16)
-        self.assertEqual(axis.dac_axis_width_bits, 32)
-        self.assertEqual(axis.dac_samples_per_cycle, 2)
+        self.assertEqual(axis.dac_data_type, "iq_interleaved")
+        self.assertEqual(axis.dac_analog_output_type, "real")
+        self.assertEqual(axis.dac_mixer_mode, "iq_to_real")
+        self.assertEqual(axis.dac_mixer_scale_mode, "unity_0db")
+        self.assertEqual(axis.dac_nco_frequency_hz, 2_800_000_000)
+        self.assertEqual(axis.dac_component_width_bits, 16)
+        self.assertEqual(axis.dac_axis_width_bits, 64)
+        self.assertEqual(axis.dac_complex_samples_per_cycle, 2)
+        self.assertEqual(axis.dac_component_order, "q1_i1_q0_i0_msb_to_lsb")
         self.assertEqual(axis.dac_axis(0), "s00_axis")
         self.assertEqual(axis.dac_axis(7), "s13_axis")
 
@@ -153,7 +168,16 @@ class ModelConfigTest(unittest.TestCase):
             axis.unpack_complex_samples(0x7FFF_3039_FFFF_8000),
             ((-32_768, -1), (12_345, 32_767)),
         )
-        self.assertEqual(axis.pack_dac_samples((-32_768, 32_767)), 0x7FFF_8000)
+        self.assertEqual(
+            axis.pack_dac_complex_samples(
+                ((-32_768, -1), (12_345, 32_767))
+            ),
+            0x7FFF_3039_FFFF_8000,
+        )
+        self.assertEqual(
+            axis.unpack_dac_complex_samples(0x7FFF_3039_FFFF_8000),
+            ((-32_768, -1), (12_345, 32_767)),
+        )
 
     def test_rfdc_axis_rejects_old_64_bit_125_mhz_component_stream_contract(self) -> None:
         payload = self.root_payload()
@@ -199,8 +223,8 @@ class ModelConfigTest(unittest.TestCase):
     def test_installed_package_loads_its_default_config_resource(self) -> None:
         config = ModelConfig.load_default()
 
-        self.assertEqual(config.model_schema_version, 11)
-        self.assertEqual(config.config_version, 17)
+        self.assertEqual(config.model_schema_version, 12)
+        self.assertEqual(config.config_version, 18)
         self.assertEqual(config.channels, 4)
 
     def test_unknown_rfdc_adc_clocking_mode_is_rejected(self) -> None:
@@ -222,6 +246,16 @@ class ModelConfigTest(unittest.TestCase):
             dataclasses.replace(
                 config,
                 rfdc_adc_clocking_proof_status="unverified",
+            )
+        with self.assertRaisesRegex(ValueError, "rfdc_dac_clocking_mode"):
+            dataclasses.replace(
+                config,
+                rfdc_dac_clocking_mode="common_pl_clock_mts_sysref",
+            )
+        with self.assertRaisesRegex(ValueError, "rfdc_dac_clocking_proof_status"):
+            dataclasses.replace(
+                config,
+                rfdc_dac_clocking_proof_status="unverified",
             )
 
     def test_unknown_power_unit_is_rejected(self) -> None:

@@ -1,6 +1,7 @@
 # Fixed-Point Width Contract
 
-Status: frozen for ModelConfig schema/config `9/16`.
+Status: frozen at ModelConfig schema/config `9/16`; carried unchanged by the
+current `12/18` authority.
 
 `ModelConfig.numeric_formats` is the single machine-readable authority. The
 two installed JSON copies must remain byte-identical, and the loader rejects a
