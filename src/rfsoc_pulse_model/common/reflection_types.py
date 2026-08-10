@@ -39,6 +39,11 @@ def _immutable_array(
 @dataclass(frozen=True)
 class PhysicalChannelMapEntry:
     index: int
+    rfdc_tile: int
+    rfdc_slice: int
+    package_bank: int
+    board_net: str
+    board_endpoint: str
     polarization: Polarization
     gain_range: GainRange
     allowed_roles: Tuple[ChannelRole, ...]
@@ -53,6 +58,11 @@ class PhysicalChannelMapEntry:
             raise ValueError("allowed_roles must be a sequence")
         return cls(
             index=int(values["index"]),
+            rfdc_tile=int(values["rfdc_tile"]),
+            rfdc_slice=int(values["rfdc_slice"]),
+            package_bank=int(values["package_bank"]),
+            board_net=str(values["board_net"]),
+            board_endpoint=str(values["board_endpoint"]),
             polarization=Polarization(str(values["polarization"])),
             gain_range=GainRange(str(values["gain_range"])),
             allowed_roles=tuple(ChannelRole(str(value)) for value in raw_roles),
@@ -64,6 +74,12 @@ class PhysicalChannelMapEntry:
     def __post_init__(self) -> None:
         if self.index < 0:
             raise ValueError("physical channel index cannot be negative")
+        if self.rfdc_tile < 0 or self.rfdc_slice < 0:
+            raise ValueError("RFDC tile and slice cannot be negative")
+        if self.package_bank < 1:
+            raise ValueError("package_bank must be positive")
+        if not self.board_net.strip() or not self.board_endpoint.strip():
+            raise ValueError("physical channel requires board net and endpoint")
         if not self.allowed_roles:
             raise ValueError("physical channel requires at least one allowed role")
         if len(set(self.allowed_roles)) != len(self.allowed_roles):

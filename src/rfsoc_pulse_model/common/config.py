@@ -406,6 +406,58 @@ class ModelConfig:
             raise ValueError(
                 f"{kind}_channel_map index values must contain each channel exactly once"
             )
+        rfdc_routes = [
+            (entry.rfdc_tile, entry.rfdc_slice)
+            for entry in entries
+        ]
+        if len(set(rfdc_routes)) != expected_count:
+            raise ValueError(
+                f"{kind}_channel_map RFDC route values must be unique"
+            )
+        if kind == "adc":
+            expected_routes = {
+                (tile, rfdc_slice)
+                for tile in range(4)
+                for rfdc_slice in (0, 2)
+            }
+            if set(rfdc_routes) != expected_routes:
+                raise ValueError(
+                    "adc_channel_map must cover the canonical RFDC routes"
+                )
+            expected_by_index = {
+                index: (index // 2, 2 * (index % 2))
+                for index in range(expected_count)
+            }
+            if any(
+                (entry.rfdc_tile, entry.rfdc_slice)
+                != expected_by_index[entry.index]
+                for entry in entries
+            ):
+                raise ValueError(
+                    "adc_channel_map index must match its canonical RFDC route"
+                )
+        if kind == "dac":
+            expected_routes = {
+                (tile, rfdc_slice)
+                for tile in range(2)
+                for rfdc_slice in range(4)
+            }
+            if set(rfdc_routes) != expected_routes:
+                raise ValueError(
+                    "dac_channel_map must cover the canonical RFDC routes"
+                )
+            expected_by_index = {
+                index: (index // 4, index % 4)
+                for index in range(expected_count)
+            }
+            if any(
+                (entry.rfdc_tile, entry.rfdc_slice)
+                != expected_by_index[entry.index]
+                for entry in entries
+            ):
+                raise ValueError(
+                    "dac_channel_map index must match its canonical RFDC route"
+                )
         if kind in ("adc", "dac"):
             for polarization in (Polarization.H, Polarization.V):
                 for gain_range in (GainRange.HIGH, GainRange.MID, GainRange.LOW):

@@ -7,12 +7,12 @@
 - Python executable: `C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe`
 - Source path: `D:\AWAY\RFSOC\model\src`
 - Golden test command: `python -m unittest discover -s tests\golden -v`
-- Golden result: 81 tests passed
+- Golden result: 86 tests passed
 - Config mirrors: byte-identical
 - Public imports: `GoldenReflectionSource` and `GoldenReflectionStream`
 - Main reflection domain: `RFDC_COMPLEX_INPUT` at 500 MSPS complex
 - Monitor domain: `DETECTOR` at 250 MSPS
-- Config schema/version: `6/9`
+- Config schema/version: `7/10`
 - RFDC fabric contract: two complete complex samples per 250 MHz cycle
 
 The verified Golden path is:
@@ -54,6 +54,14 @@ The continuous-stream checkpoint additionally verifies:
 - DAC0..5 cover H/V x HIGH/MID/LOW exactly once;
 - system fixtures use physical 10:1:0.1 ADC range ratios and an end-to-end
   impulse test checks hand-derived amplitude, delay and complex phase.
+
+The physical-channel checkpoint additionally verifies:
+
+- all eight ADC routes uniquely cover RFDC `00/02/10/12/20/22/30/32`;
+- all eight DAC routes uniquely cover RFDC `00..03/10..13`;
+- logical indices cannot be detached from their canonical RFDC tile/slice;
+- every default route carries its package bank, board net and carrier endpoint;
+- the two installed default-config copies remain byte-identical.
 
 The stream implementation is deliberately a buffer-backed Golden oracle. It
 defines chunk-invariant observable mathematics, but does not claim bounded

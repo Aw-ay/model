@@ -70,8 +70,8 @@ class ModelConfigTest(unittest.TestCase):
     def test_installed_package_loads_its_default_config_resource(self) -> None:
         config = ModelConfig.load_default()
 
-        self.assertEqual(config.model_schema_version, 6)
-        self.assertEqual(config.config_version, 9)
+        self.assertEqual(config.model_schema_version, 7)
+        self.assertEqual(config.config_version, 10)
         self.assertEqual(config.channels, 4)
 
     def test_unknown_power_unit_is_rejected(self) -> None:
@@ -106,6 +106,48 @@ class ModelConfigTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "adc_channel_map.*index"):
             ModelConfig.from_mapping(payload)
+
+    def test_duplicate_adc_rfdc_route_is_rejected(self) -> None:
+        payload = self.root_payload()
+        payload["adc_channel_map"][1]["rfdc_tile"] = 0
+        payload["adc_channel_map"][1]["rfdc_slice"] = 0
+
+        with self.assertRaisesRegex(ValueError, "adc_channel_map.*RFDC route"):
+            ModelConfig.from_mapping(payload)
+
+    def test_noncanonical_adc_rfdc_route_is_rejected(self) -> None:
+        payload = self.root_payload()
+        payload["adc_channel_map"][0]["rfdc_slice"] = 1
+
+        with self.assertRaisesRegex(ValueError, "adc_channel_map.*canonical"):
+            ModelConfig.from_mapping(payload)
+
+    def test_noncanonical_dac_rfdc_route_is_rejected(self) -> None:
+        payload = self.root_payload()
+        payload["dac_channel_map"][0]["rfdc_tile"] = 2
+
+        with self.assertRaisesRegex(ValueError, "dac_channel_map.*canonical"):
+            ModelConfig.from_mapping(payload)
+
+    def test_channel_index_cannot_be_detached_from_its_rfdc_route(self) -> None:
+        for kind in ("adc", "dac"):
+            with self.subTest(kind=kind):
+                payload = self.root_payload()
+                channel_map = payload[f"{kind}_channel_map"]
+                first_route = (
+                    channel_map[0]["rfdc_tile"],
+                    channel_map[0]["rfdc_slice"],
+                )
+                channel_map[0]["rfdc_tile"] = channel_map[1]["rfdc_tile"]
+                channel_map[0]["rfdc_slice"] = channel_map[1]["rfdc_slice"]
+                channel_map[1]["rfdc_tile"] = first_route[0]
+                channel_map[1]["rfdc_slice"] = first_route[1]
+
+                with self.assertRaisesRegex(
+                    ValueError,
+                    f"{kind}_channel_map.*index.*RFDC",
+                ):
+                    ModelConfig.from_mapping(payload)
 
     def test_dataclass_replace_cannot_bypass_model_validation(self) -> None:
         config = ModelConfig.load_default()

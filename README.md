@@ -186,7 +186,13 @@ Cycle interface interpretation.
 
 `ModelConfig` validates in `__post_init__`, so direct construction,
 `from_mapping()` and `dataclasses.replace()` cannot create different validity
-rules. The current package schema/config version is `6/9`.
+rules. The current package schema/config version is `7/10`.
+
+The XCZU27DR v2.1 RFDC tile/slice, package-bank, board-net and carrier-endpoint
+mapping is frozen in `ModelConfig` and documented in
+`docs/contracts/zu27dr-v2.1-physical-channel-map.md`. External H/V and
++20/0/-20 dB wiring still requires the documented board continuity and
+low-power tone acceptance before normal RF operation.
 
 The authoritative installed resource is
 `rfsoc_pulse_model/config/default.json`. The root `config/default.json` is a
