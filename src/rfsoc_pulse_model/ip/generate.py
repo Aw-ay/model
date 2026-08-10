@@ -7,6 +7,7 @@ from importlib import resources
 import json
 from pathlib import Path
 
+from .catalog import parse_resolved_ip_vlnv, validate_resolved_catalog
 from .registry import ArchitectureRegistry
 from .tcl import emit_ip_skeleton_tcl
 from .types import HardwareArchitectureConfig
@@ -75,7 +76,20 @@ def generate_ip_architecture(output_root: Path) -> dict[str, object]:
         ],
         "source_config_sha256": _sha256(source_bytes),
         "generated_tcl_sha256": _sha256(tcl_bytes),
+        "catalog_resolution_status": "unverified",
     }
+    resolved_tsv_path = metadata_root / "resolved_ip_vlnv.tsv"
+    if resolved_tsv_path.exists():
+        resolved = parse_resolved_ip_vlnv(
+            resolved_tsv_path.read_text(encoding="utf-8")
+        )
+        validate_resolved_catalog(config, resolved)
+        resolved_bytes = (
+            json.dumps(resolved, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+        )
+        (metadata_root / "resolved_ip_vlnv.json").write_bytes(resolved_bytes)
+        architecture["catalog_resolution_status"] = "vivado_2025_2_resolved"
+        architecture["resolved_ip_vlnv_sha256"] = _sha256(resolved_bytes)
     architecture_bytes = (
         json.dumps(architecture, indent=2, sort_keys=True).encode("utf-8") + b"\n"
     )

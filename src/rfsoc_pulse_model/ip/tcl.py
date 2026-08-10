@@ -6,7 +6,7 @@ from .registry import ArchitectureRegistry
 from .types import HardwareArchitectureConfig, ImplementationKind
 
 
-_INITIAL_SKELETON_IP = (
+INITIAL_SKELETON_IP = (
     "axis_register_slice",
     "axis_data_fifo",
     "axis_clock_converter",
@@ -33,7 +33,7 @@ def emit_ip_skeleton_tcl(
         raise ValueError("RFDC registry ownership does not match architecture config")
 
     specs = {spec.logical_name: spec for spec in config.required_ip_families}
-    for logical_name in _INITIAL_SKELETON_IP:
+    for logical_name in INITIAL_SKELETON_IP:
         block = registry.by_name(logical_name)
         if block.kind is not ImplementationKind.AMD_IP or not block.production:
             raise ValueError(f"{logical_name} must be a production AMD IP block")
@@ -72,7 +72,7 @@ def emit_ip_skeleton_tcl(
         "",
         "array set catalog_patterns {",
     ]
-    for logical_name in _INITIAL_SKELETON_IP:
+    for logical_name in INITIAL_SKELETON_IP:
         lines.append(
             f"  {{{logical_name}}} {{{specs[logical_name].catalog_pattern}}}"
         )
@@ -101,7 +101,7 @@ def emit_ip_skeleton_tcl(
             "",
         ]
     )
-    for logical_name in _INITIAL_SKELETON_IP:
+    for logical_name in INITIAL_SKELETON_IP:
         lines.extend(
             [
                 f"set resolved_vlnv [resolve_catalog_ip {{{logical_name}}}]",
