@@ -7,9 +7,11 @@ system. Development has one direction only:
 Golden mathematics -> Cycle hardware architecture -> generated Verilog
 ```
 
-The current milestone implements `common/` and the complete clock-free
-`golden/` layer. `cycle/` is an explicit package boundary for the next
-milestone; `build/` does not become authoritative source code.
+The current milestone keeps the complete clock-free `golden/` layer and adds
+an AMD IP-first hardware architecture authority. Existing Cycle-derived RX/TX
+adapters remain tested legacy references while production RFDC, AXIS and FIR
+ownership moves to AMD IP. `build/` is generated evidence and never becomes
+authoritative source code.
 
 ## Golden model
 
@@ -205,7 +207,7 @@ Cycle interface interpretation.
 
 `ModelConfig` validates in `__post_init__`, so direct construction,
 `from_mapping()` and `dataclasses.replace()` cannot create different validity
-rules. The current package schema/config version is `12/18`.
+rules. The current package schema/config version is `13/19`.
 
 The XCZU27DR v2.1 RFDC tile/slice, package-bank, board-net and carrier-endpoint
 mapping is frozen in `ModelConfig` and documented in
@@ -213,14 +215,16 @@ mapping is frozen in `ModelConfig` and documented in
 +20/0/-20 dB wiring still requires the documented board continuity and
 low-power tone acceptance before normal RF operation.
 
-The RFDC AXI word contract is frozen in `ModelConfig.rfdc_axis` and documented
+The PL-observable RFDC AXI word contract is frozen in `ModelConfig.rfdc_axis` and documented
 in `docs/contracts/rfdc-axis-word-format.md`. Each physical dual ADC uses an
 even I stream and its adjacent odd Q stream, each 32-bit at 250 MHz with two
 signed-16 component samples. The paired detector ingress word is exactly
 `{Q1,I1,Q0,I0}`. Every DAC also uses a 64-bit I/Q stream
 `{Q1,I1,Q0,I0}` feeding the RFDC I/Q-to-real fine mixer. Vivado readback shows
 the existing BD still uses 32-bit real DAC streams and a partial ADC setup, so
-it is deliberately rejected as the target integration.
+it is deliberately rejected as the target integration. RFDC mixer, NCO and
+analogue-output settings live only in `HardwareArchitectureConfig.rfdc`; Golden
+and Cycle must not treat those converter-internal settings as algorithm fields.
 
 `AUTO_HOLD` uses the absolute RFDC input-sample timeline. H and V each retain
 their current range and last absolute switch sample across contiguous frames;
@@ -340,8 +344,8 @@ named functions unrelated implementations.
 
 | Algorithm contract | Golden source | Cycle source | Generated RTL |
 | --- | --- | --- | --- |
-| 8-channel RFDC 2SPC ingress | `common/rfdc_axis.py` | `cycle/hardware/rx_group_ingress.py` | `rx_group_ingress_2spc.v` |
-| 15-tap 2:1 complex FIR | `golden/receive.py::GoldenReceivePipeline` | `cycle/hardware/fir_decimator.py` | `complex_fir_decimator2.v` |
+| 8-channel RFDC 2SPC ingress reference | `common/rfdc_axis.py` | legacy `cycle/hardware/rx_group_ingress.py` | legacy `rx_group_ingress_2spc.v` |
+| 15-tap 2:1 complex FIR | `golden/receive.py::GoldenReceivePipeline` | AMD FIR Compiler boundary vectors | vendor IP; no generated project RTL |
 | I/Q power | NumPy magnitude squared in `golden/detector.py` | `cycle/hardware/iq_power.py` | `iq_power.v` |
 | Adaptive threshold | `GoldenPulseDetector` | `cycle/hardware/noise_threshold.py` | `noise_threshold.v` |
 | Moving average and N/M vote | `GoldenPulseDetector` | `cycle/hardware/coarse_detector.py` | `coarse_detector.v` |
@@ -349,9 +353,15 @@ named functions unrelated implementations.
 | Range association | `common/events.py` | `cycle/software/event_packetizer.py` or a later hardware associator | none until registered as hardware |
 | Real LFM phase law | `golden/transmit.py` | `cycle/hardware/tx_lfm.py` | `tx_lfm_axis.v` |
 
+Only rows registered by the current generators are implemented. Target AMD IP
+blocks use parameter-manifest and vendor behavioral-simulation gates rather
+than project-generated Verilog; planned custom RTL still requires a Cycle
+contract before it may be emitted.
+
 All layers consume `ModelConfig`, `common/types.py`, `common/fixed.py`, and
-`common/tables.py`. `cycle/registry.py` is the hardware emission allow-list;
-unregistered `.v` files make generation fail rather than being preserved.
+`common/tables.py`. `cycle/registry.py` is the transitional legacy-RTL emission
+allow-list; `ip/registry.py` is the target production-ownership authority.
+Unregistered `.v` files make generation fail rather than being preserved.
 Their equivalence gates differ intentionally:
 
 1. **Golden -> Cycle:** compare normalized semantics. Detection count/order,
@@ -389,24 +399,31 @@ the common clock/reset/MTS topology. See
 
 ```text
 model/
-  config/default.json
+  config/{default.json,ip_architecture.json}
   src/rfsoc_pulse_model/
-    config/default.json          # installed package data
+    config/{default.json,ip_architecture.json}  # installed package data
     common/{config.py,types.py,fixed.py,numeric_formats.py,events.py,tables.py}
     golden/{detector.py,receive.py,transmit.py}
     cycle/{dsl,hardware,software}/
-  tests/{golden,cycle,equivalence,verilog}/
+    ip/{types.py,registry.py,tcl.py,catalog.py,generate.py}
+  tests/{golden,cycle,equivalence,ip,verilog}/
   build/                         # generated locally, ignored
 ```
 
-Generate the registered Cycle hardware with:
+Generate the architecture metadata, non-accepted Vivado skeleton and
+transitional legacy RTL with:
 
 ```text
-python -m rfsoc_pulse_model.generate --output build/cycle_2spc
+python -m rfsoc_pulse_model.generate --output build
 ```
 
-This writes Cycle-derived RTL, numeric metadata and `manifest.json`; the build
-directory is disposable and must be regenerated rather than hand-edited.
+This writes Cycle-derived legacy RTL, numeric metadata,
+`metadata/ip_architecture.json`, `vivado/create_ip_architecture.tcl` and the
+combined `manifest.json`. The build directory is disposable and must be
+regenerated rather than hand-edited. See
+`docs/contracts/amd-ip-ownership.md` for production ownership and
+`docs/verification/amd-ip-foundation-acceptance.md` for the current proof
+boundary.
 
 ## Run
 

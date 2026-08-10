@@ -163,3 +163,18 @@ Explicitly not verified by this acceptance:
 - J4 expansion hardware population;
 - board-level eight-channel RF performance;
 - absolute RCS accuracy without measured calibration data.
+
+## AMD IP-first architecture boundary
+
+The Golden acceptance above remains the mathematical oracle. The later AMD
+IP-first foundation does not turn Golden tests into hardware evidence. RFDC
+converter-internal mixer/NCO settings now live only in
+`HardwareArchitectureConfig.rfdc`, while `ModelConfig.rfdc_axis` retains the
+PL-observable word and rate contract.
+
+The target production owners for RFDC, AXIS infrastructure and FIR are AMD IP.
+The current generated `rx_group_ingress_2spc` and
+`tx_iq_axis_boundary_2spc` modules are `legacy_non_production` references.
+Vivado 2025.2 Catalog resolution of the unconnected skeleton does not prove
+connected-BD validation, CDC, timing, MTS/SYSREF or board loopback; those gates
+remain explicitly open in `amd-ip-foundation-acceptance.md`.

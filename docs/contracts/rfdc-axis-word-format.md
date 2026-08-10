@@ -1,8 +1,9 @@
 # RFDC ADC/DAC AXI Word Format Contract
 
 Status: ADC layout frozen at ModelConfig schema/config `8/11`, armed ingress
-semantics added at `11/17`, DAC I/Q-to-real layout frozen at `12/18`, and tied to RF Data Converter IP
-`xilinx.com:ip:usp_rf_data_converter:2.6`.
+semantics added at `11/17`, DAC PL I/Q word layout frozen at `12/18`, and the
+PL-only/integration-metadata separation frozen at `13/19`. RF Data Converter is
+locked independently to `xilinx.com:ip:usp_rf_data_converter:2.6`.
 
 This is the only word-level authority allowed at the Golden/Cycle/Block Design
 boundary. A different generated port width, data type, interface name or lane
@@ -92,8 +93,12 @@ ties-away-from-zero rounding and saturation. Cycle receives only those fixed
 I/Q codes; it packs them into the word above and never feeds a Python complex
 value to an RFDC port.
 
-The RFDC fine mixer contract is `I/Q -> real`, NCO frequency 2.8 GHz and
-manual unity (`0 dB`) mixer scaling. RFDC is therefore responsible for RF
+The RFDC fine mixer integration setting is `I/Q -> real`, NCO frequency
+2.8 GHz and manual unity (`0 dB`) mixer scaling. These fields belong only to
+`HardwareArchitectureConfig.rfdc`; they are not members of
+`RfdcAxisWordFormat`. Golden and Cycle may depend on the PL-observable I/Q word
+layout and sample-rate equations, but must not branch on mixer, NCO, analogue
+output or other converter-internal metadata. RFDC remains responsible for RF
 carrier translation; PL preserves the complex envelope, including scattering
 phase and Doppler. This does not configure two physical DACs as an analogue
 I/Q pair: `s00_axis` through `s13_axis` still map one-to-one onto DAC0..DAC7.
@@ -128,7 +133,8 @@ interfaces before connection.
 
 ## Machine-readable authority and tests
 
-`ModelConfig.rfdc_axis` owns interface names, widths, lane order and pack/unpack
-helpers. Known-rail vectors include `-32768`, `-1`, `12345` and `32767` to
-catch signedness, half-word swaps and sample-order reversals. The packaged and
-source-tree `default.json` files must remain byte-identical.
+`ModelConfig.rfdc_axis` owns only PL interface names, widths, lane order and
+pack/unpack helpers. `HardwareArchitectureConfig.rfdc` separately owns RFDC
+integration metadata. Known-rail vectors include `-32768`, `-1`, `12345` and
+`32767` to catch signedness, half-word swaps and sample-order reversals. Both
+packaged/source-tree configuration pairs must remain byte-identical.
