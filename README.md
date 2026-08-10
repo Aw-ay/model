@@ -79,8 +79,10 @@ state and explicit 2SPC pipelines.
 `result.dac_frame` is an eight-channel complex-baseband mathematical
 reference. The RFDC DAC AXI boundary is separately frozen as two signed-16
 real samples per 32-bit word; this does not imply that the mathematical complex
-frame can be connected directly to the DAC. This milestone does not validate
-Cycle timing, generated RTL, Vivado Block Design, CDC or board RF performance.
+frame can be connected directly to the DAC. The first Cycle checkpoint now
+implements only the 8-channel RFDC 2SPC ingress; the rest of the reflection,
+detection and TX data paths, Vivado Block Design, CDC and board RF performance
+remain unvalidated.
 
 ```python
 import numpy as np
@@ -307,9 +309,9 @@ The complete table and width derivations are frozen in
 Correspondence is defined by a shared contract, not by giving identically
 named functions unrelated implementations.
 
-| Algorithm contract | Golden source | Future Cycle source | Generated RTL |
+| Algorithm contract | Golden source | Cycle source | Generated RTL |
 | --- | --- | --- | --- |
-| RX I/Q lane order | `golden/receive.py::unpack_dual_iq_words` | `cycle/hardware/dual_iq_packer.py` | `rfdc_dual_iq_packer.v` |
+| 8-channel RFDC 2SPC ingress | `common/rfdc_axis.py` | `cycle/hardware/rx_group_ingress.py` | `rx_group_ingress_2spc.v` |
 | 15-tap 2:1 complex FIR | `golden/receive.py::GoldenReceivePipeline` | `cycle/hardware/fir_decimator.py` | `complex_fir_decimator2.v` |
 | I/Q power | NumPy magnitude squared in `golden/detector.py` | `cycle/hardware/iq_power.py` | `iq_power.v` |
 | Adaptive threshold | `GoldenPulseDetector` | `cycle/hardware/noise_threshold.py` | `noise_threshold.v` |
@@ -319,7 +321,9 @@ named functions unrelated implementations.
 | Real LFM phase law | `golden/transmit.py` | `cycle/hardware/tx_lfm.py` | `tx_lfm_axis.v` |
 
 All layers consume `ModelConfig`, `common/types.py`, `common/fixed.py`, and
-`common/tables.py`. Their equivalence gates differ intentionally:
+`common/tables.py`. `cycle/registry.py` is the hardware emission allow-list;
+unregistered `.v` files make generation fail rather than being preserved.
+Their equivalence gates differ intentionally:
 
 1. **Golden -> Cycle:** compare normalized semantics. Detection count/order,
    refined ToA/PW, range choice, IQ-window boundaries and frequency meaning
@@ -337,6 +341,14 @@ fixed widths, registers, RAM/FIFO and handshakes. Any numerical change starts
 in Golden; any architecture/latency change starts in Cycle; Verilog is always
 regenerated and never hand-edited.
 
+The implemented ingress consumes eight flattened 32-bit I words and eight
+32-bit Q words per 250 MHz clock, publishes lane0/lane1 for all eight channels
+after one cycle, and increments an absolute 500 MSPS sample base by two. It has
+no ready/backpressure input. A partially valid 16-stream group invalidates
+cross-channel time alignment, sets `format_error_o` and fails closed until
+reset. See
+[`docs/contracts/cycle-2spc-ingress.md`](docs/contracts/cycle-2spc-ingress.md).
+
 ## Layout
 
 ```text
@@ -344,12 +356,21 @@ model/
   config/default.json
   src/rfsoc_pulse_model/
     config/default.json          # installed package data
-    common/{config.py,types.py,fixed.py,events.py,tables.py}
+    common/{config.py,types.py,fixed.py,numeric_formats.py,events.py,tables.py}
     golden/{detector.py,receive.py,transmit.py}
     cycle/{dsl,hardware,software}/
   tests/{golden,cycle,equivalence,verilog}/
   build/                         # generated locally, ignored
 ```
+
+Generate the registered Cycle hardware with:
+
+```text
+python -m rfsoc_pulse_model.generate --output build/cycle_2spc
+```
+
+This writes Cycle-derived RTL, numeric metadata and `manifest.json`; the build
+directory is disposable and must be regenerated rather than hand-edited.
 
 ## Run
 

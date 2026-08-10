@@ -8,6 +8,7 @@
 - Source path: `D:\AWAY\RFSOC\model\src`
 - Golden test command: `python -m unittest discover -s tests\golden -v`
 - Golden result: 106 tests passed
+- Full Python result: 112 tests passed (106 Golden + 6 Cycle/generator)
 - Config mirrors: byte-identical
 - Public imports: `GoldenReflectionSource` and `GoldenReflectionStream`
 - Main reflection domain: `RFDC_COMPLEX_INPUT` at 500 MSPS complex
@@ -124,10 +125,24 @@ The stream implementation is deliberately a buffer-backed Golden oracle. It
 defines chunk-invariant observable mathematics, but does not claim bounded
 memory or Cycle architecture equivalence.
 
+The initial Cycle 2SPC checkpoint additionally verifies:
+
+- restricted `compute()`/`clock()` simulation uses one simultaneous register
+  commit with nonblocking semantics;
+- the eight RFDC I/Q word pairs unpack both complete complex samples without
+  dropping the later half-beat;
+- the registered ingress latency is one 250 MHz clock and its public base index
+  advances by two 500 MSPS samples per accepted group;
+- the interface has no backpressure and a partial 16-stream valid group fails
+  closed until reset;
+- every emitted RTL module is registered and records ports, latency,
+  throughput and SHA-256 in `manifest.json`;
+- Vivado 2025.2 `xvlog`, `xelab` and XSim pass the generated ingress testbench.
+
 Explicitly not verified by this acceptance:
 
-- Cycle timing or fixed-point equivalence;
-- generated Verilog bit/cycle equivalence;
+- Cycle timing or fixed-point equivalence beyond the RFDC ingress;
+- generated Verilog bit/cycle equivalence beyond the RFDC ingress;
 - Vivado Block Design interfaces, clocks, reset or CDC;
 - synthesis, implementation or timing closure;
 - J4 expansion hardware population;
