@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from .registry import ArchitectureRegistry
+from .tcl import emit_ip_skeleton_tcl
 from .types import HardwareArchitectureConfig
 
 
@@ -20,7 +21,9 @@ def generate_ip_architecture(output_root: Path) -> dict[str, object]:
 
     root = Path(output_root)
     metadata_root = root / "metadata"
+    vivado_root = root / "vivado"
     metadata_root.mkdir(parents=True, exist_ok=True)
+    vivado_root.mkdir(parents=True, exist_ok=True)
 
     config_resource = resources.files("rfsoc_pulse_model.config").joinpath(
         "ip_architecture.json"
@@ -28,6 +31,8 @@ def generate_ip_architecture(output_root: Path) -> dict[str, object]:
     source_bytes = config_resource.read_bytes()
     config = HardwareArchitectureConfig.load_default()
     registry = ArchitectureRegistry.default()
+    tcl_bytes = emit_ip_skeleton_tcl(config, registry).encode("utf-8")
+    (vivado_root / "create_ip_architecture.tcl").write_bytes(tcl_bytes)
 
     architecture: dict[str, object] = {
         "architecture_schema_version": config.architecture_schema_version,
@@ -69,6 +74,7 @@ def generate_ip_architecture(output_root: Path) -> dict[str, object]:
             for block in registry.blocks
         ],
         "source_config_sha256": _sha256(source_bytes),
+        "generated_tcl_sha256": _sha256(tcl_bytes),
     }
     architecture_bytes = (
         json.dumps(architecture, indent=2, sort_keys=True).encode("utf-8") + b"\n"
