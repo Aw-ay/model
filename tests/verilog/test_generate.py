@@ -1,4 +1,5 @@
 import json
+import hashlib
 from pathlib import Path
 import tempfile
 import unittest
@@ -19,7 +20,20 @@ class GenerateTest(unittest.TestCase):
                 encoding="utf-8"
             )
             on_disk = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+            architecture_on_disk = json.loads(
+                (root / "metadata/ip_architecture.json").read_text(
+                    encoding="utf-8"
+                )
+            )
             self.assertEqual(on_disk, manifest)
+            self.assertEqual(architecture_on_disk, manifest["ip_architecture"])
+            architecture_bytes = (
+                root / "metadata/ip_architecture.json"
+            ).read_bytes()
+            self.assertEqual(
+                manifest["ip_architecture_sha256"],
+                hashlib.sha256(architecture_bytes).hexdigest(),
+            )
             modules = {
                 module["module_name"]: module for module in manifest["modules"]
             }
@@ -32,6 +46,13 @@ class GenerateTest(unittest.TestCase):
             self.assertEqual(modules["tx_iq_axis_boundary_2spc"]["samples_per_cycle"], 2)
             self.assertFalse(
                 modules["tx_iq_axis_boundary_2spc"]["accepts_backpressure"]
+            )
+            self.assertEqual(
+                {module["implementation_kind"] for module in manifest["modules"]},
+                {"legacy_non_production"},
+            )
+            self.assertTrue(
+                all(not module["production"] for module in manifest["modules"])
             )
             self.assertEqual(
                 manifest["rfdc_adc_clocking_mode"],
