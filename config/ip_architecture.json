@@ -1,0 +1,36 @@
+{
+  "architecture_schema_version": 1,
+  "architecture_config_version": 1,
+  "vivado_version": "2025.2",
+  "generation_mode": "vivado_ip_first",
+  "topology_status": "unconnected_skeleton",
+  "rfdc": {
+    "ip": {
+      "logical_name": "rfdc",
+      "kind": "amd_ip",
+      "vlnv": "xilinx.com:ip:usp_rf_data_converter:2.6",
+      "catalog_pattern": "xilinx.com:ip:usp_rf_data_converter:2.6"
+    },
+    "owned_functions": ["adc", "dac", "ddc", "duc", "decimation", "interpolation", "mixer", "nco"],
+    "configuration_authority": "vivado_block_design",
+    "dac_analog_output_type": "real",
+    "dac_mixer_mode": "iq_to_real",
+    "dac_mixer_scale_mode": "unity_0db",
+    "dac_nco_frequency_hz": 2800000000,
+    "proof_status": "unverified"
+  },
+  "required_ip_families": [
+    {"logical_name": "axis_register_slice", "kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:axis_register_slice:*"},
+    {"logical_name": "axis_data_fifo", "kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:axis_data_fifo:*"},
+    {"logical_name": "axis_clock_converter", "kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:axis_clock_converter:*"},
+    {"logical_name": "axis_dwidth_converter", "kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:axis_dwidth_converter:*"},
+    {"logical_name": "axis_combiner", "kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:axis_combiner:*"},
+    {"logical_name": "axis_broadcaster", "kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:axis_broadcaster:*"},
+    {"logical_name": "axis_switch", "kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:axis_switch:*"},
+    {"logical_name": "fir_compiler", "kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:fir_compiler:*"},
+    {"logical_name": "dds_compiler", "kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:dds_compiler:*"},
+    {"logical_name": "complex_multiplier", "kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:cmpy:*"},
+    {"logical_name": "cordic", "kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:cordic:*"},
+    {"logical_name": "axi_dma", "kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:axi_dma:*"}
+  ]
+}

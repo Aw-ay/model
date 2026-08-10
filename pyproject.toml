@@ -14,7 +14,7 @@ dependencies = ["numpy>=1.21,<3"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-"rfsoc_pulse_model.config" = ["default.json"]
+"rfsoc_pulse_model.config" = ["default.json", "ip_architecture.json"]
 
 [tool.unittest]
 start-directory = "tests"
