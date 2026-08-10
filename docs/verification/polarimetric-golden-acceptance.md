@@ -7,12 +7,12 @@
 - Python executable: `C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe`
 - Source path: `D:\AWAY\RFSOC\model\src`
 - Golden test command: `python -m unittest discover -s tests\golden -v`
-- Golden result: 90 tests passed
+- Golden result: 93 tests passed
 - Config mirrors: byte-identical
 - Public imports: `GoldenReflectionSource` and `GoldenReflectionStream`
 - Main reflection domain: `RFDC_COMPLEX_INPUT` at 500 MSPS complex
 - Monitor domain: `DETECTOR` at 250 MSPS
-- Config schema/version: `8/11`
+- Config schema/version: `8/12`
 - RFDC fabric contract: two complete complex samples per 250 MHz cycle
 
 The verified Golden path is:
@@ -48,7 +48,10 @@ The continuous-stream checkpoint additionally verifies:
   including target delay, fractional ADC/DAC alignment and nonzero Doppler;
 - monitor FIR/detector records from the finalized stream equal the one-shot
   reference and use absolute detector-domain ToA;
-- AUTO_HOLD does not reset at a software chunk boundary;
+- AUTO_HOLD retains independent H/V range and last-switch state on the
+  absolute RFDC sample timeline across contiguous frames;
+- AUTO_HOLD rejects an input gap until explicitly reset and makes its decision
+  from delay-aligned raw codes/clipping corresponding to the calibrated sample;
 - H and V records cannot be combined into one three-range event;
 - `dataclasses.replace()` cannot bypass `ModelConfig` validation;
 - DAC0..5 cover H/V x HIGH/MID/LOW exactly once;

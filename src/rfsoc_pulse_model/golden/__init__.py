@@ -12,6 +12,7 @@ from .receive import (
     unpack_dual_iq_words,
 )
 from .transmit import GoldenLfmConfig, generate_lfm_samples, generate_lfm_waveform
+from .adc_frontend import AutoHoldState, GoldenEightChannelAdcFrontend
 from .system import (
     GoldenReflectionSource,
     GoldenReflectionStream,
@@ -21,8 +22,10 @@ from .system import (
 __all__ = [
     "DetectorConfig",
     "AdcSampleBatch",
+    "AutoHoldState",
     "GoldenLfmConfig",
     "GoldenPulseDetector",
+    "GoldenEightChannelAdcFrontend",
     "GoldenReceivePipeline",
     "GoldenReceiveResult",
     "GoldenReflectionSource",

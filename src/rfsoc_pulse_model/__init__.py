@@ -38,6 +38,7 @@ from .golden.system import (
     GoldenReflectionStream,
     ReflectionSourceResult,
 )
+from .golden.adc_frontend import AutoHoldState, GoldenEightChannelAdcFrontend
 
 __all__ = [
     "DetectorConfig",
@@ -69,6 +70,8 @@ __all__ = [
     "TargetRequest",
     "RfdcAxisWordFormat",
     "GoldenReflectionSource",
+    "GoldenEightChannelAdcFrontend",
+    "AutoHoldState",
     "GoldenReflectionStream",
     "ReflectionSourceResult",
 ]

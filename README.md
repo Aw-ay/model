@@ -187,7 +187,7 @@ Cycle interface interpretation.
 
 `ModelConfig` validates in `__post_init__`, so direct construction,
 `from_mapping()` and `dataclasses.replace()` cannot create different validity
-rules. The current package schema/config version is `8/11`.
+rules. The current package schema/config version is `8/12`.
 
 The XCZU27DR v2.1 RFDC tile/slice, package-bank, board-net and carrier-endpoint
 mapping is frozen in `ModelConfig` and documented in
@@ -202,6 +202,14 @@ signed-16 component samples. The paired detector ingress word is exactly
 `{Q1,I1,Q0,I0}`. Every DAC uses a 32-bit real stream `{sample1,sample0}`.
 Vivado readback shows the existing BD is still a partial 125 MHz/64-bit ADC
 configuration, so it is deliberately rejected as the target integration.
+
+`AUTO_HOLD` uses the absolute RFDC input-sample timeline. H and V each retain
+their current range and last absolute switch sample across contiguous frames;
+a gap is rejected until `reset_auto_hold()` explicitly begins a new
+acquisition. Range decisions use delay-aligned raw ADC codes and the matching
+aligned clipping sideband, while the selected output uses the calibrated value
+at that same aligned sample. Thus channel delay calibration cannot make the
+range decision and returned sample refer to different physical instants.
 
 The authoritative installed resource is
 `rfsoc_pulse_model/config/default.json`. The root `config/default.json` is a
