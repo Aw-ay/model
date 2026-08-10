@@ -52,10 +52,19 @@ class GenerateTest(unittest.TestCase):
             )
             self.assertFalse(manifest["single_clock_tx_integration_ready"])
             self.assertEqual(manifest["rfdc_dac_pl_data_type"], "iq_interleaved")
-            self.assertEqual(manifest["rfdc_dac_analog_output_type"], "real")
-            self.assertEqual(manifest["rfdc_dac_mixer_mode"], "iq_to_real")
-            self.assertEqual(manifest["rfdc_dac_mixer_scale_mode"], "unity_0db")
-            self.assertEqual(manifest["rfdc_dac_nco_frequency_hz"], 2_800_000_000)
+            rfdc = manifest["ip_architecture"]["rfdc"]
+            self.assertEqual(rfdc["vlnv"], "xilinx.com:ip:usp_rf_data_converter:2.6")
+            self.assertEqual(rfdc["dac_analog_output_type"], "real")
+            self.assertEqual(rfdc["dac_mixer_mode"], "iq_to_real")
+            self.assertEqual(rfdc["dac_mixer_scale_mode"], "unity_0db")
+            self.assertEqual(rfdc["dac_nco_frequency_hz"], 2_800_000_000)
+            for old_name in (
+                "rfdc_dac_analog_output_type",
+                "rfdc_dac_mixer_mode",
+                "rfdc_dac_mixer_scale_mode",
+                "rfdc_dac_nco_frequency_hz",
+            ):
+                self.assertNotIn(old_name, manifest)
             self.assertEqual(manifest["rfdc_dac_axis_width_bits"], 64)
             self.assertEqual(manifest["rfdc_dac_complex_samples_per_cycle"], 2)
             self.assertEqual(

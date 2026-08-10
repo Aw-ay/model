@@ -10,6 +10,7 @@ from .common.config import ModelConfig
 from .common.types import SampleTimeReference
 from .cycle.dsl.emitter import VerilogEmitter
 from .cycle.registry import HARDWARE_MODULES
+from .ip.types import HardwareArchitectureConfig
 
 
 def _sha256(data: bytes) -> str:
@@ -38,6 +39,7 @@ def generate(output_root: Path) -> dict[str, object]:
     metadata_root.mkdir(parents=True, exist_ok=True)
 
     config = ModelConfig.load_default()
+    architecture = HardwareArchitectureConfig.load_default()
     emitter = VerilogEmitter()
     modules = []
     expected_files = set()
@@ -84,10 +86,6 @@ def generate(output_root: Path) -> dict[str, object]:
         "rx_fabric_clock_hz": config.rx_fabric_clock_hz,
         "rfdc_complex_samples_per_cycle": config.rfdc_complex_samples_per_cycle,
         "rfdc_dac_pl_data_type": config.rfdc_axis.dac_data_type,
-        "rfdc_dac_analog_output_type": config.rfdc_axis.dac_analog_output_type,
-        "rfdc_dac_mixer_mode": config.rfdc_axis.dac_mixer_mode,
-        "rfdc_dac_mixer_scale_mode": config.rfdc_axis.dac_mixer_scale_mode,
-        "rfdc_dac_nco_frequency_hz": config.rfdc_axis.dac_nco_frequency_hz,
         "rfdc_dac_axis_width_bits": config.rfdc_axis.dac_axis_width_bits,
         "rfdc_dac_complex_samples_per_cycle": (
             config.rfdc_axis.dac_complex_samples_per_cycle
@@ -114,6 +112,36 @@ def generate(output_root: Path) -> dict[str, object]:
         ) // 2,
         "fixed_internal_delay_source": "calibration_profile_measurement",
         "numeric_formats_sha256": _sha256(numeric_bytes),
+        "ip_architecture": {
+            "architecture_schema_version": (
+                architecture.architecture_schema_version
+            ),
+            "architecture_config_version": (
+                architecture.architecture_config_version
+            ),
+            "vivado_version": architecture.vivado_version,
+            "generation_mode": architecture.generation_mode,
+            "topology_status": architecture.topology_status,
+            "rfdc": {
+                "vlnv": architecture.rfdc.ip.vlnv,
+                "kind": architecture.rfdc.ip.kind.value,
+                "owned_functions": list(architecture.rfdc.owned_functions),
+                "configuration_authority": (
+                    architecture.rfdc.configuration_authority
+                ),
+                "dac_analog_output_type": (
+                    architecture.rfdc.dac_analog_output_type
+                ),
+                "dac_mixer_mode": architecture.rfdc.dac_mixer_mode,
+                "dac_mixer_scale_mode": (
+                    architecture.rfdc.dac_mixer_scale_mode
+                ),
+                "dac_nco_frequency_hz": (
+                    architecture.rfdc.dac_nco_frequency_hz
+                ),
+                "proof_status": architecture.rfdc.proof_status,
+            },
+        },
         "modules": modules,
     }
     manifest_bytes = json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8") + b"\n"

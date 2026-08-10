@@ -67,6 +67,14 @@ class HardwareArchitectureConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "usp_rf_data_converter:2.6"):
             dataclasses.replace(config.rfdc, ip=bad_ip)
 
+    def test_rfdc_internal_settings_live_only_in_architecture_config(self) -> None:
+        architecture = HardwareArchitectureConfig.load_default()
+
+        self.assertEqual(architecture.rfdc.dac_analog_output_type, "real")
+        self.assertEqual(architecture.rfdc.dac_mixer_mode, "iq_to_real")
+        self.assertEqual(architecture.rfdc.dac_mixer_scale_mode, "unity_0db")
+        self.assertEqual(architecture.rfdc.dac_nco_frequency_hz, 2_800_000_000)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -142,16 +142,23 @@ class ModelConfigTest(unittest.TestCase):
         self.assertEqual(axis.adc_i_axis(7), "m32_axis")
         self.assertEqual(axis.adc_q_axis(7), "m33_axis")
         self.assertEqual(axis.dac_data_type, "iq_interleaved")
-        self.assertEqual(axis.dac_analog_output_type, "real")
-        self.assertEqual(axis.dac_mixer_mode, "iq_to_real")
-        self.assertEqual(axis.dac_mixer_scale_mode, "unity_0db")
-        self.assertEqual(axis.dac_nco_frequency_hz, 2_800_000_000)
         self.assertEqual(axis.dac_component_width_bits, 16)
         self.assertEqual(axis.dac_axis_width_bits, 64)
         self.assertEqual(axis.dac_complex_samples_per_cycle, 2)
         self.assertEqual(axis.dac_component_order, "q1_i1_q0_i0_msb_to_lsb")
         self.assertEqual(axis.dac_axis(0), "s00_axis")
         self.assertEqual(axis.dac_axis(7), "s13_axis")
+
+    def test_rfdc_axis_contract_excludes_converter_internal_metadata(self) -> None:
+        axis = ModelConfig.load_default().rfdc_axis
+
+        for name in (
+            "dac_analog_output_type",
+            "dac_mixer_mode",
+            "dac_mixer_scale_mode",
+            "dac_nco_frequency_hz",
+        ):
+            self.assertFalse(hasattr(axis, name), name)
 
     def test_rfdc_axis_known_words_have_sample_zero_in_least_significant_bits(self) -> None:
         axis = ModelConfig.from_mapping(self.root_payload()).rfdc_axis
@@ -208,6 +215,20 @@ class ModelConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "rx_fabric_clock_hz"):
             ModelConfig.from_mapping(payload)
 
+    def test_inconsistent_adc_converter_rate_is_rejected(self) -> None:
+        payload = self.root_payload()
+        payload["adc_sample_rate_hz"] = 3_200_000_000
+
+        with self.assertRaisesRegex(ValueError, "adc_sample_rate_hz / rfdc_decimation"):
+            ModelConfig.from_mapping(payload)
+
+    def test_inconsistent_dac_pl_rate_is_rejected(self) -> None:
+        payload = self.root_payload()
+        payload["dac_sample_rate_hz"] = 3_200_000_000
+
+        with self.assertRaisesRegex(ValueError, "DAC baseband rate"):
+            ModelConfig.from_mapping(payload)
+
     def test_ambiguous_rfdc_words_per_cycle_name_is_rejected(self) -> None:
         payload = self.root_payload()
         payload["rfdc_iq_stream_words_per_cycle"] = payload.pop(
@@ -223,8 +244,8 @@ class ModelConfigTest(unittest.TestCase):
     def test_installed_package_loads_its_default_config_resource(self) -> None:
         config = ModelConfig.load_default()
 
-        self.assertEqual(config.model_schema_version, 12)
-        self.assertEqual(config.config_version, 18)
+        self.assertEqual(config.model_schema_version, 13)
+        self.assertEqual(config.config_version, 19)
         self.assertEqual(config.channels, 4)
 
     def test_unknown_rfdc_adc_clocking_mode_is_rejected(self) -> None:

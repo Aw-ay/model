@@ -38,10 +38,6 @@ class RfdcAxisWordFormat:
     complex_packed_width_bits: int
     complex_packed_order: str
     dac_data_type: str
-    dac_analog_output_type: str
-    dac_mixer_mode: str
-    dac_mixer_scale_mode: str
-    dac_nco_frequency_hz: int
     dac_component_width_bits: int
     dac_axis_width_bits: int
     dac_complex_samples_per_cycle: int
@@ -69,10 +65,6 @@ class RfdcAxisWordFormat:
             complex_packed_width_bits=int(values["complex_packed_width_bits"]),
             complex_packed_order=str(values["complex_packed_order"]),
             dac_data_type=str(values["dac_data_type"]),
-            dac_analog_output_type=str(values["dac_analog_output_type"]),
-            dac_mixer_mode=str(values["dac_mixer_mode"]),
-            dac_mixer_scale_mode=str(values["dac_mixer_scale_mode"]),
-            dac_nco_frequency_hz=int(values["dac_nco_frequency_hz"]),
             dac_component_width_bits=int(values["dac_component_width_bits"]),
             dac_axis_width_bits=int(values["dac_axis_width_bits"]),
             dac_complex_samples_per_cycle=int(
@@ -116,14 +108,6 @@ class RfdcAxisWordFormat:
             raise ValueError("packed complex ADC order must be {Q1,I1,Q0,I0}")
         if self.dac_data_type != "iq_interleaved":
             raise ValueError("DAC PL data type must be iq_interleaved")
-        if self.dac_analog_output_type != "real":
-            raise ValueError("DAC analog output type must be real")
-        if self.dac_mixer_mode != "iq_to_real":
-            raise ValueError("DAC mixer mode must be iq_to_real")
-        if self.dac_mixer_scale_mode != "unity_0db":
-            raise ValueError("DAC mixer scale mode must be unity_0db")
-        if self.dac_nco_frequency_hz <= 0:
-            raise ValueError("DAC NCO frequency must be positive")
         if (
             self.dac_component_width_bits != 16
             or self.dac_axis_width_bits != 64

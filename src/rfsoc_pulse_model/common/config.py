@@ -501,8 +501,6 @@ class ModelConfig:
             )
         if self.tx_data_type != "complex_iq":
             raise ValueError("tx_data_type must be complex_iq")
-        if self.rfdc_axis.dac_nco_frequency_hz != self.center_frequency_hz:
-            raise ValueError("DAC NCO frequency must equal center_frequency_hz")
         if self.rounding_mode != PROJECT_ROUNDING_MODE:
             raise ValueError(
                 f"rounding_mode must be {PROJECT_ROUNDING_MODE.value}"
