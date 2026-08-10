@@ -7,12 +7,12 @@
 - Python executable: `C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe`
 - Source path: `D:\AWAY\RFSOC\model\src`
 - Golden test command: `python -m unittest discover -s tests\golden -v`
-- Golden result: 98 tests passed
+- Golden result: 100 tests passed
 - Config mirrors: byte-identical
 - Public imports: `GoldenReflectionSource` and `GoldenReflectionStream`
 - Main reflection domain: `RFDC_COMPLEX_INPUT` at 500 MSPS complex
 - Monitor domain: `DETECTOR` at 250 MSPS
-- Config schema/version: `8/13`
+- Config schema/version: `8/14`
 - RFDC fabric contract: two complete complex samples per 250 MHz cycle
 
 The verified Golden path is:
@@ -87,6 +87,15 @@ The RCS fail-closed checkpoint additionally verifies:
   the anchor tolerance itself is wider;
 - explicit relative mode ignores an invalid anchor and reports uncalibrated
   relative gain rather than applying stale absolute scaling.
+
+The stream-status/online-PDW checkpoint additionally verifies:
+
+- a fully closed pulse emits PDWs and associated events before `final=True`;
+- a pulse that merely reaches a software chunk boundary is withheld;
+- online PDWs/events are emitted once as a global stable prefix and concatenate
+  to the exact one-shot ordering;
+- per-call and cumulative PDW counts are distinct;
+- accepted-input, stable-output and final-state sample fronts are explicit.
 
 The stream implementation is deliberately a buffer-backed Golden oracle. It
 defines chunk-invariant observable mathematics, but does not claim bounded

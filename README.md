@@ -187,7 +187,7 @@ Cycle interface interpretation.
 
 `ModelConfig` validates in `__post_init__`, so direct construction,
 `from_mapping()` and `dataclasses.replace()` cannot create different validity
-rules. The current package schema/config version is `8/13`.
+rules. The current package schema/config version is `8/14`.
 
 The XCZU27DR v2.1 RFDC tile/slice, package-bank, board-net and carrier-endpoint
 mapping is frozen in `ModelConfig` and documented in
@@ -217,6 +217,16 @@ conditions and their tolerances. Absolute mode rejects a missing, invalid,
 out-of-anchor-condition or out-of-profile-condition calibration before target
 gain is emitted. Only explicitly non-absolute mode may fall back to relative
 gain, and then `absolute_rcs_calibrated` remains false.
+
+The streaming API emits closed, stable PDWs and associated events online; it
+does not wait unconditionally for `final=True`. It withholds a record that is
+closed only by the current array boundary and emits records/events as a stable
+global `(ToA, channel)` prefix, so concatenating per-call outputs exactly
+matches one-shot ordering without duplicates. Stream status distinguishes the
+exclusive end of accepted input (`processed_stop_sample`) from the exclusive
+end of stable waveform output (`emitted_stop_sample`). `monitor_pulse_count`
+is new PDWs in this call, `monitor_pulse_count_total` is cumulative, and
+`stream_final` states whether future input is forbidden.
 
 The authoritative installed resource is
 `rfsoc_pulse_model/config/default.json`. The root `config/default.json` is a

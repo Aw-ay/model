@@ -197,6 +197,14 @@ class GoldenReflectionSource:
                 auxiliary.mode == AuxOutputMode.CANCELLATION
             ),
             monitor_pulse_count=len(pulse_records),
+            monitor_pulse_count_total=len(pulse_records),
+            processed_stop_sample=(
+                adc_frame.start_sample + adc_frame.samples.shape[1]
+            ),
+            emitted_stop_sample=(
+                adc_frame.start_sample + adc_frame.samples.shape[1]
+            ),
+            stream_final=True,
         )
 
     def run(
@@ -293,6 +301,8 @@ class GoldenReflectionStream:
         self._next_start: Optional[int] = None
         self._scenario: Optional[ReflectionScenario] = None
         self._emitted_samples = 0
+        self._emitted_records: set[PulseRecord] = set()
+        self._emitted_events: set[tuple[PulseRecord, ...]] = set()
         self._finalized = False
         self._lookahead = self._relative_lookahead()
 
@@ -393,7 +403,9 @@ class GoldenReflectionStream:
         start: int,
         stop: int,
         *,
-        include_records: bool,
+        pulse_records: Tuple[PulseRecord, ...],
+        pulse_events: Tuple[PulseEvent, ...],
+        status: ReflectionStatus,
     ) -> ReflectionSourceResult:
         def waveform_slice(waveform: PolarimetricWaveform) -> PolarimetricWaveform:
             return PolarimetricWaveform(
@@ -418,15 +430,88 @@ class GoldenReflectionStream:
                 result.predistorted_reflection
             ),
             dac_frame=dac_frame,
-            pulse_records=result.pulse_records if include_records else (),
-            pulse_events=result.pulse_events if include_records else (),
+            pulse_records=pulse_records,
+            pulse_events=pulse_events,
             compiled_targets=result.compiled_targets,
-            status=(
-                result.status
-                if include_records
-                else replace(result.status, monitor_pulse_count=0)
-            ),
+            status=status,
         )
+
+    def _monitor_detector_stop_sample(self) -> int:
+        assert self._initial_start is not None
+        entry = next(
+            entry
+            for entry in self.config.adc_channel_map
+            if entry.enabled and ChannelRole.ECHO in entry.allowed_roles
+        )
+        decimated = GoldenReceivePipeline(self.config).decimate(
+            AdcSampleBatch(
+                iq=self._samples[entry.index],
+                clipped=self._clipped[entry.index],
+            ),
+            source_start_sample=self._initial_start,
+        )
+        if not decimated.source_sample_indices.size:
+            return 0
+        first_detector_sample = int(
+            (
+                decimated.source_sample_indices[0]
+                - self.config.group_delay_input_samples
+            )
+            // self.config.pl_decimation
+        )
+        return first_detector_sample + int(decimated.iq.size)
+
+    def _new_stable_monitor_outputs(
+        self,
+        result: ReflectionSourceResult,
+        *,
+        final: bool,
+    ) -> Tuple[Tuple[PulseRecord, ...], Tuple[PulseEvent, ...]]:
+        detector_stop = self._monitor_detector_stop_sample()
+        detector_latency = (
+            self.config.detector.moving_average
+            + self.config.detector.vote_window
+            - 2
+        )
+        association_guard = self.config.toa_tolerance + self.config.width_tolerance
+        stable_guard = (
+            detector_latency
+            + self.config.detector.post_samples
+            + association_guard
+        )
+        stable_record_prefix = []
+        for record in result.pulse_records:
+            stable = final or (
+                record.toa_samples
+                + record.pw_samples
+                - 1
+                + stable_guard
+                < detector_stop
+            )
+            if not stable:
+                break
+            stable_record_prefix.append(record)
+        stable_records = tuple(stable_record_prefix)
+        stable_record_set = set(stable_records)
+        new_records = tuple(
+            record
+            for record in stable_records
+            if record not in self._emitted_records
+        )
+        stable_event_prefix = []
+        for event in result.pulse_events:
+            if not all(record in stable_record_set for record in event.records):
+                break
+            stable_event_prefix.append(event)
+        stable_events = tuple(stable_event_prefix)
+        new_events = tuple(
+            event
+            for event in stable_events
+            if event.records not in self._emitted_events
+        )
+        self._emitted_records.update(new_records)
+        self._emitted_events.update(event.records for event in new_events)
+        return new_records, new_events
 
     def process_chunk(
         self,
@@ -451,11 +536,26 @@ class GoldenReflectionStream:
             if final
             else max(0, self._samples.shape[1] - self._lookahead)
         )
+        pulse_records, pulse_events = self._new_stable_monitor_outputs(
+            result,
+            final=final,
+        )
+        assert self._initial_start is not None
+        status = replace(
+            result.status,
+            monitor_pulse_count=len(pulse_records),
+            monitor_pulse_count_total=len(self._emitted_records),
+            processed_stop_sample=self._next_start,
+            emitted_stop_sample=self._initial_start + stable_stop,
+            stream_final=final,
+        )
         emitted = self._slice_result(
             result,
             self._emitted_samples,
             stable_stop,
-            include_records=final,
+            pulse_records=pulse_records,
+            pulse_events=pulse_events,
+            status=status,
         )
         self._emitted_samples = stable_stop
         self._finalized = final

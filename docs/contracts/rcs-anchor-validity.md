@@ -1,6 +1,7 @@
 # RCS Anchor Validity and Fail-Closed Contract
 
-Status: frozen for ModelConfig schema/config `8/13`.
+Status: frozen at ModelConfig schema/config `8/13`; carried unchanged by the
+current `8/14` authority.
 
 An RCS anchor is measurement evidence, not merely four positive numbers. Each
 `RcsCalibrationAnchor` must declare:

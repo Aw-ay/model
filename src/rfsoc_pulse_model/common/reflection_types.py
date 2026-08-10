@@ -283,9 +283,21 @@ class ReflectionStatus:
     calibration_outputs_enabled: bool
     cancellation_outputs_enabled: bool
     monitor_pulse_count: int
+    monitor_pulse_count_total: int
+    processed_stop_sample: int
+    emitted_stop_sample: int
+    stream_final: bool
 
     def __post_init__(self) -> None:
         if len(self.adc_clipped) != 2 or len(self.selected_ranges) != 2:
             raise ValueError("reflection status requires H and V values")
-        if self.monitor_pulse_count < 0:
-            raise ValueError("monitor_pulse_count cannot be negative")
+        if self.monitor_pulse_count < 0 or self.monitor_pulse_count_total < 0:
+            raise ValueError("monitor pulse counts cannot be negative")
+        if self.monitor_pulse_count > self.monitor_pulse_count_total:
+            raise ValueError("per-result monitor count cannot exceed cumulative count")
+        if self.processed_stop_sample < 0 or self.emitted_stop_sample < 0:
+            raise ValueError("status sample stops cannot be negative")
+        if self.emitted_stop_sample > self.processed_stop_sample:
+            raise ValueError("emitted_stop_sample cannot exceed processed_stop_sample")
+        if not isinstance(self.stream_final, bool):
+            raise ValueError("stream_final must be boolean")
