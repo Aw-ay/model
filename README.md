@@ -67,6 +67,15 @@ result = GoldenReflectionSource(config, calibration).run(adc_frame, scenario)
 print(result.dac_frame.samples.shape)
 ```
 
+For a continuous acquisition split into software chunks, use
+`GoldenReflectionStream.process_chunk()`. Chunks must have contiguous absolute
+`start_sample` values; the final chunk sets `final=True`. The stream buffers the
+Golden history and withholds any suffix that still depends on future samples,
+so concatenating its returned arrays is equivalent to one `run()` over the
+whole acquisition. This buffer-backed implementation defines the mathematical
+oracle only; Cycle must replace it with bounded delay RAM, FIR state, detector
+state and explicit 2SPC pipelines.
+
 `result.dac_frame` is an eight-channel complex-baseband mathematical
 reference. This milestone does not define RFDC DAC AXI words and does not
 validate Cycle timing, generated RTL, Vivado Block Design, CDC or board RF
@@ -175,6 +184,10 @@ AXI words or separate I/Q words. The removed
 `rfdc_iq_stream_words_per_cycle` spelling is rejected to prevent a different
 Cycle interface interpretation.
 
+`ModelConfig` validates in `__post_init__`, so direct construction,
+`from_mapping()` and `dataclasses.replace()` cannot create different validity
+rules. The current package schema/config version is `6/9`.
+
 The authoritative installed resource is
 `rfsoc_pulse_model/config/default.json`. The root `config/default.json` is a
 human-visible source-tree mirror and must remain byte-identical.
@@ -205,6 +218,17 @@ range_carrier_phase = wrap(-2*pi*fc*2*(apparent_range-physical_range)/c)
 The reflection kernel applies this phase independently of Doppler and target
 `initial_phase_rad`. Future Cycle logic must quantize the explicit phase field;
 it must not rely on an implicit RFDC NCO phase assumption.
+
+The DAC policy is explicitly `external_analog_path`: HIGH/MID/LOW ports receive
+the same digital complex envelope, while their external analogue paths apply
+the configured `+20/0/-20 dB` nominal voltage gains. `digital_scale` remains an
+explicit digital multiplier and `response_gain` is residual complex
+calibration. The router therefore does not divide by DAC `nominal_gain_db`.
+
+Every monitor `PulseRecord` carries `ChannelIdentity` with polarization, gain
+range, role and physical channel. Polarimetric association groups three ranges
+only within H or within V; the legacy four-channel association API remains
+available for the original interface.
 
 ### Rounding rule
 

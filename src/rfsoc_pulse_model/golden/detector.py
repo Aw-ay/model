@@ -6,7 +6,7 @@ import numpy as np
 
 from ..common.config import DetectorConfig
 from ..common.fixed import round_array_ties_away_from_zero, round_ties_away_from_zero
-from ..common.types import IQSample, PulseRecord, RangeId
+from ..common.types import ChannelIdentity, IQSample, PulseRecord, RangeId
 
 
 def _as_complex_array(iq: Sequence[complex]) -> np.ndarray:
@@ -70,6 +70,7 @@ class GoldenPulseDetector:
         range_id: RangeId = RangeId.ZERO_DB,
         start_index: int = 0,
         adc_clipped: Optional[Sequence[bool]] = None,
+        channel_identity: Optional[ChannelIdentity] = None,
     ) -> List[PulseRecord]:
         samples = _as_complex_array(iq)
         if samples.size == 0:
@@ -191,6 +192,7 @@ class GoldenPulseDetector:
                     iq=_payload(samples[payload_start:payload_end], self.config),
                     saturated=bool(np.any(clipped[refined_start : refined_end + 1])),
                     truncated=truncated,
+                    channel_identity=channel_identity,
                 )
             )
         return records

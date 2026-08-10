@@ -1,6 +1,10 @@
 import unittest
+from typing import Optional
 
-from rfsoc_pulse_model.common.events import associate_range_records
+from rfsoc_pulse_model.common.events import (
+    associate_polarimetric_range_records,
+    associate_range_records,
+)
 from rfsoc_pulse_model.common.fixed import (
     PROJECT_ROUNDING_MODE,
     FixedFormat,
@@ -8,7 +12,11 @@ from rfsoc_pulse_model.common.fixed import (
     round_ties_away_from_zero,
 )
 from rfsoc_pulse_model.common.types import (
+    ChannelIdentity,
+    ChannelRole,
+    GainRange,
     IQUnit,
+    Polarization,
     PowerUnit,
     PulseEvent,
     PulseRecord,
@@ -26,6 +34,7 @@ def make_record(
     saturated: bool = False,
     sample_rate_hz: int = 250_000_000,
     iq_width_bits: int = 16,
+    channel_identity: Optional[ChannelIdentity] = None,
 ) -> PulseRecord:
     return PulseRecord(
         channel=channel,
@@ -46,6 +55,7 @@ def make_record(
         freq_word=0,
         iq=((1, -1),),
         saturated=saturated,
+        channel_identity=channel_identity,
     )
 
 
@@ -154,6 +164,52 @@ class CommonContractTest(unittest.TestCase):
         )
 
         self.assertEqual([event.channel_mask for event in events], [0b0011, 0b0100])
+
+    def test_polarimetric_association_never_mixes_h_and_v_ranges(self) -> None:
+        records = (
+            make_record(
+                0,
+                RangeId.PLUS_20_DB,
+                100,
+                10,
+                channel_identity=ChannelIdentity(
+                    Polarization.H, GainRange.HIGH, ChannelRole.ECHO, 0
+                ),
+            ),
+            make_record(
+                5,
+                RangeId.ZERO_DB,
+                100,
+                10,
+                channel_identity=ChannelIdentity(
+                    Polarization.V, GainRange.MID, ChannelRole.ECHO, 5
+                ),
+            ),
+            make_record(
+                2,
+                RangeId.MINUS_20_DB,
+                101,
+                10,
+                channel_identity=ChannelIdentity(
+                    Polarization.H, GainRange.LOW, ChannelRole.ECHO, 2
+                ),
+            ),
+        )
+
+        events = associate_polarimetric_range_records(
+            records,
+            toa_tolerance=2,
+            width_tolerance=1,
+            config_version=9,
+        )
+
+        self.assertEqual(len(events), 2)
+        self.assertEqual(
+            [event.polarization for event in events],
+            [Polarization.H, Polarization.V],
+        )
+        self.assertEqual(events[0].channel_mask, (1 << 0) | (1 << 2))
+        self.assertEqual(events[1].channel_mask, 1 << 5)
 
     def test_fixed_format_saturates_signed_q15(self) -> None:
         fmt = FixedFormat(width=16, signed=True, fraction_bits=15)

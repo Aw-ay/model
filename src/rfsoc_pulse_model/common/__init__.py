@@ -1,7 +1,10 @@
 """Definitions shared by all three model layers."""
 
 from .config import DetectorConfig, ModelConfig
-from .events import associate_range_records
+from .events import (
+    associate_polarimetric_range_records,
+    associate_range_records,
+)
 from .fixed import (
     PROJECT_ROUNDING_MODE,
     FixedFormat,
@@ -12,6 +15,7 @@ from .fixed import (
 from .types import (
     AuxOutputMode,
     ChannelRole,
+    ChannelIdentity,
     GainRange,
     IQSample,
     IQUnit,
@@ -48,6 +52,7 @@ __all__ = [
     "DetectorConfig",
     "AuxOutputMode",
     "ChannelRole",
+    "ChannelIdentity",
     "GainRange",
     "IQSample",
     "IQUnit",
@@ -73,6 +78,7 @@ __all__ = [
     "ReflectionStatus",
     "TargetRequest",
     "associate_range_records",
+    "associate_polarimetric_range_records",
     "round_array_ties_away_from_zero",
     "round_ties_away_from_zero",
 ]

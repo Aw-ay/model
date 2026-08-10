@@ -12,7 +12,11 @@ from .receive import (
     unpack_dual_iq_words,
 )
 from .transmit import GoldenLfmConfig, generate_lfm_samples, generate_lfm_waveform
-from .system import GoldenReflectionSource, ReflectionSourceResult
+from .system import (
+    GoldenReflectionSource,
+    GoldenReflectionStream,
+    ReflectionSourceResult,
+)
 
 __all__ = [
     "DetectorConfig",
@@ -22,6 +26,7 @@ __all__ = [
     "GoldenReceivePipeline",
     "GoldenReceiveResult",
     "GoldenReflectionSource",
+    "GoldenReflectionStream",
     "ReflectionSourceResult",
     "PulseSpec",
     "SignalScenario",

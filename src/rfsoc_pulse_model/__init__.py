@@ -21,6 +21,7 @@ from .common.reflection_types import (
 from .common.types import (
     AuxOutputMode,
     ChannelRole,
+    ChannelIdentity,
     GainRange,
     IQUnit,
     Polarization,
@@ -31,13 +32,18 @@ from .common.types import (
     RangeSelectionMode,
     SampleDomain,
 )
-from .golden.system import GoldenReflectionSource, ReflectionSourceResult
+from .golden.system import (
+    GoldenReflectionSource,
+    GoldenReflectionStream,
+    ReflectionSourceResult,
+)
 
 __all__ = [
     "DetectorConfig",
     "ModelConfig",
     "AuxOutputMode",
     "ChannelRole",
+    "ChannelIdentity",
     "GainRange",
     "IQUnit",
     "Polarization",
@@ -61,5 +67,6 @@ __all__ = [
     "ReflectionStatus",
     "TargetRequest",
     "GoldenReflectionSource",
+    "GoldenReflectionStream",
     "ReflectionSourceResult",
 ]

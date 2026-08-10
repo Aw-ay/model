@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Mapping, Optional, Tuple
 
 import numpy as np
 
 from ..common.calibration_types import CalibrationProfile
 from ..common.config import ModelConfig
+from ..common.events import associate_polarimetric_range_records
 from ..common.reflection_types import (
     CompiledScatterer,
     DacAuxRequest,
@@ -15,15 +16,19 @@ from ..common.reflection_types import (
     PolarimetricWaveform,
     ReflectionScenario,
     ReflectionStatus,
+    TargetRequest,
 )
 from ..common.types import (
     AuxOutputMode,
+    ChannelIdentity,
     ChannelRole,
     GainRange,
     Polarization,
     PulseRecord,
+    PulseEvent,
     RangeId,
     RangeSelectionMode,
+    SampleDomain,
 )
 from .adc_frontend import GoldenEightChannelAdcFrontend
 from .calibration import GoldenTxPredistorter
@@ -50,6 +55,7 @@ class ReflectionSourceResult:
     predistorted_reflection: PolarimetricWaveform
     dac_frame: EightChannelDacFrame
     pulse_records: Tuple[PulseRecord, ...]
+    pulse_events: Tuple[PulseEvent, ...]
     compiled_targets: Tuple[CompiledScatterer, ...]
     status: ReflectionStatus
 
@@ -122,6 +128,13 @@ class GoldenReflectionSource:
                     batch,
                     channel=entry.index,
                     range_id=_LEGACY_RANGE[entry.gain_range],
+                    source_start_sample=adc_frame.start_sample,
+                    channel_identity=ChannelIdentity(
+                        entry.polarization,
+                        entry.gain_range,
+                        ChannelRole.ECHO,
+                        entry.index,
+                    ),
                 )
             )
         return tuple(
@@ -217,6 +230,14 @@ class GoldenReflectionSource:
         dac_frame = self.dac_router.route(predistorted, auxiliary_request)
 
         pulse_records = self._run_monitor(adc_frame)
+        pulse_events = tuple(
+            associate_polarimetric_range_records(
+                pulse_records,
+                toa_tolerance=self.config.toa_tolerance,
+                width_tolerance=self.config.width_tolerance,
+                config_version=self.config.config_version,
+            )
+        )
         status = self._status(
             adc_frame,
             scenario,
@@ -231,6 +252,211 @@ class GoldenReflectionSource:
             predistorted_reflection=predistorted,
             dac_frame=dac_frame,
             pulse_records=pulse_records,
+            pulse_events=pulse_events,
             compiled_targets=scatterers,
             status=status,
         )
+
+
+class GoldenReflectionStream:
+    """Stateful chunk-invariant Golden oracle for one continuous acquisition.
+
+    The implementation intentionally buffers the accumulated mathematical
+    input and re-evaluates the stateless Golden reference.  It emits only the
+    prefix that cannot depend on future samples, so arbitrary software chunk
+    boundaries cannot change the observable result.  This is an oracle
+    contract, not the finite-memory structure that the Cycle layer must use.
+    """
+
+    def __init__(
+        self,
+        config: ModelConfig,
+        calibration: CalibrationProfile,
+        *,
+        range_selection_mode: RangeSelectionMode = RangeSelectionMode.FIXED,
+        fixed_ranges: Optional[Mapping[Polarization, GainRange]] = None,
+    ) -> None:
+        self.config = config
+        self.calibration = calibration
+        self.range_selection_mode = range_selection_mode
+        self.fixed_ranges = dict(
+            fixed_ranges
+            if fixed_ranges is not None
+            else {
+                Polarization.H: GainRange.HIGH,
+                Polarization.V: GainRange.HIGH,
+            }
+        )
+        self._samples = np.empty((8, 0), dtype=np.complex128)
+        self._clipped = np.empty((8, 0), dtype=np.bool_)
+        self._initial_start: Optional[int] = None
+        self._next_start: Optional[int] = None
+        self._scenario: Optional[ReflectionScenario] = None
+        self._emitted_samples = 0
+        self._finalized = False
+        self._lookahead = self._relative_lookahead()
+
+    def _relative_lookahead(self) -> int:
+        center = (self.config.fractional_delay_taps - 1) // 2
+
+        def needs_fractional_alignment(channels: tuple) -> bool:
+            delays = [channel.response_delay_samples for channel in channels]
+            maximum = max(delays)
+            if maximum - min(delays) <= 1e-15:
+                return False
+            return any(
+                abs((maximum - delay) - round(maximum - delay)) > 1e-15
+                for delay in delays
+            )
+
+        return center * (
+            int(needs_fractional_alignment(self.calibration.adc_channels))
+            + int(needs_fractional_alignment(self.calibration.dac_channels))
+        )
+
+    @staticmethod
+    def _targets_equal(
+        left: Tuple[TargetRequest, ...],
+        right: Tuple[TargetRequest, ...],
+    ) -> bool:
+        if len(left) != len(right):
+            return False
+        for first, second in zip(left, right):
+            if (
+                first.apparent_range_m != second.apparent_range_m
+                or first.radial_velocity_mps != second.radial_velocity_mps
+                or first.target_rcs_m2 != second.target_rcs_m2
+                or first.rcs_reference_channel != second.rcs_reference_channel
+                or first.initial_phase_rad != second.initial_phase_rad
+                or not np.array_equal(
+                    first.normalized_scattering_matrix,
+                    second.normalized_scattering_matrix,
+                )
+            ):
+                return False
+        return True
+
+    def _validate_chunk(
+        self,
+        frame: EightChannelAdcFrame,
+        scenario: ReflectionScenario,
+    ) -> None:
+        if self._finalized:
+            raise ValueError("stream is already finalized")
+        if frame.start_sample != scenario.start_sample:
+            raise ValueError("ADC frame and scenario start_sample must match")
+        if frame.samples.shape[1] != scenario.length:
+            raise ValueError("ADC frame and scenario length must match")
+        if self._next_start is not None and frame.start_sample != self._next_start:
+            raise ValueError("stream chunks must use contiguous absolute samples")
+        if self._scenario is None:
+            return
+        reference = self._scenario
+        if (
+            scenario.physical_range_m != reference.physical_range_m
+            or scenario.carrier_frequency_hz != reference.carrier_frequency_hz
+            or scenario.temperature_c != reference.temperature_c
+            or scenario.require_absolute_rcs != reference.require_absolute_rcs
+            or not self._targets_equal(scenario.targets, reference.targets)
+        ):
+            raise ValueError("stream scenario physics must remain constant")
+
+    def _combined_run(self) -> ReflectionSourceResult:
+        assert self._initial_start is not None
+        assert self._scenario is not None
+        frame = EightChannelAdcFrame(
+            self._samples,
+            self._clipped,
+            SampleDomain.RFDC_COMPLEX_INPUT,
+            self.config.reflection_sample_rate_hz,
+            self._initial_start,
+        )
+        scenario = ReflectionScenario(
+            physical_range_m=self._scenario.physical_range_m,
+            carrier_frequency_hz=self._scenario.carrier_frequency_hz,
+            targets=self._scenario.targets,
+            temperature_c=self._scenario.temperature_c,
+            start_sample=self._initial_start,
+            length=self._samples.shape[1],
+            require_absolute_rcs=self._scenario.require_absolute_rcs,
+        )
+        return GoldenReflectionSource(
+            self.config,
+            self.calibration,
+            range_selection_mode=self.range_selection_mode,
+            fixed_ranges=self.fixed_ranges,
+        ).run(frame, scenario)
+
+    @staticmethod
+    def _slice_result(
+        result: ReflectionSourceResult,
+        start: int,
+        stop: int,
+        *,
+        include_records: bool,
+    ) -> ReflectionSourceResult:
+        def waveform_slice(waveform: PolarimetricWaveform) -> PolarimetricWaveform:
+            return PolarimetricWaveform(
+                waveform.samples[:, start:stop],
+                waveform.sample_domain,
+                waveform.sample_rate_hz,
+                waveform.start_sample + start,
+            )
+
+        dac_frame = EightChannelDacFrame(
+            result.dac_frame.samples[:, start:stop],
+            result.dac_frame.sample_domain,
+            result.dac_frame.sample_rate_hz,
+            result.dac_frame.representation,
+            result.dac_frame.start_sample + start,
+        )
+        return ReflectionSourceResult(
+            incident=waveform_slice(result.incident),
+            desired_reflection=waveform_slice(result.desired_reflection),
+            actual_uncompensated=waveform_slice(result.actual_uncompensated),
+            predistorted_reflection=waveform_slice(
+                result.predistorted_reflection
+            ),
+            dac_frame=dac_frame,
+            pulse_records=result.pulse_records if include_records else (),
+            pulse_events=result.pulse_events if include_records else (),
+            compiled_targets=result.compiled_targets,
+            status=(
+                result.status
+                if include_records
+                else replace(result.status, monitor_pulse_count=0)
+            ),
+        )
+
+    def process_chunk(
+        self,
+        frame: EightChannelAdcFrame,
+        scenario: ReflectionScenario,
+        *,
+        final: bool = False,
+    ) -> ReflectionSourceResult:
+        """Append one contiguous chunk and return the newly stable prefix."""
+
+        self._validate_chunk(frame, scenario)
+        if self._initial_start is None:
+            self._initial_start = frame.start_sample
+            self._scenario = scenario
+        self._samples = np.concatenate((self._samples, frame.samples), axis=1)
+        self._clipped = np.concatenate((self._clipped, frame.clipped), axis=1)
+        self._next_start = frame.start_sample + frame.samples.shape[1]
+
+        result = self._combined_run()
+        stable_stop = (
+            self._samples.shape[1]
+            if final
+            else max(0, self._samples.shape[1] - self._lookahead)
+        )
+        emitted = self._slice_result(
+            result,
+            self._emitted_samples,
+            stable_stop,
+            include_records=final,
+        )
+        self._emitted_samples = stable_stop
+        self._finalized = final
+        return emitted

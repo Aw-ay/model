@@ -6,7 +6,7 @@ from typing import Iterator, Optional, Sequence, Tuple, Union
 import numpy as np
 
 from ..common.tables import FIR_DECIMATOR_FLOAT
-from ..common.types import PulseRecord, RangeId
+from ..common.types import ChannelIdentity, PulseRecord, RangeId
 from ..common.fixed import round_array_ties_away_from_zero
 from ..common.config import ModelConfig
 from .detector import DetectorConfig, GoldenPulseDetector
@@ -162,7 +162,11 @@ class GoldenReceivePipeline:
     def decimate(
         self,
         source_iq: Union[Sequence[complex], AdcSampleBatch],
+        *,
+        source_start_sample: int = 0,
     ) -> GoldenReceiveResult:
+        if source_start_sample < 0:
+            raise ValueError("source_start_sample cannot be negative")
         if isinstance(source_iq, AdcSampleBatch):
             samples = np.asarray(source_iq.iq, dtype=np.complex128)
             source_clipped = np.asarray(source_iq.clipped, dtype=np.bool_)
@@ -187,11 +191,12 @@ class GoldenReceivePipeline:
             np.asarray(FIR_DECIMATOR_FLOAT, dtype=np.float64),
             mode="valid",
         )
-        newest_indices = np.arange(
+        newest_local_indices = np.arange(
             self.filter_length - 1,
             samples.size,
             dtype=np.int64,
         )
+        newest_indices = newest_local_indices + source_start_sample
         select = (newest_indices % self.decimation) == 0
         clip_windows = np.convolve(
             source_clipped.astype(np.int64),
@@ -212,11 +217,29 @@ class GoldenReceivePipeline:
         *,
         channel: int = 0,
         range_id: RangeId = RangeId.ZERO_DB,
+        source_start_sample: int = 0,
+        channel_identity: Optional[ChannelIdentity] = None,
     ) -> list[PulseRecord]:
-        result = self.decimate(source_iq)
+        result = self.decimate(
+            source_iq,
+            source_start_sample=source_start_sample,
+        )
+        detector_start_index = (
+            int(
+                (
+                    result.source_sample_indices[0]
+                    - self.group_delay_input_samples
+                )
+                // self.decimation
+            )
+            if result.source_sample_indices.size
+            else 0
+        )
         return self.detector.detect(
             result.iq,
             channel=channel,
             range_id=range_id,
+            start_index=detector_start_index,
             adc_clipped=result.adc_clipped,
+            channel_identity=channel_identity,
         )

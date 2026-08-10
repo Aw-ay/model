@@ -1,3 +1,4 @@
+import dataclasses
 import json
 from pathlib import Path
 import unittest
@@ -20,6 +21,10 @@ class ModelConfigTest(unittest.TestCase):
 
         self.assertEqual(config.rfdc_complex_sample_rate_hz, 500_000_000)
         self.assertEqual(config.rfdc_complex_samples_per_cycle, 2)
+        self.assertEqual(
+            config.dac_nominal_gain_policy,
+            "external_analog_path",
+        )
         self.assertEqual(config.detector_sample_rate_hz, 250_000_000)
         self.assertEqual(config.detector.sample_domain, SampleDomain.DETECTOR)
         self.assertEqual(config.detector.sample_rate_hz, 250_000_000)
@@ -65,8 +70,8 @@ class ModelConfigTest(unittest.TestCase):
     def test_installed_package_loads_its_default_config_resource(self) -> None:
         config = ModelConfig.load_default()
 
-        self.assertEqual(config.model_schema_version, 5)
-        self.assertEqual(config.config_version, 8)
+        self.assertEqual(config.model_schema_version, 6)
+        self.assertEqual(config.config_version, 9)
         self.assertEqual(config.channels, 4)
 
     def test_unknown_power_unit_is_rejected(self) -> None:
@@ -100,6 +105,33 @@ class ModelConfigTest(unittest.TestCase):
         payload["adc_channel_map"][1]["index"] = 0
 
         with self.assertRaisesRegex(ValueError, "adc_channel_map.*index"):
+            ModelConfig.from_mapping(payload)
+
+    def test_dataclass_replace_cannot_bypass_model_validation(self) -> None:
+        config = ModelConfig.load_default()
+
+        with self.assertRaisesRegex(ValueError, "detector_sample_rate_hz"):
+            dataclasses.replace(
+                config,
+                detector_sample_rate_hz=123_000_000,
+            )
+
+    def test_dac_echo_map_requires_every_polarization_and_range(self) -> None:
+        payload = self.root_payload()
+        payload["dac_channel_map"][5]["polarization"] = "V"
+        payload["dac_channel_map"][5]["gain_range"] = "mid"
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "dac_channel_map.*polarization and gain range",
+        ):
+            ModelConfig.from_mapping(payload)
+
+    def test_unknown_dac_nominal_gain_policy_is_rejected(self) -> None:
+        payload = self.root_payload()
+        payload["dac_nominal_gain_policy"] = "implicit_guess"
+
+        with self.assertRaisesRegex(ValueError, "dac_nominal_gain_policy"):
             ModelConfig.from_mapping(payload)
 
     def test_default_json_mirror_is_byte_identical(self) -> None:

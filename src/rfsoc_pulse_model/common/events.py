@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from typing import Iterable, List
 
-from .types import PulseEvent, PulseRecord, RangeId
+from .types import (
+    ChannelRole,
+    GainRange,
+    Polarization,
+    PulseEvent,
+    PulseRecord,
+    RangeId,
+)
 
 
 def associate_range_records(
@@ -48,3 +55,55 @@ def associate_range_records(
         for offset, group in enumerate(pending)
     ]
 
+
+def associate_polarimetric_range_records(
+    records: Iterable[PulseRecord],
+    toa_tolerance: int,
+    width_tolerance: int,
+    config_version: int,
+    first_event_id: int = 0,
+) -> List[PulseEvent]:
+    """Associate H and V three-range observations without cross-polarization mixing."""
+
+    expected_range = {
+        GainRange.HIGH: RangeId.PLUS_20_DB,
+        GainRange.MID: RangeId.ZERO_DB,
+        GainRange.LOW: RangeId.MINUS_20_DB,
+    }
+    by_polarization = {Polarization.H: [], Polarization.V: []}
+    for record in records:
+        identity = record.channel_identity
+        if identity is None:
+            raise ValueError("polarimetric association requires channel_identity")
+        if (
+            identity.role != ChannelRole.ECHO
+            or identity.gain_range not in expected_range
+        ):
+            raise ValueError("polarimetric association accepts only echo gain paths")
+        if record.range_id != expected_range[identity.gain_range]:
+            raise ValueError("record range_id does not match channel_identity")
+        by_polarization[identity.polarization].append(record)
+
+    groups = []
+    for polarization in (Polarization.H, Polarization.V):
+        events = associate_range_records(
+            by_polarization[polarization],
+            toa_tolerance,
+            width_tolerance,
+            config_version,
+        )
+        groups.extend(event.records for event in events)
+    groups.sort(
+        key=lambda group: (
+            min(record.toa_samples for record in group),
+            group[0].channel_identity.polarization.value,
+        )
+    )
+    return [
+        PulseEvent.from_records(
+            first_event_id + offset,
+            group,
+            config_version,
+        )
+        for offset, group in enumerate(groups)
+    ]

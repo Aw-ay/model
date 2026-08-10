@@ -1,6 +1,6 @@
 {
-  "model_schema_version": 5,
-  "config_version": 8,
+  "model_schema_version": 6,
+  "config_version": 9,
   "board_revision": "XCZU27DR-v2.1",
   "device_part": "xczu27dr-fsve1156-2-i",
   "center_frequency_hz": 2800000000,
@@ -25,6 +25,7 @@
   "fractional_delay_taps": 63,
   "processing_representation": "complex_baseband",
   "dac_output_mode": "complex_baseband_reference",
+  "dac_nominal_gain_policy": "external_analog_path",
   "auto_range_high_water_fraction": 0.9,
   "auto_range_low_water_fraction": 0.25,
   "auto_range_hold_samples": 64,

@@ -144,6 +144,48 @@ class GoldenReceiveTest(unittest.TestCase):
         self.assertEqual(records[0].range_id, RangeId.ZERO_DB)
         self.assertGreater(records[0].pw_samples, 0)
 
+    def test_nonzero_source_start_maps_to_absolute_detector_toa(self) -> None:
+        source = np.concatenate(
+            (
+                np.full(40, 100.0 + 0.0j),
+                np.full(40, 6000.0 + 0.0j),
+                np.full(160, 100.0 + 0.0j),
+            )
+        )
+        config = DetectorConfig(
+            noise_boot_samples=4,
+            threshold_scale=3.0,
+            moving_average=1,
+            vote_window=1,
+            vote_required=1,
+        )
+
+        local = GoldenReceivePipeline(config).detect(source)
+        absolute = GoldenReceivePipeline(config).detect(
+            source,
+            source_start_sample=1000,
+        )
+
+        self.assertEqual(len(local), 1)
+        self.assertEqual(len(absolute), 1)
+        self.assertEqual(
+            absolute[0].toa_samples,
+            local[0].toa_samples + 500,
+        )
+
+    def test_decimator_preserves_absolute_rfdc_phase_and_center_indices(self) -> None:
+        source = np.full(20, 1000.0 - 500.0j, dtype=np.complex128)
+
+        result = GoldenReceivePipeline().decimate(
+            source,
+            source_start_sample=1001,
+        )
+
+        np.testing.assert_array_equal(
+            result.source_sample_indices,
+            [1009, 1011, 1013],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

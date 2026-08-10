@@ -1,18 +1,18 @@
 # Polarimetric Golden Acceptance
 
-- Date: 2026-08-09
+- Date: 2026-08-10
 - Branch: local `main`
 - Interpreter: bundled Python 3.12.13
 - NumPy: 2.3.5
 - Python executable: `C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe`
 - Source path: `D:\AWAY\RFSOC\model\src`
 - Golden test command: `python -m unittest discover -s tests\golden -v`
-- Golden result: 69 tests passed
+- Golden result: 81 tests passed
 - Config mirrors: byte-identical
-- Public import: `GoldenReflectionSource` available from `rfsoc_pulse_model`
+- Public imports: `GoldenReflectionSource` and `GoldenReflectionStream`
 - Main reflection domain: `RFDC_COMPLEX_INPUT` at 500 MSPS complex
 - Monitor domain: `DETECTOR` at 250 MSPS
-- Config schema/version: `5/8`
+- Config schema/version: `6/9`
 - RFDC fabric contract: two complete complex samples per 250 MHz cycle
 
 The verified Golden path is:
@@ -41,6 +41,23 @@ The pre-Cycle physical-contract checkpoint additionally verifies:
   residual calibration is identity;
 - the target compiler emits and the reflection kernel applies
   `range_carrier_phase_rad` for the full device-equivalent delay.
+
+The continuous-stream checkpoint additionally verifies:
+
+- one 1024-sample run equals four 256-sample chunks after concatenation,
+  including target delay, fractional ADC/DAC alignment and nonzero Doppler;
+- monitor FIR/detector records from the finalized stream equal the one-shot
+  reference and use absolute detector-domain ToA;
+- AUTO_HOLD does not reset at a software chunk boundary;
+- H and V records cannot be combined into one three-range event;
+- `dataclasses.replace()` cannot bypass `ModelConfig` validation;
+- DAC0..5 cover H/V x HIGH/MID/LOW exactly once;
+- system fixtures use physical 10:1:0.1 ADC range ratios and an end-to-end
+  impulse test checks hand-derived amplitude, delay and complex phase.
+
+The stream implementation is deliberately a buffer-backed Golden oracle. It
+defines chunk-invariant observable mathematics, but does not claim bounded
+memory or Cycle architecture equivalence.
 
 Explicitly not verified by this acceptance:
 

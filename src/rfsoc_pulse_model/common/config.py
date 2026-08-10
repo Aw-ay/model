@@ -173,6 +173,7 @@ class ModelConfig:
     fractional_delay_taps: int
     processing_representation: str
     dac_output_mode: str
+    dac_nominal_gain_policy: str
     auto_range_high_water_fraction: float
     auto_range_low_water_fraction: float
     auto_range_hold_samples: int
@@ -187,6 +188,9 @@ class ModelConfig:
     tx_samples_per_cycle: int
     rounding_mode: RoundingMode
     detector: DetectorConfig
+
+    def __post_init__(self) -> None:
+        self.validate()
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, object]) -> "ModelConfig":
@@ -226,6 +230,7 @@ class ModelConfig:
             fractional_delay_taps=int(values["fractional_delay_taps"]),
             processing_representation=str(values["processing_representation"]),
             dac_output_mode=str(values["dac_output_mode"]),
+            dac_nominal_gain_policy=str(values["dac_nominal_gain_policy"]),
             auto_range_high_water_fraction=float(
                 values["auto_range_high_water_fraction"]
             ),
@@ -245,7 +250,6 @@ class ModelConfig:
             rounding_mode=RoundingMode(str(values["rounding_mode"])),
             detector=detector,
         )
-        config.validate()
         return config
 
     @staticmethod
@@ -358,6 +362,10 @@ class ModelConfig:
             raise ValueError("processing_representation must be complex_baseband")
         if self.dac_output_mode != "complex_baseband_reference":
             raise ValueError("dac_output_mode must be complex_baseband_reference")
+        if self.dac_nominal_gain_policy != "external_analog_path":
+            raise ValueError(
+                "dac_nominal_gain_policy must be external_analog_path"
+            )
         if not (
             0.0
             < self.auto_range_low_water_fraction
@@ -398,7 +406,7 @@ class ModelConfig:
             raise ValueError(
                 f"{kind}_channel_map index values must contain each channel exactly once"
             )
-        if kind == "adc":
+        if kind in ("adc", "dac"):
             for polarization in (Polarization.H, Polarization.V):
                 for gain_range in (GainRange.HIGH, GainRange.MID, GainRange.LOW):
                     matches = [
@@ -407,10 +415,11 @@ class ModelConfig:
                         if entry.polarization == polarization
                         and entry.gain_range == gain_range
                         and ChannelRole.ECHO in entry.allowed_roles
+                        and entry.enabled
                     ]
                     if len(matches) != 1:
                         raise ValueError(
-                            "adc_channel_map must contain one echo path per "
+                            f"{kind}_channel_map must contain one echo path per "
                             "polarization and gain range"
                         )
         if kind == "dac":

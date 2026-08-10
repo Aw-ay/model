@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum, IntEnum
-from typing import Sequence, Tuple
+from typing import Optional, Sequence, Tuple
 
 
 IQSample = Tuple[int, int]
@@ -74,6 +74,26 @@ class PowerUnit(str, Enum):
 
 
 @dataclass(frozen=True)
+class ChannelIdentity:
+    """Unambiguous physical identity for an eight-channel observation."""
+
+    polarization: Polarization
+    gain_range: GainRange
+    role: ChannelRole
+    physical_channel: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.polarization, Polarization):
+            raise ValueError("polarization must be a Polarization")
+        if not isinstance(self.gain_range, GainRange):
+            raise ValueError("gain_range must be a GainRange")
+        if not isinstance(self.role, ChannelRole):
+            raise ValueError("role must be a ChannelRole")
+        if self.physical_channel < 0:
+            raise ValueError("physical_channel cannot be negative")
+
+
+@dataclass(frozen=True)
 class PulseRecord:
     """Normalized PDW plus the hit-only IQ window.
 
@@ -104,10 +124,16 @@ class PulseRecord:
     saturated: bool = False
     truncated: bool = False
     overflow: bool = False
+    channel_identity: Optional[ChannelIdentity] = None
 
     def __post_init__(self) -> None:
         if self.sample_rate_hz <= 0:
             raise ValueError("sample_rate_hz must be positive")
+        if self.channel_identity is not None:
+            if not isinstance(self.channel_identity, ChannelIdentity):
+                raise ValueError("channel_identity must be a ChannelIdentity")
+            if self.channel_identity.physical_channel != self.channel:
+                raise ValueError("channel_identity must match record channel")
         if self.toa_samples < 0:
             raise ValueError("toa_samples cannot be negative")
         if self.pw_samples < 1:
@@ -205,6 +231,18 @@ class PulseEvent:
     @property
     def sample_rate_hz(self) -> int:
         return self.records[0].sample_rate_hz
+
+    @property
+    def polarization(self) -> Optional[Polarization]:
+        identities = [
+            record.channel_identity
+            for record in self.records
+            if record.channel_identity is not None
+        ]
+        if len(identities) != len(self.records):
+            return None
+        polarizations = {identity.polarization for identity in identities}
+        return next(iter(polarizations)) if len(polarizations) == 1 else None
 
     @classmethod
     def from_records(

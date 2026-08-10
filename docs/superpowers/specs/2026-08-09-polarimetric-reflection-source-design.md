@@ -180,6 +180,7 @@ maximum_delay_samples = 1_048_576
 fractional_delay_taps = 63
 processing_representation = "complex_baseband"
 dac_output_mode = "complex_baseband_reference"
+dac_nominal_gain_policy = "external_analog_path"
 adc_channel_map
 dac_channel_map
 ```
@@ -196,6 +197,8 @@ fractional_delay_taps 为正奇数
 ```
 
 根目录 `config/default.json` 与安装包内 `rfsoc_pulse_model/config/default.json` 继续保持逐字节一致。
+
+`ModelConfig.__post_init__()` 无条件调用 `validate()`，因此直接构造、`from_mapping()` 和 `dataclasses.replace()` 共用同一套约束。DAC0..5 与 ADC echo 路径一样，必须完整且唯一覆盖 H/V × HIGH/MID/LOW。
 
 ### 6.2 `ReflectionScenario`：一次运行的输入
 
@@ -253,6 +256,8 @@ fractional_delay_taps 为正奇数
 | DAC7 | H | REFERENCE | 校准或主动对消 |
 
 DAC6/7 的运行模式必须显式配置为 `CALIBRATION` 或 `CANCELLATION`。第一阶段允许校准波形或外部提供的抵消包络，不实现闭环自适应求解器。
+
+`dac_nominal_gain_policy="external_analog_path"` 冻结为：同一极化三档端口接收相同数字复包络，外部模拟路径施加 +20/0/-20 dB 名义电压增益。`digital_scale` 是显式数字比例，`response_gain` 是残余复校准；DAC Router 不除以 `nominal_gain_db`。
 
 ## 8. Golden 模块边界与数据流
 
@@ -401,6 +406,7 @@ class ReflectionSourceResult:
     predistorted_reflection: PolarimetricWaveform
     dac_frame: EightChannelDacFrame
     pulse_records: tuple[PulseRecord, ...]
+    pulse_events: tuple[PulseEvent, ...]
     compiled_targets: tuple[CompiledScatterer, ...]
     status: ReflectionStatus
 ```
@@ -439,6 +445,22 @@ ADC 校准和 H/V 重构
 ```
 
 监测旁路可以在实现中先运行或后运行，但其输出、门限、事件数量和异常不得改变 `desired_reflection`、`predistorted_reflection` 或 `dac_frame`。监测失败以状态或独立异常报告，禁止默默返回被修改的主链结果。
+
+### 8.9 `GoldenReflectionStream`
+
+连续采集必须使用状态化入口：
+
+```python
+stream = GoldenReflectionStream(config, calibration)
+result = stream.process_chunk(adc_frame, scenario, final=False)
+tail = stream.process_chunk(last_frame, last_scenario, final=True)
+```
+
+相邻块的 `start_sample` 必须绝对连续，场景物理参数和目标集合不得在同一流内变化。非末块暂缓仍依赖未来样点的对称分数延迟尾部，末块以 `final=True` 冲刷。所有返回数组按顺序拼接后必须与一次整段 `GoldenReflectionSource.run()` 在容差内一致。
+
+Golden 当前采用全历史缓存并重新计算稳定前缀，以建立不可因软件分块而变化的数学 oracle。该实现不作为 Cycle 结构来源；Cycle 必须用有限目标延迟 RAM、相对延迟状态、监测 FIR 历史、抽取相位、检测状态、AUTO_HOLD 状态和全局样点计数器实现同一可观察契约。
+
+监测 FIR 以绝对 RFDC 样点号决定 2:1 抽取相位，FIR 中心样点再通过 `source_sample = group_delay + decimation * detector_sample` 映射为全局 detector ToA。每条双极化 PDW 携带 `ChannelIdentity(polarization, gain_range, role, physical_channel)`；只有相同极化的三档记录允许关联，旧 `associate_range_records()` 仅保留给 legacy 四通道接口。
 
 ## 9. 标定语义
 
@@ -534,6 +556,10 @@ ADC 三档增益采用两级定义：`nominal_gain_db` 是 +20/0/-20 dB 理想�
 - 一次调用返回入射波、编译目标、期望回波、预补偿回波、8 路 DAC 帧和监测 PDW；
 - 修改检测阈值、禁用检测或没有检出事件，DAC 主链输出保持不变；
 - 现有 detector、FIR、clipping、FWHM、LFM、`PulseRecord` 物理格式、采样率和舍入测试全部继续通过。
+- 整段输入与任意连续分块输入的主链数组、DAC 数组和最终监测记录一致；
+- 非零 `start_sample` 的监测 ToA 使用全局 detector 时间；
+- AUTO_HOLD、Doppler 相位和分数延迟不在块边界重置；
+- 端到端单位脉冲的延迟、幅度和复相位与手算结果一致。
 
 Golden 验收只证明数学语义。它不证明 Cycle 周期结构、生成 RTL 位精确、Vivado 接口、CDC、时序、RFDC 配置或板上 8 路 RF 性能。
 
