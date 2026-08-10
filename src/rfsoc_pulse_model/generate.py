@@ -82,6 +82,13 @@ def generate(output_root: Path) -> dict[str, object]:
         "device_part": config.device_part,
         "rx_fabric_clock_hz": config.rx_fabric_clock_hz,
         "rfdc_complex_samples_per_cycle": config.rfdc_complex_samples_per_cycle,
+        "rfdc_adc_clocking_mode": config.rfdc_adc_clocking_mode.value,
+        "rfdc_adc_clocking_proof_status": (
+            config.rfdc_adc_clocking_proof_status.value
+        ),
+        "single_clock_ingress_integration_ready": (
+            config.single_clock_ingress_integration_ready
+        ),
         "numeric_formats_sha256": _sha256(numeric_bytes),
         "modules": modules,
     }
@@ -100,4 +107,3 @@ def main(argv: Iterable[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

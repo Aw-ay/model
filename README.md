@@ -344,9 +344,16 @@ regenerated and never hand-edited.
 The implemented ingress consumes eight flattened 32-bit I words and eight
 32-bit Q words per 250 MHz clock, publishes lane0/lane1 for all eight channels
 after one cycle, and increments an absolute 500 MSPS sample base by two. It has
-no ready/backpressure input. A partially valid 16-stream group invalidates
-cross-channel time alignment, sets `format_error_o` and fails closed until
-reset. See
+no ready/backpressure input. Startup patterns are ignored until
+`acquisition_enable_i`; after arming, an all-idle beat sets sticky
+`gap_error_o` and a partially valid 16-stream group sets sticky
+`format_error_o`. Either fault invalidates cross-channel time alignment and
+fails closed until reset.
+
+The single `clk_i` is only an integration candidate: the default configuration
+records `common_pl_clock_mts` with proof status `unverified`, so generated
+metadata reports that Block Design integration is not ready until Vivado proves
+the common clock/reset/MTS topology. See
 [`docs/contracts/cycle-2spc-ingress.md`](docs/contracts/cycle-2spc-ingress.md).
 
 ## Layout

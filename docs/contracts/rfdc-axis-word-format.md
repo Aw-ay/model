@@ -1,7 +1,7 @@
 # RFDC ADC/DAC AXI Word Format Contract
 
-Status: frozen at ModelConfig schema/config `8/11`, carried unchanged by the
-current `9/16` authority, and tied to RF Data Converter IP
+Status: word layout frozen at ModelConfig schema/config `8/11`, carried
+unchanged into the armed Cycle ingress at `10/17`, and tied to RF Data Converter IP
 `xilinx.com:ip:usp_rf_data_converter:2.6`.
 
 This is the only word-level authority allowed at the Golden/Cycle/Block Design
@@ -55,9 +55,15 @@ complex_tdata[63:48] = Q1
 MSB -> LSB spelling: {Q1, I1, Q0, I0}
 ```
 
-Both component `TVALID` values must be asserted for the combined beat to be
-valid. A mismatch drops that clock's beat and sets a sticky pairing error; it
-must never re-align one component with the following clock.
+Before acquisition is enabled, startup `TVALID` patterns are ignored. After
+enable, every I/Q stream for all eight ADC channels must be valid on every
+clock. An all-idle clock is a sticky stream-gap error and a partial pattern is a
+sticky format error; either condition fails closed and must never be repaired
+by pairing data from a later clock.
+
+The eight-channel single-clock adapter additionally requires a proven common
+`m0_axis_aclk` through `m3_axis_aclk` network and synchronous reset/MTS release.
+That clock proof is separate from this word-layout contract.
 
 ## RF-DAC stream identity
 

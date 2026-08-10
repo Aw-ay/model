@@ -19,6 +19,15 @@ class GenerateTest(unittest.TestCase):
             self.assertEqual(manifest["modules"][0]["latency_cycles"], 1)
             self.assertEqual(manifest["modules"][0]["samples_per_cycle"], 2)
             self.assertFalse(manifest["modules"][0]["accepts_backpressure"])
+            self.assertEqual(
+                manifest["rfdc_adc_clocking_mode"],
+                "common_pl_clock_mts",
+            )
+            self.assertEqual(
+                manifest["rfdc_adc_clocking_proof_status"],
+                "unverified",
+            )
+            self.assertFalse(manifest["single_clock_ingress_integration_ready"])
             self.assertIn("always @(*)", rtl)
             self.assertIn("always @(posedge clk_i)", rtl)
 

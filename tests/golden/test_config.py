@@ -5,7 +5,13 @@ import unittest
 
 from rfsoc_pulse_model.common.config import ModelConfig
 from rfsoc_pulse_model.common.fixed import RoundingMode
-from rfsoc_pulse_model.common.types import IQUnit, PowerUnit, SampleDomain
+from rfsoc_pulse_model.common.types import (
+    ClockingProofStatus,
+    IQUnit,
+    PowerUnit,
+    RfdcAdcClockingMode,
+    SampleDomain,
+)
 
 
 class ModelConfigTest(unittest.TestCase):
@@ -21,6 +27,15 @@ class ModelConfigTest(unittest.TestCase):
 
         self.assertEqual(config.rfdc_complex_sample_rate_hz, 500_000_000)
         self.assertEqual(config.rfdc_complex_samples_per_cycle, 2)
+        self.assertEqual(
+            config.rfdc_adc_clocking_mode,
+            RfdcAdcClockingMode.COMMON_PL_CLOCK_MTS,
+        )
+        self.assertEqual(
+            config.rfdc_adc_clocking_proof_status,
+            ClockingProofStatus.UNVERIFIED,
+        )
+        self.assertFalse(config.single_clock_ingress_integration_ready)
         self.assertEqual(
             config.dac_nominal_gain_policy,
             "external_analog_path",
@@ -184,9 +199,30 @@ class ModelConfigTest(unittest.TestCase):
     def test_installed_package_loads_its_default_config_resource(self) -> None:
         config = ModelConfig.load_default()
 
-        self.assertEqual(config.model_schema_version, 9)
-        self.assertEqual(config.config_version, 16)
+        self.assertEqual(config.model_schema_version, 10)
+        self.assertEqual(config.config_version, 17)
         self.assertEqual(config.channels, 4)
+
+    def test_unknown_rfdc_adc_clocking_mode_is_rejected(self) -> None:
+        payload = self.root_payload()
+        payload["rfdc_adc_clocking_mode"] = "same_frequency_only"
+
+        with self.assertRaisesRegex(ValueError, "same_frequency_only"):
+            ModelConfig.from_mapping(payload)
+
+    def test_dataclass_replace_cannot_bypass_clocking_enum_types(self) -> None:
+        config = ModelConfig.load_default()
+
+        with self.assertRaisesRegex(ValueError, "rfdc_adc_clocking_mode"):
+            dataclasses.replace(
+                config,
+                rfdc_adc_clocking_mode="common_pl_clock_mts",
+            )
+        with self.assertRaisesRegex(ValueError, "rfdc_adc_clocking_proof_status"):
+            dataclasses.replace(
+                config,
+                rfdc_adc_clocking_proof_status="unverified",
+            )
 
     def test_unknown_power_unit_is_rejected(self) -> None:
         payload = self.root_payload()

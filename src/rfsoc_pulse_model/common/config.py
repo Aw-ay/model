@@ -9,10 +9,12 @@ from typing import Mapping, Sequence, Tuple
 from .tables import FIR_DECIMATOR_Q17
 from .types import (
     ChannelRole,
+    ClockingProofStatus,
     GainRange,
     IQUnit,
     Polarization,
     PowerUnit,
+    RfdcAdcClockingMode,
     SampleDomain,
 )
 from .fixed import PROJECT_ROUNDING_MODE, RoundingMode
@@ -161,6 +163,8 @@ class ModelConfig:
     rfdc_interpolation: int
     rx_fabric_clock_hz: int
     rfdc_complex_samples_per_cycle: int
+    rfdc_adc_clocking_mode: RfdcAdcClockingMode
+    rfdc_adc_clocking_proof_status: ClockingProofStatus
     rfdc_complex_sample_rate_hz: int
     pl_decimation: int
     detector_sample_rate_hz: int
@@ -217,6 +221,12 @@ class ModelConfig:
             rx_fabric_clock_hz=int(values["rx_fabric_clock_hz"]),
             rfdc_complex_samples_per_cycle=int(
                 values["rfdc_complex_samples_per_cycle"]
+            ),
+            rfdc_adc_clocking_mode=RfdcAdcClockingMode(
+                str(values["rfdc_adc_clocking_mode"])
+            ),
+            rfdc_adc_clocking_proof_status=ClockingProofStatus(
+                str(values["rfdc_adc_clocking_proof_status"])
             ),
             rfdc_complex_sample_rate_hz=int(values["rfdc_complex_sample_rate_hz"]),
             pl_decimation=int(values["pl_decimation"]),
@@ -313,12 +323,34 @@ class ModelConfig:
             self.detector.threshold_scale
         )
 
+    @property
+    def single_clock_ingress_integration_ready(self) -> bool:
+        """True only after Vivado proves the common-clock MTS architecture."""
+
+        return (
+            self.rfdc_adc_clocking_mode
+            == RfdcAdcClockingMode.COMMON_PL_CLOCK_MTS
+            and self.rfdc_adc_clocking_proof_status
+            == ClockingProofStatus.VIVADO_VERIFIED
+        )
+
     @classmethod
     def load_default(cls) -> "ModelConfig":
         resource = resources.files("rfsoc_pulse_model.config").joinpath("default.json")
         return cls.from_mapping(json.loads(resource.read_text(encoding="utf-8")))
 
     def validate(self) -> None:
+        if not isinstance(self.rfdc_adc_clocking_mode, RfdcAdcClockingMode):
+            raise ValueError(
+                "rfdc_adc_clocking_mode must be an RfdcAdcClockingMode"
+            )
+        if not isinstance(
+            self.rfdc_adc_clocking_proof_status,
+            ClockingProofStatus,
+        ):
+            raise ValueError(
+                "rfdc_adc_clocking_proof_status must be a ClockingProofStatus"
+            )
         if self.rfdc_decimation < 1 or self.rfdc_interpolation < 1:
             raise ValueError("RFDC interpolation and decimation must be positive")
         if self.adc_sample_rate_hz % self.rfdc_decimation:

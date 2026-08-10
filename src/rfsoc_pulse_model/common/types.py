@@ -53,6 +53,20 @@ class AuxOutputMode(str, Enum):
     CANCELLATION = "cancellation"
 
 
+class RfdcAdcClockingMode(str, Enum):
+    """Structural clock architecture at the RF-ADC/Cycle boundary."""
+
+    COMMON_PL_CLOCK_MTS = "common_pl_clock_mts"
+    PER_TILE_CDC = "per_tile_cdc"
+
+
+class ClockingProofStatus(str, Enum):
+    """Whether the selected RFDC clock architecture has Vivado evidence."""
+
+    UNVERIFIED = "unverified"
+    VIVADO_VERIFIED = "vivado_verified"
+
+
 class SampleDomain(str, Enum):
     """Timebase in which sample-index fields are expressed."""
 

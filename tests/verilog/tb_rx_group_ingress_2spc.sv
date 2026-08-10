@@ -3,6 +3,7 @@
 module tb_rx_group_ingress_2spc;
     reg clk_i = 1'b0;
     reg rst_i = 1'b1;
+    reg acquisition_enable_i = 1'b0;
     reg [255:0] adc_i_tdata_i = 256'd0;
     reg [255:0] adc_q_tdata_i = 256'd0;
     reg [7:0] adc_i_tvalid_i = 8'd0;
@@ -13,7 +14,9 @@ module tb_rx_group_ingress_2spc;
     wire [127:0] rx_i_lane1_o;
     wire [127:0] rx_q_lane1_o;
     wire [63:0] sample_base_index_o;
+    wire stream_active_o;
     wire format_error_o;
+    wire gap_error_o;
     reg [127:0] expected_i0 = 128'd0;
     reg [127:0] expected_q0 = 128'd0;
     reg [127:0] expected_i1 = 128'd0;
@@ -23,6 +26,7 @@ module tb_rx_group_ingress_2spc;
     rx_group_ingress_2spc dut (
         .clk_i(clk_i),
         .rst_i(rst_i),
+        .acquisition_enable_i(acquisition_enable_i),
         .adc_i_tdata_i(adc_i_tdata_i),
         .adc_q_tdata_i(adc_q_tdata_i),
         .adc_i_tvalid_i(adc_i_tvalid_i),
@@ -33,7 +37,9 @@ module tb_rx_group_ingress_2spc;
         .rx_i_lane1_o(rx_i_lane1_o),
         .rx_q_lane1_o(rx_q_lane1_o),
         .sample_base_index_o(sample_base_index_o),
-        .format_error_o(format_error_o)
+        .stream_active_o(stream_active_o),
+        .format_error_o(format_error_o),
+        .gap_error_o(gap_error_o)
     );
 
     always #2 clk_i = ~clk_i;
@@ -43,6 +49,8 @@ module tb_rx_group_ingress_2spc;
             @(posedge clk_i);
             #1;
             if (!rx_valid_o) $fatal(1, "complete beat did not assert valid");
+            if (!stream_active_o) $fatal(1, "accepted beat did not activate stream");
+            if (gap_error_o) $fatal(1, "accepted beat asserted gap error");
             if (sample_base_index_o !== expected_base) $fatal(1, "sample base mismatch");
             if (rx_i_lane0_o !== expected_i0) $fatal(1, "I lane0 mismatch");
             if (rx_q_lane0_o !== expected_q0) $fatal(1, "Q lane0 mismatch");
@@ -65,6 +73,17 @@ module tb_rx_group_ingress_2spc;
 
         repeat (2) @(posedge clk_i);
         #1 rst_i = 1'b0;
+
+        // RFDC startup patterns are ignored until software explicitly arms.
+        adc_i_tvalid_i = 8'hff;
+        adc_q_tvalid_i = 8'h7f;
+        @(posedge clk_i);
+        #1;
+        if (rx_valid_o) $fatal(1, "pre-arm group was accepted");
+        if (stream_active_o) $fatal(1, "pre-arm group activated stream");
+        if (format_error_o || gap_error_o) $fatal(1, "pre-arm pattern caused a fault");
+
+        acquisition_enable_i = 1'b1;
         adc_i_tvalid_i = 8'hff;
         adc_q_tvalid_i = 8'hff;
         check_complete_beat(64'd0);
@@ -74,6 +93,7 @@ module tb_rx_group_ingress_2spc;
         @(posedge clk_i);
         #1;
         if (rx_valid_o) $fatal(1, "partial group was accepted");
+        if (stream_active_o) $fatal(1, "partial group left stream active");
         if (!format_error_o) $fatal(1, "partial group did not set sticky error");
 
         adc_q_tvalid_i = 8'hff;
@@ -87,6 +107,23 @@ module tb_rx_group_ingress_2spc;
         @(posedge clk_i);
         #1 rst_i = 1'b0;
         check_complete_beat(64'd0);
+
+        adc_i_tvalid_i = 8'h00;
+        adc_q_tvalid_i = 8'h00;
+        @(posedge clk_i);
+        #1;
+        if (rx_valid_o) $fatal(1, "idle group was accepted after arm");
+        if (stream_active_o) $fatal(1, "gap left stream active");
+        if (!gap_error_o) $fatal(1, "armed idle did not set sticky gap error");
+        if (format_error_o) $fatal(1, "idle gap was misclassified as format error");
+
+        adc_i_tvalid_i = 8'hff;
+        adc_q_tvalid_i = 8'hff;
+        @(posedge clk_i);
+        #1;
+        if (rx_valid_o) $fatal(1, "sticky gap error did not fail closed");
+        if (sample_base_index_o !== 64'd0) $fatal(1, "gap changed public index");
+        if (!gap_error_o) $fatal(1, "gap error was not sticky");
 
         $display("PASS: rx_group_ingress_2spc Cycle-derived RTL");
         $finish;

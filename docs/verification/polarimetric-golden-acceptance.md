@@ -1,19 +1,19 @@
 # Polarimetric Golden Acceptance
 
 - Date: 2026-08-10
-- Branch: local `main`
+- Branch: `agent/model-update-20260810`
 - Interpreter: bundled Python 3.12.13
 - NumPy: 2.3.5
 - Python executable: `C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe`
 - Source path: `D:\AWAY\RFSOC\model\src`
 - Golden test command: `python -m unittest discover -s tests\golden -v`
-- Golden result: 106 tests passed
-- Full Python result: 112 tests passed (106 Golden + 6 Cycle/generator)
+- Golden result: 108 tests passed
+- Full Python result: 116 tests passed (108 Golden + 8 Cycle/generator)
 - Config mirrors: byte-identical
 - Public imports: `GoldenReflectionSource` and `GoldenReflectionStream`
 - Main reflection domain: `RFDC_COMPLEX_INPUT` at 500 MSPS complex
 - Monitor domain: `DETECTOR` at 250 MSPS
-- Config schema/version: `9/16`
+- Config schema/version: `10/17`
 - RFDC fabric contract: two complete complex samples per 250 MHz cycle
 
 The verified Golden path is:
@@ -133,8 +133,15 @@ The initial Cycle 2SPC checkpoint additionally verifies:
   dropping the later half-beat;
 - the registered ingress latency is one 250 MHz clock and its public base index
   advances by two 500 MSPS samples per accepted group;
-- the interface has no backpressure and a partial 16-stream valid group fails
-  closed until reset;
+- the interface has no backpressure, ignores RFDC startup valid patterns before
+  `acquisition_enable_i`, and asserts `stream_active_o` after the first accepted
+  group;
+- after arming, an all-idle group sets sticky `gap_error_o`, a partial
+  16-stream valid group sets sticky `format_error_o`, and either fault fails
+  closed until reset without compressing later samples;
+- configuration and generated metadata record the intended
+  `common_pl_clock_mts` architecture, its current `unverified` proof status and
+  `single_clock_ingress_integration_ready=false`;
 - every emitted RTL module is registered and records ports, latency,
   throughput and SHA-256 in `manifest.json`;
 - Vivado 2025.2 `xvlog`, `xelab` and XSim pass the generated ingress testbench.
@@ -144,6 +151,8 @@ Explicitly not verified by this acceptance:
 - Cycle timing or fixed-point equivalence beyond the RFDC ingress;
 - generated Verilog bit/cycle equivalence beyond the RFDC ingress;
 - Vivado Block Design interfaces, clocks, reset or CDC;
+- proof that `m0_axis_aclk` through `m3_axis_aclk` share one physical clock
+  network and synchronous reset/MTS release;
 - synthesis, implementation or timing closure;
 - J4 expansion hardware population;
 - board-level eight-channel RF performance;
