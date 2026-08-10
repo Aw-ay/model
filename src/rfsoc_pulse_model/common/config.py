@@ -16,6 +16,7 @@ from .types import (
     SampleDomain,
 )
 from .fixed import PROJECT_ROUNDING_MODE, RoundingMode
+from .numeric_formats import NumericFormatManifest
 from .reflection_types import PhysicalChannelMapEntry
 from .rfdc_axis import RfdcAxisWordFormat
 
@@ -179,6 +180,7 @@ class ModelConfig:
     auto_range_low_water_fraction: float
     auto_range_hold_samples: int
     rfdc_axis: RfdcAxisWordFormat
+    numeric_formats: NumericFormatManifest
     adc_channel_map: Tuple[PhysicalChannelMapEntry, ...]
     dac_channel_map: Tuple[PhysicalChannelMapEntry, ...]
     channels: int
@@ -241,6 +243,9 @@ class ModelConfig:
             ),
             auto_range_hold_samples=int(values["auto_range_hold_samples"]),
             rfdc_axis=RfdcAxisWordFormat.from_mapping(values["rfdc_axis_format"]),
+            numeric_formats=NumericFormatManifest.from_mapping(
+                values["numeric_formats"]
+            ),
             adc_channel_map=cls._channel_map(values["adc_channel_map"], "adc"),
             dac_channel_map=cls._channel_map(values["dac_channel_map"], "dac"),
             channels=int(values["channels"]),
@@ -301,6 +306,12 @@ class ModelConfig:
     @property
     def power_unit(self) -> PowerUnit:
         return self.detector.power_unit
+
+    @property
+    def threshold_scale_code(self) -> int:
+        return self.numeric_formats["threshold_scale"].quantize(
+            self.detector.threshold_scale
+        )
 
     @classmethod
     def load_default(cls) -> "ModelConfig":
@@ -385,6 +396,30 @@ class ModelConfig:
             raise ValueError("RFDC ADC AXI samples/cycle must match the sample-rate contract")
         if self.rfdc_axis.dac_samples_per_cycle != self.tx_samples_per_cycle:
             raise ValueError("RFDC DAC AXI samples/cycle must match the TX rate contract")
+        if self.numeric_formats["adc_component"].width != self.iq_width_bits:
+            raise ValueError("ADC numeric format must match detector IQ width")
+        if self.numeric_formats["power"].width != self.power_width_bits:
+            raise ValueError("power numeric format must match detector power width")
+        if self.numeric_formats["moving_power_sum"].width < (
+            self.power_width_bits + math.ceil(math.log2(self.detector.moving_average))
+        ):
+            raise ValueError("moving power sum numeric format is too narrow")
+        if self.numeric_formats["noise_boot_sum"].width < (
+            self.power_width_bits + math.ceil(math.log2(self.detector.noise_boot_samples))
+        ):
+            raise ValueError("noise boot sum numeric format is too narrow")
+        if self.numeric_formats["vote_count"].width < math.ceil(
+            math.log2(self.detector.vote_window + 1)
+        ):
+            raise ValueError("vote count numeric format is too narrow")
+        if self.numeric_formats["channel_mask"].width != self.adc_channels:
+            raise ValueError("channel mask numeric format must cover every ADC")
+        if self.numeric_formats["channel_index"].maximum < self.adc_channels - 1:
+            raise ValueError("channel index numeric format cannot address every ADC")
+        if self.numeric_formats["target_count"].maximum < self.maximum_targets:
+            raise ValueError("target count numeric format cannot represent maximum_targets")
+        if self.numeric_formats["delay_integer"].maximum < self.maximum_delay_samples:
+            raise ValueError("delay integer numeric format cannot represent maximum_delay_samples")
         self._validate_channel_map(self.adc_channel_map, self.adc_channels, "adc")
         self._validate_channel_map(self.dac_channel_map, self.dac_channels, "dac")
         if self.channels < 1 or len(self.ranges_db) != self.channels:

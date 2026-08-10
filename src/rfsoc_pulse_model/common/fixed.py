@@ -36,15 +36,17 @@ class FixedFormat:
     width: int
     signed: bool = False
     fraction_bits: int = 0
-    overflow: Literal["saturate", "wrap"] = "saturate"
+    overflow: Literal["saturate", "wrap", "error"] = "saturate"
 
     def __post_init__(self) -> None:
         if self.width < 1:
             raise ValueError("width must be positive")
         if self.fraction_bits < 0:
             raise ValueError("fraction_bits cannot be negative")
-        if self.overflow not in ("saturate", "wrap"):
-            raise ValueError("overflow must be saturate or wrap")
+        if self.fraction_bits > self.width:
+            raise ValueError("fraction_bits cannot exceed width")
+        if self.overflow not in ("saturate", "wrap", "error"):
+            raise ValueError("overflow must be saturate, wrap, or error")
 
     @property
     def minimum(self) -> int:
@@ -64,6 +66,14 @@ class FixedFormat:
     def cast_integer(self, value: int) -> int:
         if self.overflow == "saturate":
             return max(self.minimum, min(self.maximum, int(value)))
+        if self.overflow == "error":
+            integer = int(value)
+            if not self.minimum <= integer <= self.maximum:
+                raise OverflowError(
+                    f"value does not fit {self.width}-bit "
+                    f"{'signed' if self.signed else 'unsigned'} format"
+                )
+            return integer
         raw = int(value) & ((1 << self.width) - 1)
         if self.signed and raw & (1 << (self.width - 1)):
             return raw - (1 << self.width)

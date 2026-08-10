@@ -1,6 +1,6 @@
 # Stream Status and Online PDW Contract
 
-Status: frozen for ModelConfig schema/config `8/15`.
+Status: frozen for ModelConfig schema/config `9/16`.
 
 `GoldenReflectionStream.process_chunk()` has two independent progress fronts:
 

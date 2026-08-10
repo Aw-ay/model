@@ -20,6 +20,7 @@ from .common.reflection_types import (
     TargetRequest,
 )
 from .common.rfdc_axis import RfdcAxisWordFormat
+from .common.numeric_formats import NumericFormatManifest
 from .common.types import (
     AuxOutputMode,
     ChannelRole,
@@ -71,6 +72,7 @@ __all__ = [
     "ReflectionStatus",
     "TargetRequest",
     "RfdcAxisWordFormat",
+    "NumericFormatManifest",
     "GoldenReflectionSource",
     "GoldenEightChannelAdcFrontend",
     "AutoHoldState",

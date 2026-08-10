@@ -1,7 +1,7 @@
 # RFDC ADC/DAC AXI Word Format Contract
 
 Status: frozen at ModelConfig schema/config `8/11`, carried unchanged by the
-current `8/15` authority, and tied to RF Data Converter IP
+current `9/16` authority, and tied to RF Data Converter IP
 `xilinx.com:ip:usp_rf_data_converter:2.6`.
 
 This is the only word-level authority allowed at the Golden/Cycle/Block Design

@@ -7,12 +7,12 @@
 - Python executable: `C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe`
 - Source path: `D:\AWAY\RFSOC\model\src`
 - Golden test command: `python -m unittest discover -s tests\golden -v`
-- Golden result: 103 tests passed
+- Golden result: 106 tests passed
 - Config mirrors: byte-identical
 - Public imports: `GoldenReflectionSource` and `GoldenReflectionStream`
 - Main reflection domain: `RFDC_COMPLEX_INPUT` at 500 MSPS complex
 - Monitor domain: `DETECTOR` at 250 MSPS
-- Config schema/version: `8/15`
+- Config schema/version: `9/16`
 - RFDC fabric contract: two complete complex samples per 250 MHz cycle
 
 The verified Golden path is:
@@ -107,6 +107,18 @@ The fixed-internal-delay checkpoint additionally verifies:
   Golden implementation rather than appearing on the public time axis;
 - the fixed value includes measured common hardware latency exactly once and
   excludes the target-programmed delay.
+
+The fixed-point-width checkpoint additionally verifies:
+
+- all Cycle data-path and metadata formats are present in one immutable
+  `ModelConfig.numeric_formats` manifest;
+- a one-bit width drift fails configuration loading;
+- FIR, moving-sum, noise-boot, vote, channel, target-count and delay-address
+  widths are checked against their configured capacities;
+- lossless intermediates use `error`, requantization boundaries use
+  `saturate`, and only declared modulo fields use `wrap`;
+- threshold scale `13.815510557...` quantizes to unsigned Q16 code `905413`
+  using ties-away-from-zero.
 
 The stream implementation is deliberately a buffer-backed Golden oracle. It
 defines chunk-invariant observable mathematics, but does not claim bounded

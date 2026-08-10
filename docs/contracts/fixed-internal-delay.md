@@ -1,6 +1,6 @@
 # Fixed Internal Delay Contract
 
-Status: frozen for ModelConfig schema/config `8/15`.
+Status: frozen for ModelConfig schema/config `9/16`.
 
 ## Public quantity
 

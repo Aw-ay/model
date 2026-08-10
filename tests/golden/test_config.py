@@ -41,6 +41,69 @@ class ModelConfigTest(unittest.TestCase):
         self.assertEqual(config.detector.iq_width_bits, config.iq_width_bits)
         self.assertEqual(config.detector.power_unit, config.power_unit)
 
+    def test_default_configuration_freezes_every_cycle_numeric_format(self) -> None:
+        config = ModelConfig.load_default()
+        expected = {
+            "adc_component": (16, True, 0, "error"),
+            "decimator_coefficient": (18, True, 17, "error"),
+            "decimator_product": (34, True, 17, "error"),
+            "decimator_accumulator": (38, True, 17, "error"),
+            "decimator_output": (16, True, 0, "saturate"),
+            "power_square": (31, False, 0, "error"),
+            "power": (32, False, 0, "error"),
+            "moving_power_sum": (35, False, 0, "error"),
+            "noise_boot_sum": (46, False, 0, "error"),
+            "noise_estimate": (32, False, 0, "saturate"),
+            "threshold_scale": (32, False, 16, "error"),
+            "threshold_product": (64, False, 16, "error"),
+            "threshold": (32, False, 0, "saturate"),
+            "vote_count": (3, False, 0, "error"),
+            "sample_index": (64, False, 0, "error"),
+            "pulse_width": (32, False, 0, "error"),
+            "range_id": (2, False, 0, "error"),
+            "channel_index": (3, False, 0, "error"),
+            "polarization": (1, False, 0, "error"),
+            "selected_range": (2, False, 0, "error"),
+            "event_id": (32, False, 0, "wrap"),
+            "channel_mask": (8, False, 0, "error"),
+            "flags": (16, False, 0, "error"),
+            "frequency_word": (32, True, 31, "saturate"),
+            "iq_count": (32, False, 0, "error"),
+            "config_version": (32, False, 0, "error"),
+            "reflection_sample": (24, True, 4, "saturate"),
+            "target_count": (4, False, 0, "error"),
+            "delay_integer": (21, False, 0, "error"),
+            "delay_fraction": (18, False, 17, "error"),
+            "fractional_delay_coefficient": (18, True, 17, "error"),
+            "fractional_delay_product": (42, True, 21, "error"),
+            "fractional_delay_accumulator": (48, True, 21, "error"),
+            "calibration_coefficient": (24, True, 20, "saturate"),
+            "calibration_product": (48, True, 24, "error"),
+            "matrix_accumulator": (50, True, 24, "error"),
+            "target_coefficient": (32, True, 20, "saturate"),
+            "target_product": (56, True, 24, "error"),
+            "multi_target_accumulator": (61, True, 24, "error"),
+            "phase_accumulator": (32, False, 32, "wrap"),
+            "phase_increment": (32, True, 31, "wrap"),
+            "nco_phasor": (18, True, 17, "saturate"),
+            "nco_product": (42, True, 21, "error"),
+            "nco_complex_result": (43, True, 21, "error"),
+            "tx_sine_lut": (16, True, 15, "saturate"),
+            "tx_amplitude": (16, False, 15, "saturate"),
+            "tx_product": (32, True, 30, "error"),
+            "dac_sample": (16, True, 0, "saturate"),
+        }
+
+        self.assertEqual(config.numeric_formats.as_tuples(), expected)
+        self.assertEqual(config.threshold_scale_code, 905_413)
+
+    def test_numeric_format_drift_is_rejected(self) -> None:
+        payload = self.root_payload()
+        payload["numeric_formats"]["decimator_accumulator"]["width"] = 37
+
+        with self.assertRaisesRegex(ValueError, "numeric format"):
+            ModelConfig.from_mapping(payload)
+
     def test_rfdc_axis_format_freezes_dual_adc_iq_and_real_dac_words(self) -> None:
         config = ModelConfig.from_mapping(self.root_payload())
         axis = config.rfdc_axis
@@ -121,8 +184,8 @@ class ModelConfigTest(unittest.TestCase):
     def test_installed_package_loads_its_default_config_resource(self) -> None:
         config = ModelConfig.load_default()
 
-        self.assertEqual(config.model_schema_version, 8)
-        self.assertEqual(config.config_version, 15)
+        self.assertEqual(config.model_schema_version, 9)
+        self.assertEqual(config.config_version, 16)
         self.assertEqual(config.channels, 4)
 
     def test_unknown_power_unit_is_rejected(self) -> None:

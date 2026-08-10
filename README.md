@@ -187,7 +187,7 @@ Cycle interface interpretation.
 
 `ModelConfig` validates in `__post_init__`, so direct construction,
 `from_mapping()` and `dataclasses.replace()` cannot create different validity
-rules. The current package schema/config version is `8/15`.
+rules. The current package schema/config version is `9/16`.
 
 The XCZU27DR v2.1 RFDC tile/slice, package-bank, board-net and carrier-endpoint
 mapping is frozen in `ModelConfig` and documented in
@@ -286,6 +286,21 @@ half step away from zero. `common/fixed.py` is the only rounding implementation
 for scalar and NumPy operations. ADC gain quantization, IQ payload conversion,
 power fields, frequency words, fixed formats and DAC LFM samples all use it.
 Future Cycle and generated RTL must implement the same rule explicitly.
+
+### Fixed-point width authority
+
+`ModelConfig.numeric_formats` is the required width authority for every Cycle
+data-path boundary and intermediate. It covers RFDC ADC input, the 2:1 FIR,
+power/noise/threshold/vote, PDW fields, the 500 MSPS dual-polarization
+reflection path, fractional delay, calibration and target matrices,
+multi-target accumulation, phase/NCO, TX scaling and DAC output.
+
+Lossless intermediate nodes use overflow policy `error`; Cycle simulation must
+raise rather than hide an undersized value. Only named external/requantization
+boundaries may `saturate`, and phase/event rollover is explicitly `wrap`.
+Every discarded fractional bit uses project-wide `ties_away_from_zero`.
+The complete table and width derivations are frozen in
+[`docs/contracts/fixed-point-widths.md`](docs/contracts/fixed-point-widths.md).
 
 ## Establishing correspondence between the three layers
 
