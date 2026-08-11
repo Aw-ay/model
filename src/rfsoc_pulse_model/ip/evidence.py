@@ -16,16 +16,15 @@ from .types import HardwareArchitectureConfig
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _VIVADO_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+(?:\.[0-9]+)?$")
-_META_FIELDS = frozenset(
-    {
-        "evidence_schema_version",
-        "architecture_config_sha256",
-        "generated_tcl_sha256",
-        "catalog_request_sha256",
-        "vivado_version",
-        "run_id",
-    }
+META_ORDER = (
+    "evidence_schema_version",
+    "architecture_config_sha256",
+    "generated_tcl_sha256",
+    "catalog_request_sha256",
+    "vivado_version",
+    "run_id",
 )
+RUN_ID_RE = re.compile(r"^[0-9]+-[0-9]+$")
 
 
 class CatalogResolutionStatus(str, Enum):
@@ -91,9 +90,13 @@ def build_catalog_request(
 def parse_catalog_evidence(text: str) -> CatalogEvidence:
     """Parse exactly the schema-v2 three-column catalog TSV grammar."""
 
+    if not text.endswith("\n") or text.endswith("\n\n"):
+        raise ValueError("catalog evidence requires a single trailing newline")
+
     metadata: dict[str, str] = {}
     resolved: dict[str, str] = {}
-    for line_number, line in enumerate(text.splitlines(), start=1):
+    metadata_index = 0
+    for line_number, line in enumerate(text[:-1].split("\n"), start=1):
         if line.count("\t") != 2:
             raise ValueError(f"malformed catalog evidence row {line_number}")
         kind, key, value = line.split("\t")
@@ -102,18 +105,31 @@ def parse_catalog_evidence(text: str) -> CatalogEvidence:
         if not key or key != key.strip() or not value or value != value.strip():
             raise ValueError(f"blank or padded catalog evidence value on row {line_number}")
         if kind == "meta":
-            if key not in _META_FIELDS:
+            if key not in META_ORDER:
                 raise ValueError(f"unknown catalog evidence metadata: {key}")
             if key in metadata:
-                raise ValueError(f"duplicate catalog evidence metadata: {key}")
+                raise ValueError(f"catalog evidence metadata duplicate: {key}")
+            if metadata_index == len(META_ORDER) or key != META_ORDER[metadata_index]:
+                expected = (
+                    "no further metadata"
+                    if metadata_index == len(META_ORDER)
+                    else META_ORDER[metadata_index]
+                )
+                raise ValueError(
+                    "catalog evidence metadata order mismatch: "
+                    f"expected {expected}, got {key}"
+                )
             metadata[key] = value
+            metadata_index += 1
             continue
+        if metadata_index != len(META_ORDER):
+            raise ValueError("catalog evidence ip row before metadata header")
         if key in resolved:
             raise ValueError(f"duplicate catalog evidence family: {key}")
         _vlnv_identity(value, f"catalog evidence {key}")
         resolved[key] = value
 
-    missing_metadata = sorted(_META_FIELDS - set(metadata))
+    missing_metadata = list(META_ORDER[metadata_index:])
     if missing_metadata:
         raise ValueError(f"missing catalog evidence metadata: {missing_metadata}")
     if metadata["evidence_schema_version"] != "1":
@@ -127,8 +143,8 @@ def parse_catalog_evidence(text: str) -> CatalogEvidence:
             raise ValueError(f"malformed SHA-256 for {field_name}")
     if not _VIVADO_VERSION_RE.fullmatch(metadata["vivado_version"]):
         raise ValueError("malformed vivado_version")
-    if not metadata["run_id"]:
-        raise ValueError("blank run_id")
+    if not RUN_ID_RE.fullmatch(metadata["run_id"]):
+        raise ValueError("malformed run_id")
     return CatalogEvidence(
         evidence_schema_version=1,
         architecture_config_sha256=metadata["architecture_config_sha256"],
@@ -224,5 +240,5 @@ def _validate_evidence_fields(evidence: CatalogEvidence) -> None:
         evidence.vivado_version
     ):
         raise ValueError("malformed vivado_version")
-    if not isinstance(evidence.run_id, str) or not evidence.run_id.strip() or evidence.run_id != evidence.run_id.strip():
-        raise ValueError("blank or padded run_id")
+    if not isinstance(evidence.run_id, str) or not RUN_ID_RE.fullmatch(evidence.run_id):
+        raise ValueError("malformed run_id")

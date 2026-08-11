@@ -44,7 +44,7 @@ def make_evidence_fixture() -> tuple[HardwareArchitectureConfig, bytes, bytes, C
         generated_tcl_sha256=request_payload["generated_tcl_sha256"],
         catalog_request_sha256=hashlib.sha256(request_bytes).hexdigest(),
         vivado_version="2025.2",
-        run_id="unit-test-1",
+        run_id="1234-1730000000000",
         resolved_vlnv=tuple(sorted(resolved.items())),
     )
     return config, request_bytes, discovery_tcl_bytes, evidence
@@ -58,9 +58,9 @@ def evidence_tsv(evidence: CatalogEvidence) -> str:
         ("meta", "catalog_request_sha256", evidence.catalog_request_sha256),
         ("meta", "vivado_version", evidence.vivado_version),
         ("meta", "run_id", evidence.run_id),
-        *(("ip", family_id, vlnv) for family_id, vlnv in evidence.resolved_vlnv),
     ]
-    return "\n".join("\t".join(row) for row in rows) + "\n"
+    rows.extend(("ip", family_id, vlnv) for family_id, vlnv in evidence.resolved_vlnv)
+    return "".join(f"{kind}\t{key}\t{value}\n" for kind, key, value in rows)
 
 
 class CatalogEvidenceTest(unittest.TestCase):
@@ -118,23 +118,40 @@ class CatalogEvidenceTest(unittest.TestCase):
                 dataclasses.replace(evidence, resolved_vlnv=tuple(sorted(wrong.items()))),
             )
 
+        duplicate_ip = (
+            evidence_tsv(evidence)
+            + "ip\trfdc\txilinx.com:ip:usp_rf_data_converter:2.6\n"
+        )
         with self.assertRaisesRegex(ValueError, "duplicate"):
+            parse_catalog_evidence(duplicate_ip)
+
+    def test_parser_enforces_exact_wire_grammar(self) -> None:
+        _, _, _, evidence = make_evidence_fixture()
+        valid = evidence_tsv(evidence)
+        self.assertEqual(parse_catalog_evidence(valid).run_id, "1234-1730000000000")
+
+        with self.assertRaisesRegex(ValueError, "run_id"):
             parse_catalog_evidence(
-                "ip\trfdc\txilinx.com:ip:usp_rf_data_converter:2.6\n"
-                "ip\trfdc\txilinx.com:ip:usp_rf_data_converter:2.6\n"
+                valid.replace("1234-1730000000000", "unit-test-1")
             )
 
-    def test_parser_rejects_malformed_metadata_values(self) -> None:
-        _, _, _, evidence = make_evidence_fixture()
-        rows = evidence_tsv(evidence).replace("meta\trun_id\tunit-test-1", "meta\trun_id\t ")
-        with self.assertRaisesRegex(ValueError, "blank or padded"):
-            parse_catalog_evidence(rows)
-        with self.assertRaisesRegex(ValueError, "malformed SHA-256"):
-            parse_catalog_evidence(
-                evidence_tsv(
-                    dataclasses.replace(evidence, architecture_config_sha256="A" * 64)
-                )
-            )
+        first_ip = "ip\trfdc\txilinx.com:ip:usp_rf_data_converter:2.6\n"
+        with self.assertRaisesRegex(ValueError, "ip row before metadata"):
+            parse_catalog_evidence(first_ip + valid)
+
+        rows = valid.splitlines(keepends=True)
+        reordered = "".join((rows[0], rows[2], rows[1], *rows[3:]))
+        with self.assertRaisesRegex(ValueError, "metadata order"):
+            parse_catalog_evidence(reordered)
+
+        repeated = "".join((rows[0], rows[0], *rows[1:]))
+        with self.assertRaisesRegex(ValueError, "metadata.*duplicate"):
+            parse_catalog_evidence(repeated)
+
+        for malformed_ending in (valid.removesuffix("\n"), valid + "\n"):
+            with self.subTest(malformed_ending=repr(malformed_ending[-2:])):
+                with self.assertRaisesRegex(ValueError, "single trailing newline"):
+                    parse_catalog_evidence(malformed_ending)
 
     def test_generation_uses_current_evidence_and_removes_only_candidate_when_stale(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -165,6 +182,25 @@ class CatalogEvidenceTest(unittest.TestCase):
             self.assertEqual(stale["catalog_resolution_status"], "stale_evidence")
             self.assertFalse(candidate.exists())
             self.assertEqual(unrelated.read_text(encoding="utf-8"), "keep")
+
+    def test_generation_rejects_noncanonical_evidence_without_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, _, _, evidence = make_evidence_fixture()
+            metadata = root / "metadata"
+            metadata.mkdir(parents=True)
+            evidence_path = metadata / "catalog_evidence.tsv"
+            candidate = metadata / "ip_lock.candidate.json"
+            candidate.write_text("old candidate", encoding="utf-8")
+            rows = evidence_tsv(evidence).splitlines(keepends=True)
+            evidence_path.write_text(
+                "".join((rows[0], rows[2], rows[1], *rows[3:])),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "metadata order"):
+                generate_ip_architecture(root)
+            self.assertFalse(candidate.exists())
 
     def test_generation_ignores_legacy_schema_v1_tsv(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
