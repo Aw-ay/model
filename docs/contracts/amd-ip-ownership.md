@@ -4,8 +4,10 @@ Status: schema-v2 ownership is complete; production integration is not yet
 accepted. The configured topology remains an unconnected skeleton.
 
 `HardwareArchitectureConfig` is the source authority. `ArchitectureRegistry`
-derives and validates responsibility ownership from it; generated metadata is a
-record of that authority, not a replacement for it.
+derives and validates responsibility ownership from it, then retains its public
+owner maps as read-only snapshots; readiness evaluates those validated snapshots
+rather than caller-mutable state. Generated metadata is a record of that
+authority, not a replacement for it.
 
 ## Architecture identities
 

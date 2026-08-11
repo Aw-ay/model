@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from types import MappingProxyType
 
 from .types import (
     ArchitectureBlockSpec,
@@ -52,26 +54,31 @@ class ArchitectureRegistry:
     """Exact responsibility ownership derived from schema-v2 configuration."""
 
     config: HardwareArchitectureConfig
-    blocks: tuple[ArchitectureBlockSpec, ...]
-    production_owner_map: dict[str, str]
-    reference_responsibility_map: dict[str, str]
-    reflection_chain_owner_map: tuple[tuple[str, str], ...]
-    responsibility_complete: bool
+    blocks: tuple[ArchitectureBlockSpec, ...] = field(init=False)
+    production_owner_map: Mapping[str, str] = field(init=False)
+    reference_responsibility_map: Mapping[str, str] = field(init=False)
+    reflection_chain_owner_map: tuple[tuple[str, str], ...] = field(init=False)
+    responsibility_complete: bool = field(init=False)
 
     @classmethod
     def from_config(cls, config: HardwareArchitectureConfig) -> "ArchitectureRegistry":
         """Validate and derive ownership from one immutable architecture config."""
 
-        names = [block.block_name for block in config.architecture_blocks]
+        return cls(config=config)
+
+    def __post_init__(self) -> None:
+        """Derive immutable ownership snapshots from the validated config."""
+
+        names = [block.block_name for block in self.config.architecture_blocks]
         if len(names) != len(set(names)):
             duplicate = next(name for name in names if names.count(name) > 1)
             raise ValueError(f"duplicate architecture block name: {duplicate}")
 
-        required = set(config.required_responsibilities.production)
+        required = set(self.config.required_responsibilities.production)
         production_owner_map: dict[str, str] = {}
         reference_responsibility_map: dict[str, str] = {}
 
-        for block in config.architecture_blocks:
+        for block in self.config.architecture_blocks:
             if block.implementation_kind is ImplementationKind.LEGACY_NON_PRODUCTION:
                 for responsibility in block.reference_responsibilities:
                     if not responsibility.startswith(_LEGACY_REFERENCE_PREFIX):
@@ -112,7 +119,7 @@ class ArchitectureRegistry:
                 f"{', '.join(sorted(missing))}"
             )
 
-        chain = config.required_responsibilities.continuous_dual_polar_reflection
+        chain = self.config.required_responsibilities.continuous_dual_polar_reflection
         if chain != _CONTINUOUS_DUAL_POLAR_REFLECTION:
             raise ValueError(
                 "continuous_dual_polar_reflection must exactly match the frozen "
@@ -128,14 +135,19 @@ class ArchitectureRegistry:
             (responsibility, production_owner_map[responsibility])
             for responsibility in chain
         )
-        return cls(
-            config=config,
-            blocks=config.architecture_blocks,
-            production_owner_map=production_owner_map,
-            reference_responsibility_map=reference_responsibility_map,
-            reflection_chain_owner_map=reflection_chain_owner_map,
-            responsibility_complete=True,
+        object.__setattr__(self, "blocks", self.config.architecture_blocks)
+        object.__setattr__(
+            self,
+            "production_owner_map",
+            MappingProxyType(dict(production_owner_map)),
         )
+        object.__setattr__(
+            self,
+            "reference_responsibility_map",
+            MappingProxyType(dict(reference_responsibility_map)),
+        )
+        object.__setattr__(self, "reflection_chain_owner_map", reflection_chain_owner_map)
+        object.__setattr__(self, "responsibility_complete", True)
 
     @classmethod
     def default(cls) -> "ArchitectureRegistry":
