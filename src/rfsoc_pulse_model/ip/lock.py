@@ -1,9 +1,9 @@
 """Production IP-lock validation and recoverable two-target promotion.
 
-Promotion is not a cross-file atomic filesystem instruction.  It serializes
-writers in the repository scope, snapshots both targets into a durable journal,
-uses compare-and-swap checks before each replacement, and leaves the journal
-and backups in place whenever a partially-applied promotion needs recovery.
+Promotion is not a cross-file atomic filesystem instruction.  Only writers
+using this module's repository advisory lock are supported; manual changes to
+either lock target are prohibited.  Snapshot rechecks are fail-fast diagnostics,
+not an atomic compare-and-swap defence against non-participating editors.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
 import tempfile
 from typing import Iterable
 import uuid
@@ -49,6 +50,12 @@ _JOURNAL_KEYS = {
 _SNAPSHOT_KEYS = {"exists", "sha256"}
 _PROMOTION_LOCK_NAME = ".ip_lock.promotion.lock"
 _TRANSACTION_DIRECTORY = ".ip_lock.transactions"
+LOCK_WRITER_CONCURRENCY_CONTRACT = (
+    "Only promote/recover writers holding the same repository advisory lock are "
+    "supported. Manual edits to config/ip_lock.json and "
+    "src/rfsoc_pulse_model/config/ip_lock.json are prohibited. Snapshot rechecks "
+    "fail fast but cannot atomically protect non-participating editors."
+)
 
 
 class GenerationMode(str, Enum):
@@ -142,6 +149,8 @@ def promote_candidate_lock(
     A successful call leaves byte-identical canonical locks.  A partial I/O
     failure preserves a transaction journal and backups, then raises an error
     naming the required `recover` action instead of claiming cross-file atomicity.
+    Only callers participating in the repository advisory-lock protocol are
+    supported; this function cannot atomically protect a manual external edit.
     """
 
     candidate = Path(candidate_path)
@@ -161,6 +170,7 @@ def recover_interrupted_promotion(root_lock_path: Path, package_lock_path: Path)
     Recovery only overwrites a target that still contains either its journaled
     pre-promotion bytes or the journaled new canonical lock.  Any other bytes
     are treated as an external edit and leave the journal intact for an operator.
+    As with promotion, only participating repository-lock writers are supported.
     """
 
     root_lock, package_lock = _normalise_distinct_targets(
@@ -183,7 +193,9 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Promote or recover an IP lock. Promotion is a recoverable two-file "
-            "transaction, not a cross-file atomic filesystem instruction."
+            "transaction, not a cross-file atomic filesystem instruction. Only "
+            "writers using this repository lock are supported; manual lock edits "
+            "are prohibited."
         )
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -290,8 +302,17 @@ def _normalise_distinct_targets(
 ) -> tuple[Path, Path]:
     root_lock = Path(root_lock_path).resolve()
     package_lock = Path(package_lock_path).resolve()
-    if root_lock == package_lock:
-        raise ValueError("root and package lock targets must be distinct")
+    if root_lock.name != "ip_lock.json" or root_lock.parent.name != "config":
+        raise ValueError("root lock must be exactly config/ip_lock.json")
+    repository_root = root_lock.parent.parent
+    expected_package = (
+        repository_root / "src/rfsoc_pulse_model/config/ip_lock.json"
+    ).resolve()
+    if package_lock != expected_package:
+        raise ValueError(
+            "package lock must be exactly "
+            "src/rfsoc_pulse_model/config/ip_lock.json in the same repository"
+        )
     return root_lock, package_lock
 
 
@@ -299,21 +320,21 @@ def _normalise_distinct_targets(
 def _repository_promotion_lock(root_lock: Path, package_lock: Path) -> Iterator[None]:
     lock_path = _promotion_lock_path(root_lock, package_lock)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
+    _flush_directory(lock_path.parent)
+    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
     try:
-        descriptor = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError as error:
-        raise RuntimeError(f"promotion already in progress: {lock_path}") from error
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(f"pid={os.getpid()}\n")
-            stream.flush()
-            os.fsync(stream.fileno())
+        if os.fstat(descriptor).st_size == 0:
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            os.write(descriptor, b"0")
+            os.fsync(descriptor)
+        _acquire_os_advisory_lock(descriptor, lock_path)
         yield
     finally:
         try:
-            lock_path.unlink(missing_ok=True)
+            _release_os_advisory_lock(descriptor)
         except OSError:
             pass
+        os.close(descriptor)
 
 
 def _promotion_lock_path(root_lock: Path, package_lock: Path) -> Path:
@@ -325,13 +346,15 @@ def _transaction_root(root_lock: Path, package_lock: Path) -> Path:
 
 
 def _transaction_scope(root_lock: Path, package_lock: Path) -> Path:
-    common = os.path.commonpath((str(root_lock.parent), str(package_lock.parent)))
-    return Path(common)
+    del package_lock
+    return root_lock.parent.parent
 
 
 def _promote_with_journal(root_lock: Path, package_lock: Path, lock_bytes: bytes) -> None:
     root_lock.parent.mkdir(parents=True, exist_ok=True)
     package_lock.parent.mkdir(parents=True, exist_ok=True)
+    _flush_directory(root_lock.parent)
+    _flush_directory(package_lock.parent)
     root_snapshot = _snapshot_target(root_lock)
     package_snapshot = _snapshot_target(package_lock)
     transaction = _create_transaction(
@@ -351,6 +374,7 @@ def _promote_with_journal(root_lock: Path, package_lock: Path, lock_bytes: bytes
             _assert_snapshot_current(target, snapshot)
             os.replace(temporary, target)
             replaced.append((target, snapshot, backup_name))
+            _flush_directory(target.parent)
         temporary_paths.clear()
         _assert_exact_bytes(root_lock, lock_bytes)
         _assert_exact_bytes(package_lock, lock_bytes)
@@ -378,8 +402,10 @@ def _create_transaction(
 ) -> Path:
     transaction_root = _transaction_root(root_lock, package_lock)
     transaction_root.mkdir(parents=True, exist_ok=True)
+    _flush_directory(transaction_root.parent)
     transaction = transaction_root / uuid.uuid4().hex
     transaction.mkdir()
+    _flush_directory(transaction_root)
     try:
         _write_transaction_file(transaction / "new.lock", lock_bytes)
         _write_backup(transaction / "root.before", root_lock, root_snapshot)
@@ -441,10 +467,12 @@ def _attempt_rollback(
                 temporary = _write_temporary(target.parent, backup_bytes)
                 try:
                     os.replace(temporary, target)
+                    _flush_directory(target.parent)
                 finally:
                     _unlink_quietly(temporary)
             else:
                 target.unlink()
+                _flush_directory(target.parent)
             _assert_snapshot_current(target, snapshot)
         except Exception as error:
             errors.append(f"rollback {target}: {error}")
@@ -475,7 +503,9 @@ def _recover_transaction(transaction: Path, root_lock: Path, package_lock: Path)
     ]
     try:
         os.replace(temporary_paths[0], root_lock)
+        _flush_directory(root_lock.parent)
         os.replace(temporary_paths[1], package_lock)
+        _flush_directory(package_lock.parent)
         _assert_exact_bytes(root_lock, lock_bytes)
         _assert_exact_bytes(package_lock, lock_bytes)
     except Exception as error:
@@ -546,6 +576,86 @@ def _read_target_or_none(target: Path) -> bytes | None:
     return target.read_bytes()
 
 
+def _acquire_os_advisory_lock(descriptor: int, lock_path: Path) -> None:
+    """Acquire a process-owned lock released by the OS when the owner dies."""
+
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+        elif os.name == "posix":
+            import fcntl
+
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        else:
+            raise RuntimeError(f"unsupported OS advisory lock platform: {sys.platform}")
+    except (BlockingIOError, OSError) as error:
+        raise RuntimeError(
+            f"another participating writer holds the repository lock: {lock_path}"
+        ) from error
+
+
+def _release_os_advisory_lock(descriptor: int) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+    elif os.name == "posix":
+        import fcntl
+
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+
+
+def _flush_directory(directory: Path) -> None:
+    """Persist directory metadata or fail closed when the platform cannot do so."""
+
+    try:
+        if os.name == "posix":
+            descriptor = os.open(directory, os.O_RDONLY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            return
+        if os.name == "nt":
+            _flush_windows_directory(directory)
+            return
+    except OSError as error:
+        raise RuntimeError(f"directory metadata flush failed: {directory}") from error
+    raise RuntimeError(f"directory metadata flush unsupported on {sys.platform}")
+
+
+def _flush_windows_directory(directory: Path) -> None:
+    import ctypes
+    from ctypes import wintypes
+
+    generic_read_write = 0xC0000000
+    share_read_write_delete = 0x00000007
+    open_existing = 3
+    file_flag_backup_semantics = 0x02000000
+    invalid_handle_value = ctypes.c_void_p(-1).value
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    handle = kernel32.CreateFileW(
+        str(directory),
+        generic_read_write,
+        share_read_write_delete,
+        None,
+        open_existing,
+        file_flag_backup_semantics,
+        None,
+    )
+    if handle == invalid_handle_value:
+        raise OSError(ctypes.get_last_error(), "CreateFileW directory failed")
+    try:
+        if not kernel32.FlushFileBuffers(wintypes.HANDLE(handle)):
+            raise OSError(ctypes.get_last_error(), "FlushFileBuffers directory failed")
+    finally:
+        kernel32.CloseHandle(wintypes.HANDLE(handle))
+
+
 def _write_temporary(directory: Path, payload: bytes) -> Path:
     descriptor, temporary = tempfile.mkstemp(prefix=".ip_lock.", dir=directory)
     try:
@@ -556,6 +666,7 @@ def _write_temporary(directory: Path, payload: bytes) -> Path:
     except Exception:
         Path(temporary).unlink(missing_ok=True)
         raise
+    _flush_directory(directory)
     return Path(temporary)
 
 
@@ -564,6 +675,7 @@ def _write_transaction_file(path: Path, payload: bytes) -> None:
         stream.write(payload)
         stream.flush()
         os.fsync(stream.fileno())
+    _flush_directory(path.parent)
 
 
 def _assert_exact_bytes(path: Path, expected: bytes) -> None:
@@ -583,14 +695,17 @@ def _sha256(payload: bytes) -> str:
 def _unlink_quietly(path: Path) -> None:
     try:
         path.unlink(missing_ok=True)
-    except OSError:
+        _flush_directory(path.parent)
+    except Exception:
         pass
 
 
 def _remove_transaction(transaction: Path) -> None:
     for path in transaction.iterdir():
         path.unlink()
+        _flush_directory(transaction)
     transaction.rmdir()
+    _flush_directory(transaction.parent)
 
 
 if __name__ == "__main__":

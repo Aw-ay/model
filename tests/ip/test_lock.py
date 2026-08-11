@@ -3,6 +3,7 @@ import hashlib
 import inspect
 from importlib import resources
 import json
+import multiprocessing
 import os
 from pathlib import Path
 import subprocess
@@ -83,6 +84,14 @@ def candidate_with_duplicate_family_key() -> bytes:
         {**payload, "families": None}, sort_keys=True
     ).replace('"families": null', f'"families": {duplicated}')
     return payload_json.encode("utf-8")
+
+
+def hold_repository_lock(root_lock: str, package_lock: str, ready, release) -> None:
+    from rfsoc_pulse_model.ip.lock import _repository_promotion_lock
+
+    with _repository_promotion_lock(Path(root_lock), Path(package_lock)):
+        ready.set()
+        release.wait(15)
 
 
 class ProductionLockTest(unittest.TestCase):
@@ -215,7 +224,7 @@ class ProductionLockTest(unittest.TestCase):
                     self.assertFalse(root_lock.exists())
                     self.assertFalse(package_lock.exists())
 
-    def test_promotion_refuses_an_active_repository_scope_lock(self) -> None:
+    def test_leftover_lock_path_from_a_crashed_owner_does_not_block_promotion(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             candidate = root / "candidate.json"
@@ -225,8 +234,46 @@ class ProductionLockTest(unittest.TestCase):
             lock_path = lock_module._promotion_lock_path(root_lock, package_lock)
             lock_path.write_text("other promotion", encoding="utf-8")
 
-            with self.assertRaisesRegex(RuntimeError, "promotion already in progress"):
-                promote_candidate_lock(candidate, root_lock, package_lock)
+            promote_candidate_lock(candidate, root_lock, package_lock)
+            self.assertEqual(root_lock.read_bytes(), package_lock.read_bytes())
+            self.assertEqual(recover_interrupted_promotion(root_lock, package_lock), 0)
+
+    def test_supported_concurrent_writer_is_rejected_by_os_advisory_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidate = root / "candidate.json"
+            candidate.write_bytes(candidate_bytes())
+            root_lock = root / "config/ip_lock.json"
+            package_lock = root / "src/rfsoc_pulse_model/config/ip_lock.json"
+            context = multiprocessing.get_context("spawn")
+            ready = context.Event()
+            release = context.Event()
+            holder = context.Process(
+                target=hold_repository_lock,
+                args=(str(root_lock), str(package_lock), ready, release),
+            )
+            holder.start()
+            self.assertTrue(ready.wait(10), "lock holder did not become ready")
+            try:
+                with self.assertRaisesRegex(RuntimeError, "another participating writer"):
+                    promote_candidate_lock(candidate, root_lock, package_lock)
+            finally:
+                release.set()
+                holder.join(10)
+            self.assertEqual(holder.exitcode, 0)
+
+    def test_promotion_rejects_targets_outside_the_exact_repository_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidate = root / "candidate.json"
+            candidate.write_bytes(candidate_bytes())
+
+            with self.assertRaisesRegex(ValueError, "exactly"):
+                promote_candidate_lock(
+                    candidate,
+                    root / "different/ip_lock.json",
+                    root / "src/rfsoc_pulse_model/config/ip_lock.json",
+                )
 
     def test_snapshot_retains_the_exact_initial_bytes_for_its_backup(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -237,7 +284,7 @@ class ProductionLockTest(unittest.TestCase):
 
             self.assertEqual(snapshot.contents, b"initial-bytes")
 
-    def test_promotion_cas_refuses_external_edit_since_snapshot(self) -> None:
+    def test_promotion_recheck_refuses_external_edit_since_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             candidate = root / "candidate.json"
@@ -268,6 +315,38 @@ class ProductionLockTest(unittest.TestCase):
 
             self.assertEqual(root_lock.read_bytes(), b"external-editor")
             self.assertEqual(package_lock.read_bytes(), b"old-package")
+
+    def test_nonparticipating_edit_in_replace_window_is_outside_lock_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidate = root / "candidate.json"
+            expected = candidate_bytes()
+            candidate.write_bytes(expected)
+            root_lock = root / "config/ip_lock.json"
+            package_lock = root / "src/rfsoc_pulse_model/config/ip_lock.json"
+            root_lock.parent.mkdir(parents=True)
+            package_lock.parent.mkdir(parents=True)
+            root_lock.write_bytes(b"old-root")
+            package_lock.write_bytes(b"old-package")
+            real_replace = lock_module.os.replace
+
+            def external_edit_before_real_replace(source, destination):
+                if Path(destination) == root_lock:
+                    root_lock.write_bytes(b"manual-editor")
+                return real_replace(source, destination)
+
+            with mock.patch.object(
+                lock_module.os,
+                "replace",
+                side_effect=external_edit_before_real_replace,
+            ):
+                promote_candidate_lock(candidate, root_lock, package_lock)
+
+            self.assertEqual(root_lock.read_bytes(), expected)
+            self.assertIn(
+                "cannot atomically protect non-participating editors",
+                lock_module.LOCK_WRITER_CONCURRENCY_CONTRACT,
+            )
 
     def test_failed_rollback_retains_recovery_data_and_recover_rolls_forward(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -318,6 +397,44 @@ class ProductionLockTest(unittest.TestCase):
             self.assertEqual(root_lock.read_bytes(), expected)
             self.assertEqual(package_lock.read_bytes(), expected)
             self.assertFalse(list(lock_module._transaction_root(root_lock, package_lock).glob("*")))
+
+    def test_directory_flush_failure_after_root_replace_preserves_recovery_material(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidate = root / "candidate.json"
+            expected = candidate_bytes()
+            candidate.write_bytes(expected)
+            root_lock = root / "config/ip_lock.json"
+            package_lock = root / "src/rfsoc_pulse_model/config/ip_lock.json"
+            root_lock.parent.mkdir(parents=True)
+            package_lock.parent.mkdir(parents=True)
+            root_lock.write_bytes(b"old-root")
+            package_lock.write_bytes(b"old-package")
+            original_flush = lock_module._flush_directory
+
+            def fail_after_root_replace(directory):
+                if (
+                    Path(directory) == root_lock.parent
+                    and root_lock.exists()
+                    and root_lock.read_bytes() == expected
+                ):
+                    raise RuntimeError("injected directory flush failure")
+                return original_flush(directory)
+
+            with mock.patch.object(
+                lock_module,
+                "_flush_directory",
+                side_effect=fail_after_root_replace,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "recovery required"):
+                    promote_candidate_lock(candidate, root_lock, package_lock)
+
+            transactions = list(
+                lock_module._transaction_root(root_lock, package_lock).glob("*")
+            )
+            self.assertEqual(len(transactions), 1)
+            self.assertTrue((transactions[0] / "journal.json").is_file())
+            self.assertTrue((transactions[0] / "root.before").is_file())
 
 
 if __name__ == "__main__":
