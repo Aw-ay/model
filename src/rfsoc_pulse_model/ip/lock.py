@@ -12,6 +12,7 @@ import argparse
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+import errno
 from enum import Enum
 import hashlib
 from importlib import resources
@@ -23,7 +24,6 @@ import stat
 import sys
 import tempfile
 from typing import Iterable
-import uuid
 
 from .catalog import validate_resolved_catalog
 from .evidence import build_catalog_request, canonical_json_bytes
@@ -41,20 +41,18 @@ _LOCK_KEYS = {
     "families",
 }
 _JOURNAL_KEYS = {
-    "transaction_schema_version",
+    "journal_schema_version",
+    "phase",
     "root_lock_path",
     "package_lock_path",
     "root_snapshot",
     "package_snapshot",
+    "new_lock_hex",
     "new_lock_sha256",
 }
-_SNAPSHOT_KEYS = {"exists", "sha256"}
+_SNAPSHOT_KEYS = {"exists", "sha256", "contents_hex"}
 _PROMOTION_LOCK_NAME = ".ip_lock.promotion.lock"
-_TRANSACTION_DIRECTORY = ".ip_lock.transactions"
-_TRANSACTION_FILENAMES = frozenset(
-    {"journal.json", "new.lock", "root.before", "package.before"}
-)
-_TRANSACTION_NAME_RE = re.compile(r"^[0-9a-f]{32}$")
+_PROMOTION_JOURNAL_NAME = ".ip_lock.promotion.json"
 LOCK_WRITER_CONCURRENCY_CONTRACT = (
     "Only promote/recover writers holding the same repository advisory lock are "
     "supported. Manual edits to config/ip_lock.json and "
@@ -170,7 +168,7 @@ def promote_candidate_lock(
 
 
 def recover_interrupted_promotion(root_lock_path: Path, package_lock_path: Path) -> int:
-    """Roll forward every interrupted promotion for these exact two targets.
+    """Roll forward the interrupted promotion for these exact two targets.
 
     Recovery only overwrites a target that still contains either its journaled
     pre-promotion bytes or the journaled new canonical lock.  Any other bytes
@@ -182,15 +180,11 @@ def recover_interrupted_promotion(root_lock_path: Path, package_lock_path: Path)
         root_lock_path, package_lock_path
     )
     with _repository_promotion_lock(root_lock, package_lock):
-        transaction_root = _transaction_root(root_lock, package_lock)
-        if not _lstat_exists(transaction_root):
+        journal_path = _promotion_journal_path(root_lock, package_lock)
+        if not _lstat_exists(journal_path):
             return 0
-        _assert_real_directory(transaction_root, "transaction root")
-        recovered = 0
-        for transaction in _trusted_transaction_entries(transaction_root):
-            _recover_transaction(transaction, root_lock, package_lock)
-            recovered += 1
-        return recovered
+        _recover_journal(journal_path, root_lock, package_lock)
+        return 1
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -212,7 +206,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     promote.add_argument("--package-lock", type=Path, required=True)
     recover = subcommands.add_parser(
         "recover",
-        help="roll forward interrupted transactions for one root/package lock pair",
+        help="roll forward an interrupted promotion journal for one root/package lock pair",
     )
     recover.add_argument("--root-lock", type=Path, required=True)
     recover.add_argument("--package-lock", type=Path, required=True)
@@ -345,13 +339,14 @@ def _promotion_lock_path(root_lock: Path, package_lock: Path) -> Path:
     return _transaction_scope(root_lock, package_lock) / _PROMOTION_LOCK_NAME
 
 
-def _transaction_root(root_lock: Path, package_lock: Path) -> Path:
-    return _transaction_scope(root_lock, package_lock) / _TRANSACTION_DIRECTORY
-
-
 def _transaction_scope(root_lock: Path, package_lock: Path) -> Path:
     del package_lock
     return root_lock.parent.parent
+
+
+def _promotion_journal_path(root_lock: Path, package_lock: Path) -> Path:
+    del package_lock
+    return root_lock.parent / _PROMOTION_JOURNAL_NAME
 
 
 def _promote_with_journal(root_lock: Path, package_lock: Path, lock_bytes: bytes) -> None:
@@ -361,23 +356,23 @@ def _promote_with_journal(root_lock: Path, package_lock: Path, lock_bytes: bytes
     _flush_directory(package_lock.parent)
     root_snapshot = _snapshot_target(root_lock)
     package_snapshot = _snapshot_target(package_lock)
-    transaction = _create_transaction(
+    journal_path = _write_promotion_journal(
         root_lock, package_lock, root_snapshot, package_snapshot, lock_bytes
     )
     temporary_paths: list[Path] = []
-    replaced: list[tuple[Path, _TargetSnapshot, str]] = []
+    replaced: list[tuple[Path, _TargetSnapshot]] = []
     try:
         temporary_paths = [
             _write_temporary(root_lock.parent, lock_bytes),
             _write_temporary(package_lock.parent, lock_bytes),
         ]
-        for target, snapshot, temporary, backup_name in (
-            (root_lock, root_snapshot, temporary_paths[0], "root.before"),
-            (package_lock, package_snapshot, temporary_paths[1], "package.before"),
+        for target, snapshot, temporary in (
+            (root_lock, root_snapshot, temporary_paths[0]),
+            (package_lock, package_snapshot, temporary_paths[1]),
         ):
             _assert_snapshot_current(target, snapshot)
             os.replace(temporary, target)
-            replaced.append((target, snapshot, backup_name))
+            replaced.append((target, snapshot))
             _flush_directory(target.parent)
         temporary_paths.clear()
         _assert_exact_bytes(root_lock, lock_bytes)
@@ -386,51 +381,43 @@ def _promote_with_journal(root_lock: Path, package_lock: Path, lock_bytes: bytes
         for temporary in temporary_paths:
             _unlink_quietly(temporary)
         if not replaced:
-            _remove_transaction(transaction)
+            _remove_promotion_journal(journal_path)
             raise RuntimeError(f"promotion target changed since snapshot: {error}") from error
-        rollback_errors = _attempt_rollback(transaction, replaced, lock_bytes)
+        rollback_errors = _attempt_rollback(replaced, lock_bytes)
         detail = "; ".join(rollback_errors) if rollback_errors else "rollback staged"
         raise RuntimeError(
             "promotion failed; recovery required; "
-            f"transaction={transaction}; {detail}; run `ip.lock recover`"
+            f"journal={journal_path}; {detail}; run `ip.lock recover`"
         ) from error
-    _remove_transaction(transaction)
+    _remove_promotion_journal(journal_path)
 
 
-def _create_transaction(
+def _write_promotion_journal(
     root_lock: Path,
     package_lock: Path,
     root_snapshot: _TargetSnapshot,
     package_snapshot: _TargetSnapshot,
     lock_bytes: bytes,
 ) -> Path:
-    transaction_root = _transaction_root(root_lock, package_lock)
-    transaction_root.mkdir(parents=True, exist_ok=True)
-    _assert_real_directory(transaction_root, "transaction root")
-    _flush_directory(transaction_root.parent)
-    transaction = transaction_root / uuid.uuid4().hex
-    transaction.mkdir()
-    _assert_trusted_transaction_directory(transaction, transaction_root)
-    _flush_directory(transaction_root)
+    journal_path = _promotion_journal_path(root_lock, package_lock)
+    journal = {
+        "journal_schema_version": 1,
+        "phase": "prepared",
+        "root_lock_path": str(root_lock),
+        "package_lock_path": str(package_lock),
+        "root_snapshot": _snapshot_payload(root_snapshot),
+        "package_snapshot": _snapshot_payload(package_snapshot),
+        "new_lock_hex": lock_bytes.hex(),
+        "new_lock_sha256": _sha256(lock_bytes),
+    }
+    temporary = _write_temporary(journal_path.parent, canonical_json_bytes(journal))
     try:
-        _write_transaction_file(transaction / "new.lock", lock_bytes)
-        _write_backup(transaction / "root.before", root_lock, root_snapshot)
-        _write_backup(transaction / "package.before", package_lock, package_snapshot)
-        journal = {
-            "transaction_schema_version": 1,
-            "root_lock_path": str(root_lock),
-            "package_lock_path": str(package_lock),
-            "root_snapshot": _snapshot_payload(root_snapshot),
-            "package_snapshot": _snapshot_payload(package_snapshot),
-            "new_lock_sha256": _sha256(lock_bytes),
-        }
-        _write_transaction_file(
-            transaction / "journal.json", canonical_json_bytes(journal)
-        )
-    except Exception:
-        _remove_transaction(transaction)
-        raise
-    return transaction
+        # Replacing a symlink replaces the link itself, never its target.
+        os.replace(temporary, journal_path)
+        _flush_directory(journal_path.parent)
+    finally:
+        _unlink_quietly(temporary)
+    return journal_path
 
 
 def _snapshot_target(target: Path) -> _TargetSnapshot:
@@ -443,13 +430,11 @@ def _snapshot_target(target: Path) -> _TargetSnapshot:
 
 
 def _snapshot_payload(snapshot: _TargetSnapshot) -> dict[str, object]:
-    return {"exists": snapshot.exists, "sha256": snapshot.sha256}
-
-
-def _write_backup(backup: Path, target: Path, snapshot: _TargetSnapshot) -> None:
-    if snapshot.exists:
-        assert snapshot.contents is not None
-        _write_transaction_file(backup, snapshot.contents)
+    return {
+        "exists": snapshot.exists,
+        "sha256": snapshot.sha256,
+        "contents_hex": snapshot.contents.hex() if snapshot.exists else None,
+    }
 
 
 def _assert_snapshot_current(target: Path, snapshot: _TargetSnapshot) -> None:
@@ -459,17 +444,17 @@ def _assert_snapshot_current(target: Path, snapshot: _TargetSnapshot) -> None:
 
 
 def _attempt_rollback(
-    transaction: Path,
-    replaced: list[tuple[Path, _TargetSnapshot, str]],
+    replaced: list[tuple[Path, _TargetSnapshot]],
     lock_bytes: bytes,
 ) -> list[str]:
     errors: list[str] = []
-    for target, snapshot, backup_name in reversed(replaced):
+    for target, snapshot in reversed(replaced):
         try:
             _assert_exact_bytes(target, lock_bytes)
             if snapshot.exists:
-                backup_bytes = _read_transaction_file(transaction, backup_name)
-                _assert_sha256(backup_bytes, snapshot.sha256, backup_name)
+                assert snapshot.contents is not None
+                backup_bytes = snapshot.contents
+                _assert_sha256(backup_bytes, snapshot.sha256, "journal snapshot")
                 temporary = _write_temporary(target.parent, backup_bytes)
                 try:
                     os.replace(temporary, target)
@@ -485,25 +470,22 @@ def _attempt_rollback(
     return errors
 
 
-def _recover_transaction(transaction: Path, root_lock: Path, package_lock: Path) -> None:
-    _assert_trusted_transaction_directory(transaction, transaction.parent)
-    journal = _read_journal(transaction)
+def _recover_journal(journal_path: Path, root_lock: Path, package_lock: Path) -> None:
+    journal = _read_journal(journal_path)
     if Path(journal["root_lock_path"]).resolve() != root_lock:
-        raise RuntimeError(f"transaction targets a different root lock: {transaction}")
+        raise RuntimeError(f"journal targets a different root lock: {journal_path}")
     if Path(journal["package_lock_path"]).resolve() != package_lock:
-        raise RuntimeError(f"transaction targets a different package lock: {transaction}")
+        raise RuntimeError(f"journal targets a different package lock: {journal_path}")
     root_snapshot = _parse_snapshot(journal["root_snapshot"], "root_snapshot")
     package_snapshot = _parse_snapshot(journal["package_snapshot"], "package_snapshot")
-    lock_bytes = _read_transaction_file(transaction, "new.lock")
+    lock_bytes = _decode_hex(journal["new_lock_hex"], "new_lock_hex")
     _assert_sha256(lock_bytes, journal["new_lock_sha256"], "new.lock")
     payload = decode_production_lock_json(lock_bytes, "journaled new lock")
     if lock_bytes != canonical_json_bytes(payload):
-        raise RuntimeError(f"journaled new lock is not canonical: {transaction}")
+        raise RuntimeError(f"journaled new lock is not canonical: {journal_path}")
     _validate_current_lock_payload(payload)
-    _assert_recovery_state(transaction, root_lock, root_snapshot, "root.before", lock_bytes)
-    _assert_recovery_state(
-        transaction, package_lock, package_snapshot, "package.before", lock_bytes
-    )
+    _assert_recovery_state(root_lock, root_snapshot, lock_bytes)
+    _assert_recovery_state(package_lock, package_snapshot, lock_bytes)
     temporary_paths = [
         _write_temporary(root_lock.parent, lock_bytes),
         _write_temporary(package_lock.parent, lock_bytes),
@@ -517,30 +499,33 @@ def _recover_transaction(transaction: Path, root_lock: Path, package_lock: Path)
         _assert_exact_bytes(package_lock, lock_bytes)
     except Exception as error:
         raise RuntimeError(
-            f"recovery required but roll-forward failed; transaction={transaction}"
+            f"recovery required but roll-forward failed; journal={journal_path}"
         ) from error
     finally:
         for temporary in temporary_paths:
             _unlink_quietly(temporary)
-    _remove_transaction(transaction)
+    _remove_promotion_journal(journal_path)
 
 
-def _read_journal(transaction: Path) -> Mapping[str, object]:
+def _read_journal(journal_path: Path) -> Mapping[str, object]:
     try:
         journal = decode_production_lock_json(
-            _read_transaction_file(transaction, "journal.json"), "promotion journal"
+            _read_promotion_journal_bytes(journal_path), "promotion journal"
         )
     except OSError as error:
-        raise RuntimeError(f"unable to read promotion journal: {transaction}") from error
+        raise RuntimeError(f"unable to read promotion journal: {journal_path}") from error
     if set(journal) != _JOURNAL_KEYS:
-        raise RuntimeError(f"invalid promotion journal keys: {transaction}")
-    if journal["transaction_schema_version"] != 1:
-        raise RuntimeError(f"unsupported promotion journal schema: {transaction}")
+        raise RuntimeError(f"invalid promotion journal keys: {journal_path}")
+    if journal["journal_schema_version"] != 1:
+        raise RuntimeError(f"unsupported promotion journal schema: {journal_path}")
+    if journal["phase"] != "prepared":
+        raise RuntimeError(f"unsupported promotion journal phase: {journal_path}")
     for key in ("root_lock_path", "package_lock_path", "new_lock_sha256"):
         if not isinstance(journal[key], str) or not journal[key]:
-            raise RuntimeError(f"invalid {key} in promotion journal: {transaction}")
+            raise RuntimeError(f"invalid {key} in promotion journal: {journal_path}")
     if not _SHA256_RE.fullmatch(journal["new_lock_sha256"]):
-        raise RuntimeError(f"invalid new_lock_sha256 in promotion journal: {transaction}")
+        raise RuntimeError(f"invalid new_lock_sha256 in promotion journal: {journal_path}")
+    _decode_hex(journal["new_lock_hex"], "new_lock_hex")
     return journal
 
 
@@ -554,23 +539,19 @@ def _parse_snapshot(value: object, name: str) -> _TargetSnapshot:
     if exists:
         if not isinstance(sha256, str) or not _SHA256_RE.fullmatch(sha256):
             raise RuntimeError(f"invalid {name}.sha256 in promotion journal")
-    elif sha256 is not None:
-        raise RuntimeError(f"invalid absent {name}.sha256 in promotion journal")
-    return _TargetSnapshot(exists=exists, sha256=sha256, contents=None)
+        contents = _decode_hex(value["contents_hex"], f"{name}.contents_hex")
+        _assert_sha256(contents, sha256, name)
+        return _TargetSnapshot(exists=True, sha256=sha256, contents=contents)
+    if sha256 is not None or value["contents_hex"] is not None:
+        raise RuntimeError(f"invalid absent {name} data in promotion journal")
+    return _TargetSnapshot(exists=False, sha256=None, contents=None)
 
 
 def _assert_recovery_state(
-    transaction: Path,
-    target: Path,
-    snapshot: _TargetSnapshot,
-    backup_name: str,
-    lock_bytes: bytes,
+    target: Path, snapshot: _TargetSnapshot, lock_bytes: bytes
 ) -> None:
     current = _read_target_or_none(target)
-    expected_before = None
-    if snapshot.exists:
-        expected_before = _read_transaction_file(transaction, backup_name)
-        _assert_sha256(expected_before, snapshot.sha256, backup_name)
+    expected_before = snapshot.contents if snapshot.exists else None
     if current not in {expected_before, lock_bytes}:
         raise RuntimeError(
             f"recovery required but target has external bytes: {target}; journal retained"
@@ -679,33 +660,6 @@ def _write_temporary(directory: Path, payload: bytes) -> Path:
     return Path(temporary)
 
 
-def _write_transaction_file(path: Path, payload: bytes) -> None:
-    _assert_trusted_transaction_directory(path.parent, path.parent.parent)
-    if path.name not in _TRANSACTION_FILENAMES:
-        raise RuntimeError(f"unsafe transaction filename: {path.name}")
-    if os.name == "posix":
-        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-        directory_flags |= getattr(os, "O_NOFOLLOW", 0)
-        directory_descriptor = os.open(path.parent, directory_flags)
-        try:
-            file_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-            file_flags |= getattr(os, "O_NOFOLLOW", 0)
-            descriptor = os.open(path.name, file_flags, 0o600, dir_fd=directory_descriptor)
-            with os.fdopen(descriptor, "wb") as stream:
-                stream.write(payload)
-                stream.flush()
-                os.fsync(stream.fileno())
-        finally:
-            os.close(directory_descriptor)
-    else:
-        with path.open("xb") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-    _assert_regular_transaction_file(path.parent, path.name)
-    _flush_directory(path.parent)
-
-
 def _lstat_exists(path: Path) -> bool:
     try:
         os.lstat(path)
@@ -714,112 +668,118 @@ def _lstat_exists(path: Path) -> bool:
     return True
 
 
-def _is_link_or_reparse(path: Path) -> bool:
-    """Return whether *path* is a link-like object without following it."""
+def _read_promotion_journal_bytes(journal_path: Path) -> bytes:
+    """Read the fixed journal without following a symlink or reparse point."""
 
-    info = os.lstat(path)
-    if stat.S_ISLNK(info.st_mode):
-        return True
-    is_junction = getattr(path, "is_junction", None)
-    if callable(is_junction) and is_junction():
-        return True
-    if os.name == "nt":
-        attributes = getattr(info, "st_file_attributes", 0)
-        reparse_point = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400)
-        if attributes & reparse_point:
-            return True
-    return False
-
-
-def _assert_real_directory(path: Path, description: str) -> None:
-    try:
-        info = os.lstat(path)
-    except OSError as error:
-        raise RuntimeError(f"unable to inspect {description}: {path}") from error
-    if _is_link_or_reparse(path):
-        raise RuntimeError(f"unsafe {description}: symlink or reparse point: {path}")
-    if not stat.S_ISDIR(info.st_mode):
-        raise RuntimeError(f"unsafe {description}: not a directory: {path}")
-
-
-def _assert_trusted_transaction_directory(
-    transaction: Path, transaction_root: Path
-) -> None:
-    if transaction_root.name != _TRANSACTION_DIRECTORY:
-        raise RuntimeError(f"unsafe transaction root name: {transaction_root}")
-    if transaction.parent != transaction_root:
-        raise RuntimeError(f"unsafe transaction outside transaction root: {transaction}")
-    if not _TRANSACTION_NAME_RE.fullmatch(transaction.name):
-        raise RuntimeError(f"unsafe transaction name: {transaction.name}")
-    _assert_real_directory(transaction_root, "transaction root")
-    _assert_real_directory(transaction, "transaction entry")
-
-
-def _trusted_transaction_entries(transaction_root: Path) -> Iterator[Path]:
-    _assert_real_directory(transaction_root, "transaction root")
-    for name in sorted(_list_real_directory(transaction_root, "transaction root")):
-        transaction = transaction_root / name
-        _assert_trusted_transaction_directory(transaction, transaction_root)
-        yield transaction
-
-
-def _list_real_directory(directory: Path, description: str) -> list[str]:
-    _assert_real_directory(directory, description)
-    if os.name != "posix":
-        return list(os.listdir(directory))
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    flags |= getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(directory, flags)
-    try:
-        return list(os.listdir(descriptor))
-    finally:
-        os.close(descriptor)
-
-
-def _assert_regular_transaction_file(transaction: Path, name: str) -> Path:
-    if name not in _TRANSACTION_FILENAMES:
-        raise RuntimeError(f"unsafe transaction filename: {name}")
-    _assert_trusted_transaction_directory(transaction, transaction.parent)
-    path = transaction / name
-    try:
-        info = os.lstat(path)
-    except OSError as error:
-        raise RuntimeError(f"unable to inspect transaction file: {path}") from error
-    if _is_link_or_reparse(path):
-        raise RuntimeError(f"unsafe transaction file symlink or reparse point: {path}")
-    if not stat.S_ISREG(info.st_mode):
-        raise RuntimeError(f"unsafe transaction file is not regular: {path}")
-    return path
-
-
-def _read_transaction_file(transaction: Path, name: str) -> bytes:
-    """Read a whitelisted ordinary transaction file without following links."""
-
-    path = _assert_regular_transaction_file(transaction, name)
-    if os.name != "posix":
-        # Windows has no dir_fd/O_NOFOLLOW equivalent in this module.  Rejecting
-        # every reparse object before opening is the fail-closed contract.
-        return path.read_bytes()
-
-    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    directory_flags |= getattr(os, "O_NOFOLLOW", 0)
-    directory_descriptor = os.open(transaction, directory_flags)
-    try:
-        file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(name, file_flags, dir_fd=directory_descriptor)
+    if os.name == "posix":
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(journal_path, flags)
+        except OSError as error:
+            if error.errno == errno.ELOOP:
+                raise RuntimeError(
+                    f"unsafe promotion journal symlink: {journal_path}"
+                ) from error
+            raise
         try:
             if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-                raise RuntimeError(f"unsafe transaction file is not regular: {path}")
-            chunks: list[bytes] = []
-            while True:
-                chunk = os.read(descriptor, 65536)
-                if not chunk:
-                    return b"".join(chunks)
-                chunks.append(chunk)
+                raise RuntimeError(f"unsafe promotion journal is not a regular file: {journal_path}")
+            return _read_descriptor_bytes(descriptor)
+        finally:
+            os.close(descriptor)
+    if os.name == "nt":
+        return _read_windows_regular_journal_no_reparse(journal_path)
+    raise RuntimeError(f"promotion journal no-follow read unsupported on {sys.platform}")
+
+
+def _read_descriptor_bytes(descriptor: int) -> bytes:
+    chunks: list[bytes] = []
+    while True:
+        chunk = os.read(descriptor, 65536)
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
+
+
+def _read_windows_regular_journal_no_reparse(journal_path: Path) -> bytes:
+    """Bind a Windows handle to the journal before inspecting or reading it."""
+
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    generic_read = 0x80000000
+    share_read_write_delete = 0x00000007
+    open_existing = 3
+    file_attribute_directory = 0x0010
+    file_attribute_reparse_point = 0x0400
+    file_flag_backup_semantics = 0x02000000
+    file_flag_open_reparse_point = 0x00200000
+    invalid_handle_value = ctypes.c_void_p(-1).value
+
+    class _FileTime(ctypes.Structure):
+        _fields_ = [("low", wintypes.DWORD), ("high", wintypes.DWORD)]
+
+    class _ByHandleFileInformation(ctypes.Structure):
+        _fields_ = [
+            ("file_attributes", wintypes.DWORD),
+            ("creation_time", _FileTime),
+            ("last_access_time", _FileTime),
+            ("last_write_time", _FileTime),
+            ("volume_serial_number", wintypes.DWORD),
+            ("file_size_high", wintypes.DWORD),
+            ("file_size_low", wintypes.DWORD),
+            ("number_of_links", wintypes.DWORD),
+            ("file_index_high", wintypes.DWORD),
+            ("file_index_low", wintypes.DWORD),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    )
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.GetFileInformationByHandle.argtypes = (
+        wintypes.HANDLE,
+        ctypes.POINTER(_ByHandleFileInformation),
+    )
+    kernel32.GetFileInformationByHandle.restype = wintypes.BOOL
+    handle = kernel32.CreateFileW(
+        str(journal_path),
+        generic_read,
+        share_read_write_delete,
+        None,
+        open_existing,
+        file_flag_open_reparse_point | file_flag_backup_semantics,
+        None,
+    )
+    if handle == invalid_handle_value:
+        raise OSError(ctypes.get_last_error(), "CreateFileW promotion journal failed")
+    try:
+        information = _ByHandleFileInformation()
+        if not kernel32.GetFileInformationByHandle(
+            wintypes.HANDLE(handle), ctypes.byref(information)
+        ):
+            raise OSError(ctypes.get_last_error(), "GetFileInformationByHandle failed")
+        if information.file_attributes & file_attribute_reparse_point:
+            raise RuntimeError(f"unsafe promotion journal reparse point: {journal_path}")
+        if information.file_attributes & file_attribute_directory:
+            raise RuntimeError(f"unsafe promotion journal is a directory: {journal_path}")
+        descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY)
+        handle = None
+        try:
+            return _read_descriptor_bytes(descriptor)
         finally:
             os.close(descriptor)
     finally:
-        os.close(directory_descriptor)
+        if handle is not None:
+            kernel32.CloseHandle(wintypes.HANDLE(handle))
 
 
 def _assert_exact_bytes(path: Path, expected: bytes) -> None:
@@ -844,53 +804,34 @@ def _unlink_quietly(path: Path) -> None:
         pass
 
 
-def _remove_transaction(transaction: Path) -> None:
-    """Remove only a fully verified transaction directory.
+def _decode_hex(value: object, description: str) -> bytes:
+    if not isinstance(value, str):
+        raise RuntimeError(f"invalid {description} in promotion journal")
+    try:
+        return bytes.fromhex(value)
+    except ValueError as error:
+        raise RuntimeError(f"invalid {description} in promotion journal") from error
 
-    Recovery material is untrusted after a crash.  In particular, never walk
-    arbitrary children here: an unexpected object means an operator must retain
-    the whole directory for inspection or explicit recovery.
+
+def _remove_promotion_journal(journal_path: Path) -> None:
+    """Unlink only the fixed journal pathname, never a directory tree.
+
+    `unlink` operates on the link object itself on both supported platforms;
+    it does not follow a swapped symlink.  A directory or junction fails closed
+    and keeps the material for explicit operator recovery.
     """
 
-    transaction_root = transaction.parent
-    _assert_trusted_transaction_directory(transaction, transaction_root)
-    names = set(_list_real_directory(transaction, "transaction entry"))
-    unknown = names - _TRANSACTION_FILENAMES
-    if unknown:
-        raise RuntimeError(
-            "unknown transaction entry; recovery material retained: "
-            f"{sorted(unknown)}"
-        )
-    # Validate every object before unlinking any one of them, so an unsafe
-    # known-name object cannot produce a partial cleanup either.
-    for name in names:
-        _assert_regular_transaction_file(transaction, name)
-
-    if os.name == "posix":
-        root_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-        root_flags |= getattr(os, "O_NOFOLLOW", 0)
-        root_descriptor = os.open(transaction_root, root_flags)
-        try:
-            transaction_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-            transaction_flags |= getattr(os, "O_NOFOLLOW", 0)
-            transaction_descriptor = os.open(
-                transaction.name, transaction_flags, dir_fd=root_descriptor
-            )
-            try:
-                for name in sorted(names):
-                    os.unlink(name, dir_fd=transaction_descriptor)
-                    _flush_directory(transaction)
-            finally:
-                os.close(transaction_descriptor)
-            os.rmdir(transaction.name, dir_fd=root_descriptor)
-        finally:
-            os.close(root_descriptor)
-    else:
-        for name in sorted(names):
-            (transaction / name).unlink()
-            _flush_directory(transaction)
-        transaction.rmdir()
-    _flush_directory(transaction_root)
+    try:
+        info = os.lstat(journal_path)
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(info.st_mode):
+        raise RuntimeError(f"unsafe promotion journal directory retained: {journal_path}")
+    try:
+        os.unlink(journal_path)
+    except OSError as error:
+        raise RuntimeError(f"unable to remove promotion journal: {journal_path}") from error
+    _flush_directory(journal_path.parent)
 
 
 if __name__ == "__main__":

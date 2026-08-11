@@ -94,7 +94,7 @@ def hold_repository_lock(root_lock: str, package_lock: str, ready, release) -> N
         release.wait(15)
 
 
-def write_recovery_transaction(root: Path, transaction: Path) -> tuple[Path, Path, Path]:
+def write_recovery_journal(root: Path) -> tuple[Path, Path, Path, Path]:
     root_lock = root / "config/ip_lock.json"
     package_lock = root / "src/rfsoc_pulse_model/config/ip_lock.json"
     root_lock.parent.mkdir(parents=True, exist_ok=True)
@@ -104,26 +104,27 @@ def write_recovery_transaction(root: Path, transaction: Path) -> tuple[Path, Pat
     root_lock.write_bytes(root_before)
     package_lock.write_bytes(package_before)
     new_lock = candidate_bytes()
-    transaction.mkdir(parents=True)
-    (transaction / "new.lock").write_bytes(new_lock)
-    (transaction / "root.before").write_bytes(root_before)
-    (transaction / "package.before").write_bytes(package_before)
+    journal_path = root_lock.parent / ".ip_lock.promotion.json"
     journal = {
-        "transaction_schema_version": 1,
+        "journal_schema_version": 1,
+        "phase": "prepared",
         "root_lock_path": str(root_lock.resolve()),
         "package_lock_path": str(package_lock.resolve()),
         "root_snapshot": {
             "exists": True,
             "sha256": hashlib.sha256(root_before).hexdigest(),
+            "contents_hex": root_before.hex(),
         },
         "package_snapshot": {
             "exists": True,
             "sha256": hashlib.sha256(package_before).hexdigest(),
+            "contents_hex": package_before.hex(),
         },
+        "new_lock_hex": new_lock.hex(),
         "new_lock_sha256": hashlib.sha256(new_lock).hexdigest(),
     }
-    (transaction / "journal.json").write_bytes(canonical_json_bytes(journal))
-    return root_lock, package_lock, new_lock
+    journal_path.write_bytes(canonical_json_bytes(journal))
+    return root_lock, package_lock, new_lock, journal_path
 
 
 class ProductionLockTest(unittest.TestCase):
@@ -414,13 +415,16 @@ class ProductionLockTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "recovery required"):
                     promote_candidate_lock(candidate, root_lock, package_lock)
 
-            transaction_dirs = list(
-                lock_module._transaction_root(root_lock, package_lock).glob("*")
+            journal_path = lock_module._promotion_journal_path(root_lock, package_lock)
+            self.assertTrue(journal_path.is_file())
+            journal = lock_module.decode_production_lock_json(
+                journal_path.read_bytes(), "test promotion journal"
             )
-            self.assertEqual(len(transaction_dirs), 1)
-            self.assertTrue((transaction_dirs[0] / "journal.json").is_file())
-            self.assertTrue((transaction_dirs[0] / "root.before").is_file())
-            self.assertTrue((transaction_dirs[0] / "package.before").is_file())
+            self.assertEqual(journal["new_lock_hex"], expected.hex())
+            self.assertEqual(journal["root_snapshot"]["contents_hex"], b"old-root".hex())
+            self.assertEqual(
+                journal["package_snapshot"]["contents_hex"], b"old-package".hex()
+            )
             self.assertEqual(root_lock.read_bytes(), expected)
             self.assertEqual(package_lock.read_bytes(), b"old-package")
 
@@ -428,7 +432,7 @@ class ProductionLockTest(unittest.TestCase):
 
             self.assertEqual(root_lock.read_bytes(), expected)
             self.assertEqual(package_lock.read_bytes(), expected)
-            self.assertFalse(list(lock_module._transaction_root(root_lock, package_lock).glob("*")))
+            self.assertFalse(journal_path.exists())
 
     def test_directory_flush_failure_after_root_replace_preserves_recovery_material(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -461,112 +465,120 @@ class ProductionLockTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "recovery required"):
                     promote_candidate_lock(candidate, root_lock, package_lock)
 
-            transactions = list(
-                lock_module._transaction_root(root_lock, package_lock).glob("*")
-            )
-            self.assertEqual(len(transactions), 1)
-            self.assertTrue((transactions[0] / "journal.json").is_file())
-            self.assertTrue((transactions[0] / "root.before").is_file())
+            journal_path = lock_module._promotion_journal_path(root_lock, package_lock)
+            self.assertTrue(journal_path.is_file())
 
-    @unittest.skipIf(os.name == "nt", "Windows has no unprivileged directory symlink")
-    def test_recovery_rejects_transaction_entry_symlink_without_touching_external_data(self) -> None:
+    @unittest.skipIf(os.name == "nt", "Windows symlink permission is host dependent")
+    def test_recovery_rejects_journal_symlink_without_touching_external_data(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            external = root / "external"
-            transaction = external / ("a" * 32)
-            root_lock, package_lock, _ = write_recovery_transaction(root, transaction)
-            marker = external / "do-not-delete.txt"
+            root_lock, package_lock, _, journal_path = write_recovery_journal(root)
+            external = root / "external-journal.json"
+            external.write_bytes(journal_path.read_bytes())
+            marker = root / "do-not-delete.txt"
             marker.write_bytes(b"external data")
-            transaction_root = lock_module._transaction_root(root_lock, package_lock)
-            transaction_root.mkdir()
-            os.symlink(transaction, transaction_root / transaction.name, target_is_directory=True)
+            journal_path.unlink()
+            os.symlink(external, journal_path)
 
             with self.assertRaisesRegex(RuntimeError, "symlink|unsafe"):
                 recover_interrupted_promotion(root_lock, package_lock)
 
             self.assertEqual(marker.read_bytes(), b"external data")
+            self.assertEqual(external.read_bytes(), canonical_json_bytes(lock_module.decode_production_lock_json(external.read_bytes(), "external")))
             self.assertEqual(root_lock.read_bytes(), b"root-before")
             self.assertEqual(package_lock.read_bytes(), b"package-before")
 
-    def test_recovery_rejects_windows_reparse_transaction_entry_without_traversal(self) -> None:
+    @unittest.skipUnless(os.name == "nt", "real NTFS junction probe")
+    def test_recovery_rejects_windows_junction_journal_without_touching_external_data(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            root_lock = root / "config/ip_lock.json"
-            package_lock = root / "src/rfsoc_pulse_model/config/ip_lock.json"
-            transaction_root = lock_module._transaction_root(root_lock, package_lock)
-            transaction = transaction_root / ("b" * 32)
-            transaction.mkdir(parents=True)
-            marker = transaction / "do-not-delete.txt"
+            root_lock, package_lock, _, journal_path = write_recovery_journal(root)
+            external = root / "external"
+            external.mkdir()
+            marker = external / "do-not-delete.txt"
             marker.write_bytes(b"external data")
-            original = lock_module._is_link_or_reparse
-
-            with mock.patch.object(
-                lock_module,
-                "_is_link_or_reparse",
-                side_effect=lambda path: Path(path) == transaction or original(path),
-            ):
-                with self.assertRaisesRegex(RuntimeError, "reparse|unsafe"):
-                    recover_interrupted_promotion(root_lock, package_lock)
-
+            journal_path.unlink()
+            completed = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(journal_path), str(external)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            with self.assertRaisesRegex(RuntimeError, "reparse|unsafe"):
+                recover_interrupted_promotion(root_lock, package_lock)
             self.assertEqual(marker.read_bytes(), b"external data")
 
-    def test_recovery_rejects_windows_reparse_transaction_root_without_traversal(self) -> None:
+    @unittest.skipUnless(os.name == "nt", "real NTFS junction probe")
+    def test_windows_journal_handle_survives_junction_swap_without_external_delete(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            root_lock = root / "config/ip_lock.json"
-            package_lock = root / "src/rfsoc_pulse_model/config/ip_lock.json"
-            transaction_root = lock_module._transaction_root(root_lock, package_lock)
-            transaction_root.mkdir(parents=True)
-            marker = transaction_root / "do-not-delete.txt"
+            root_lock, package_lock, expected, journal_path = write_recovery_journal(root)
+            external = root / "external"
+            external.mkdir()
+            marker = external / "do-not-delete.txt"
             marker.write_bytes(b"external data")
-            original = lock_module._is_link_or_reparse
+            original_read = lock_module._read_descriptor_bytes
+            swapped = False
+
+            def swap_after_handle_is_open(descriptor):
+                nonlocal swapped
+                if not swapped:
+                    swapped = True
+                    journal_path.unlink()
+                    completed = subprocess.run(
+                        ["cmd", "/c", "mklink", "/J", str(journal_path), str(external)],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(completed.returncode, 0, completed.stderr)
+                return original_read(descriptor)
 
             with mock.patch.object(
-                lock_module,
-                "_is_link_or_reparse",
-                side_effect=lambda path: Path(path) == transaction_root or original(path),
+                lock_module, "_read_descriptor_bytes", side_effect=swap_after_handle_is_open
             ):
-                with self.assertRaisesRegex(RuntimeError, "reparse|unsafe"):
+                with self.assertRaisesRegex(RuntimeError, "unsafe promotion journal directory"):
                     recover_interrupted_promotion(root_lock, package_lock)
 
+            self.assertTrue(swapped)
             self.assertEqual(marker.read_bytes(), b"external data")
+            self.assertEqual(root_lock.read_bytes(), expected)
+            self.assertEqual(package_lock.read_bytes(), expected)
+            journal_path.rmdir()
 
-    def test_recovery_rejects_reparse_journal_without_touching_targets(self) -> None:
+    def test_journal_cleanup_unlinks_a_swapped_symlink_not_external_data(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            transaction = root / ".ip_lock.transactions" / ("d" * 32)
-            root_lock, package_lock, _ = write_recovery_transaction(root, transaction)
-            journal = transaction / "journal.json"
-            original = lock_module._is_link_or_reparse
+            journal = root / "config/.ip_lock.promotion.json"
+            journal.parent.mkdir()
+            external = root / "external-journal.json"
+            external.write_bytes(b"external data")
+            try:
+                os.symlink(external, journal)
+            except OSError as error:
+                self.skipTest(f"symlink creation unavailable: {error}")
 
-            with mock.patch.object(
-                lock_module,
-                "_is_link_or_reparse",
-                side_effect=lambda path: Path(path) == journal or original(path),
-            ):
-                with self.assertRaisesRegex(RuntimeError, "reparse|unsafe"):
-                    recover_interrupted_promotion(root_lock, package_lock)
+            lock_module._remove_promotion_journal(journal)
 
-            self.assertTrue(journal.is_file())
+            self.assertFalse(journal.exists())
+            self.assertEqual(external.read_bytes(), b"external data")
+
+    def test_recovery_rejects_duplicate_journal_keys_without_target_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            root_lock, package_lock, _, journal_path = write_recovery_journal(root)
+            raw = journal_path.read_text(encoding="utf-8")
+            journal_path.write_text(
+                raw.removesuffix("}\n") + ',\n  "phase": "prepared"\n}\n',
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
+                recover_interrupted_promotion(root_lock, package_lock)
+
             self.assertEqual(root_lock.read_bytes(), b"root-before")
             self.assertEqual(package_lock.read_bytes(), b"package-before")
-
-    def test_transaction_cleanup_rejects_unknown_entry_and_preserves_all_material(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            transaction = root / ".ip_lock.transactions" / ("c" * 32)
-            root_lock, package_lock, _ = write_recovery_transaction(root, transaction)
-            unknown = transaction / "unexpected.txt"
-            unknown.write_bytes(b"do not delete")
-
-            with self.assertRaisesRegex(RuntimeError, "unknown transaction entry"):
-                lock_module._remove_transaction(transaction)
-
-            self.assertTrue((transaction / "journal.json").is_file())
-            self.assertTrue((transaction / "new.lock").is_file())
-            self.assertEqual(unknown.read_bytes(), b"do not delete")
-            self.assertTrue(root_lock.is_file())
-            self.assertTrue(package_lock.is_file())
 
 
 if __name__ == "__main__":
