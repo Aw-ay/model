@@ -1,68 +1,70 @@
 import hashlib
+import json
 from pathlib import Path
 import tempfile
 import unittest
 
 from rfsoc_pulse_model.ip.generate import generate_ip_architecture
-from rfsoc_pulse_model.ip.registry import ArchitectureRegistry
-from rfsoc_pulse_model.ip.tcl import emit_ip_skeleton_tcl
+from rfsoc_pulse_model.ip.tcl import (
+    emit_architecture_realization_tcl,
+    emit_catalog_discovery_tcl,
+)
 from rfsoc_pulse_model.ip.types import HardwareArchitectureConfig
 
 
-class IpSkeletonTclTest(unittest.TestCase):
-    @staticmethod
-    def emitted() -> str:
-        return emit_ip_skeleton_tcl(
-            HardwareArchitectureConfig.load_default(),
-            ArchitectureRegistry.default(),
-        )
+class IpArchitectureTclTest(unittest.TestCase):
+    def test_discovery_queries_every_required_family_without_creating_cells(self) -> None:
+        config = HardwareArchitectureConfig.load_default()
+        tcl = emit_catalog_discovery_tcl(config)
 
-    def test_tcl_requires_exact_rfdc_and_marks_skeleton_nonaccepted(self) -> None:
-        tcl = self.emitted()
+        for family in config.required_families():
+            self.assertIn(f"{{{family.family_id}}}", tcl)
+            self.assertIn(f"{{{family.catalog_pattern}}}", tcl)
+        self.assertNotIn("create_bd_cell", tcl)
+        self.assertNotIn("create_project", tcl)
+        self.assertNotIn("create_bd_design", tcl)
+        self.assertIn("llength $argv", tcl)
+        self.assertIn("catalog_evidence.tsv", tcl)
 
-        self.assertIn(
-            "set rfdc_vlnv {xilinx.com:ip:usp_rf_data_converter:2.6}",
-            tcl,
-        )
-        self.assertIn("require_exact_ip $rfdc_vlnv", tcl)
-        self.assertIn(
-            "create_bd_cell -type ip -vlnv $rfdc_vlnv rfdc", tcl
-        )
-        self.assertIn("set topology_status {unconnected_skeleton}", tcl)
-        self.assertIn("set integration_accepted 0", tcl)
-        self.assertIn("IP_ARCHITECTURE_STATUS=UNCONNECTED_SKELETON", tcl)
+    def test_realization_creates_only_materialized_instances(self) -> None:
+        config = HardwareArchitectureConfig.load_default()
+        tcl = emit_architecture_realization_tcl(config)
+
+        self.assertIn("create_bd_cell", tcl)
+        self.assertIn("{rfdc_0}", tcl)
+        self.assertNotIn("monitor_fir_dec2_0", tcl)
+        self.assertNotIn("axis_data_fifo", tcl)
         self.assertNotIn("validate_bd_design", tcl)
 
-    def test_tcl_declares_initial_axis_and_fir_cells(self) -> None:
-        tcl = self.emitted()
-
-        for logical_name in (
-            "axis_register_slice",
-            "axis_data_fifo",
-            "axis_clock_converter",
-            "axis_dwidth_converter",
-            "axis_combiner",
-            "axis_broadcaster",
-            "axis_switch",
-            "fir_compiler",
-        ):
-            self.assertIn(f"resolve_catalog_ip {{{logical_name}}}", tcl)
-            self.assertIn(
-                f"create_bd_cell -type ip -vlnv $resolved_vlnv {{{logical_name}}}",
-                tcl,
-            )
-        self.assertNotIn("rx_group_ingress_2spc", tcl)
-        self.assertNotIn("tx_iq_axis_boundary_2spc", tcl)
-
-    def test_generated_metadata_hashes_the_exact_tcl_bytes(self) -> None:
+    def test_request_hash_order_and_tcl_provenance_are_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             architecture = generate_ip_architecture(root)
-            tcl_bytes = (root / "vivado/create_ip_architecture.tcl").read_bytes()
+            discovery = (root / "vivado/discover_ip_catalog.tcl").read_bytes()
+            realization = (
+                root / "vivado/realize_ip_architecture.tcl"
+            ).read_bytes()
+            request_bytes = (root / "metadata/catalog_request.json").read_bytes()
+            request = json.loads(request_bytes)
 
             self.assertEqual(
-                architecture["generated_tcl_sha256"],
-                hashlib.sha256(tcl_bytes).hexdigest(),
+                request["architecture_config_sha256"],
+                architecture["source_config_sha256"],
+            )
+            self.assertEqual(
+                request["generated_tcl_sha256"],
+                hashlib.sha256(discovery).hexdigest(),
+            )
+            self.assertEqual(
+                architecture["realization_tcl_sha256"],
+                hashlib.sha256(realization).hexdigest(),
+            )
+            self.assertEqual(
+                architecture["catalog_request_sha256"],
+                hashlib.sha256(request_bytes).hexdigest(),
+            )
+            self.assertNotIn(
+                request["generated_tcl_sha256"], discovery.decode("utf-8")
             )
 
 
