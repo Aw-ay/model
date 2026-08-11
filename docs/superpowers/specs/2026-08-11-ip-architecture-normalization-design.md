@@ -140,7 +140,8 @@ Each block contains:
 
 - a stable block identifier;
 - implementation kind;
-- a nonempty responsibility list;
+- production responsibilities or legacy reference responsibilities according
+  to its implementation kind;
 - zero or more `instance_refs`;
 - architecture status;
 - `production_accepted` as a strict boolean;
@@ -173,6 +174,23 @@ implementation kind must have `architecture_status == frozen`. This makes the
 pending implementation state explicit in the same type system used for AMD IP,
 custom RTL, and XPM ownership while preventing contradictory combinations.
 
+Responsibility fields are mutually exclusive by implementation kind:
+
+```text
+implementation_kind != legacy_non_production
+    -> responsibilities is nonempty
+    -> reference_responsibilities is empty
+
+implementation_kind == legacy_non_production
+    -> responsibilities is empty
+    -> reference_responsibilities is nonempty
+    -> production_accepted == false
+```
+
+Every legacy reference responsibility uses the reserved
+`legacy_reference.` prefix. Production responsibilities must not use that
+prefix.
+
 `fractional_delay_bank` owns fractional-delay processing and coefficient-set
 scheduling while remaining truthful about its maturity:
 
@@ -204,13 +222,32 @@ name in the integration object and a different concrete IP instance.
 
 `required_responsibilities` is the exact required set for production
 architecture ownership. Validation compares it with responsibilities owned by
-architecture blocks.
+all blocks except `legacy_non_production` blocks.
 
 For every required responsibility there must be exactly one block owner:
 
 - a missing owner is an error;
 - multiple owners are an error;
 - a block declaring an unknown responsibility is an error.
+
+The machine scope is:
+
+```text
+production_owner_map = {
+    responsibility -> block
+    for block in architecture_blocks
+    if block.implementation_kind != legacy_non_production
+    for responsibility in block.responsibilities
+}
+
+set(production_owner_map.keys()) == set(required_responsibilities)
+```
+
+Legacy `reference_responsibilities` are validated for syntax, reserved prefix,
+and uniqueness in their own reference namespace. They never enter
+`production_owner_map`, never satisfy a required production responsibility,
+and never trigger an unknown-production-responsibility error. Conversely, a
+legacy block that claims any production `responsibilities` value is invalid.
 
 A block may own a responsibility while `production_accepted` is false. This is
 necessary for an architecture-pending block to remain the unambiguous owner
@@ -273,6 +310,13 @@ This is the expected truthful foundation state.
 
 Catalog discovery and architecture realization are separate phases.
 
+They are emitted as separate generated artifacts:
+
+```text
+build/vivado/discover_ip_catalog.tcl
+build/vivado/realize_ip_architecture.tcl
+```
+
 ### 5.1 Catalog discovery
 
 Discovery queries every required family with `get_ipdefs`. It does not call
@@ -286,7 +330,7 @@ on a subset.
 
 ### 5.2 Architecture realization
 
-The realization phase iterates IP instances, not families. It emits a BD cell
+The realization Tcl iterates IP instances, not families. It emits a BD cell
 only for a materialized instance and uses the instance name as the stable cell
 name. Planned and retired instances never produce cells.
 
@@ -301,7 +345,7 @@ Hashes are generated in the following strict acyclic order:
 ```text
 1. canonical architecture config bytes
        -> architecture_config_sha256
-2. generated Tcl bytes
+2. generated discover_ip_catalog.tcl bytes
        -> generated_tcl_sha256
 3. canonical catalog_request.json bytes
        -> catalog_request_sha256
@@ -309,7 +353,8 @@ Hashes are generated in the following strict acyclic order:
 5. validated ip_lock.candidate.json
 ```
 
-The Tcl is generated from the parsed architecture configuration but contains
+The discovery Tcl is generated from the parsed architecture configuration but
+contains
 none of `generated_tcl_sha256`, `catalog_request_sha256`, or the future evidence
 hash. Therefore it never includes its own digest. The request is generated only
 after the Tcl bytes are final and records:
@@ -325,6 +370,21 @@ its SHA-256 covers those exact bytes. The Vivado invocation passes the three
 current hashes to the generated Tcl as explicit Tcl arguments. The Tcl validates
 the argument count and writes those values into the external evidence. It does
 not rewrite the request or regenerate any input artifact.
+
+Within catalog requests, evidence, candidate locks, and production locks, the
+field `generated_tcl_sha256` has one permanent normative meaning:
+
+```text
+SHA-256 of the exact build/vivado/discover_ip_catalog.tcl bytes
+used to produce catalog evidence
+```
+
+It is discovery provenance, not a hash of every generated Vivado script. The
+realization script has a separate `realization_tcl_sha256` in the architecture
+manifest and later integration evidence. Changing
+`realize_ip_architecture.tcl` must not invalidate an otherwise current IP lock;
+changing `discover_ip_catalog.tcl` must invalidate it. The production lock does
+not include `realization_tcl_sha256`.
 
 Vivado discovery writes evidence containing:
 
@@ -419,6 +479,8 @@ Architecture generation fails immediately for:
 
 - unsupported schema versions or enum values;
 - contradictory implementation-kind and architecture-status combinations;
+- production responsibilities in a legacy block or legacy-prefixed
+  responsibilities in a production block;
 - blank, duplicate, or dangling identifiers;
 - an instance referencing an unknown family;
 - RFDC integration referencing a non-RFDC or retired instance;
@@ -443,6 +505,8 @@ Tests prove:
 - unique family, instance, and block identifiers;
 - valid cross-references;
 - exact missing, duplicate, and unknown responsibility rejection;
+- strict separation between production responsibilities and legacy reference
+  responsibilities;
 - strict `architecture_pending` implementation-kind invariants;
 - independent responsibility and production-readiness results;
 - every individual `production_integration_ready` predicate can force a false
@@ -459,6 +523,8 @@ Tests prove:
 - planned and retired instances do not create cells;
 - wrong configuration, Tcl, or request hashes yield stale evidence;
 - the config-to-Tcl-to-request hash order is deterministic and acyclic;
+- `generated_tcl_sha256` binds only discovery Tcl, while realization Tcl has
+  independent manifest provenance;
 - malformed, incomplete, duplicate, extra, or wrong-family evidence fails;
 - a wrong Vivado version fails;
 - only complete current evidence creates a candidate lock.
@@ -471,11 +537,15 @@ families before this checkpoint is accepted.
 Tests prove:
 
 - reference RTL is emitted only under `build/reference_rtl/`;
+- legacy reference responsibilities never enter production ownership or
+  readiness calculations;
 - production and reference entries are distinct in the manifest;
 - repeated generation without external evidence is byte-deterministic;
 - candidate lock generation is deterministic for identical accepted evidence;
 - a production lock requires exact required-family set equality and rejects
   both missing and extra families;
+- changing realization Tcl alone does not invalidate the IP lock, while
+  changing discovery Tcl does;
 - all existing Golden, Cycle, equivalence, and Verilog tests remain passing.
 
 ## 11. Acceptance boundary
