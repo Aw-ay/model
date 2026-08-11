@@ -6,7 +6,14 @@ import hashlib
 from importlib import resources
 from pathlib import Path
 
-from .evidence import build_catalog_request, canonical_json_bytes
+from .evidence import (
+    CatalogResolutionStatus,
+    build_candidate_lock,
+    build_catalog_request,
+    canonical_json_bytes,
+    parse_catalog_evidence,
+    validate_catalog_evidence,
+)
 from .registry import ArchitectureRegistry
 from .tcl import emit_architecture_realization_tcl, emit_catalog_discovery_tcl
 from .types import HardwareArchitectureConfig
@@ -46,6 +53,31 @@ def generate_ip_architecture(output_root: Path) -> dict[str, object]:
     )
     (metadata_root / "catalog_request.json").write_bytes(request_bytes)
     catalog_request_sha256 = _sha256(request_bytes)
+
+    candidate_path = metadata_root / "ip_lock.candidate.json"
+    if candidate_path.exists():
+        if not candidate_path.is_file():
+            raise ValueError(f"candidate lock path is not a file: {candidate_path}")
+        candidate_path.unlink()
+    evidence_path = metadata_root / "catalog_evidence.tsv"
+    if evidence_path.is_file():
+        validated_evidence = validate_catalog_evidence(
+            config,
+            request_bytes,
+            discovery_bytes,
+            parse_catalog_evidence(evidence_path.read_text(encoding="utf-8")),
+        )
+    else:
+        validated_evidence = None
+    catalog_status = (
+        CatalogResolutionStatus.UNVERIFIED
+        if validated_evidence is None
+        else validated_evidence.status
+    )
+    if validated_evidence is not None and validated_evidence.catalog_resolution_complete:
+        candidate_path.write_bytes(
+            canonical_json_bytes(build_candidate_lock(config, validated_evidence))
+        )
 
     rfdc_family = config.family_by_id("rfdc")
     architecture: dict[str, object] = {
@@ -104,7 +136,12 @@ def generate_ip_architecture(output_root: Path) -> dict[str, object]:
         "generated_tcl_sha256": generated_tcl_sha256,
         "realization_tcl_sha256": realization_tcl_sha256,
         "catalog_request_sha256": catalog_request_sha256,
-        "catalog_resolution_status": "unverified",
+        "catalog_resolution_status": catalog_status.value,
+        "catalog_resolution_complete": (
+            False
+            if validated_evidence is None
+            else validated_evidence.catalog_resolution_complete
+        ),
     }
     (metadata_root / "ip_architecture.json").write_bytes(
         canonical_json_bytes(architecture)

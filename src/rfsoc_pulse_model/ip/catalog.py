@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from .tcl import INITIAL_SKELETON_IP
 from .types import HardwareArchitectureConfig, RFDC_2_6_VLNV
 
 
@@ -31,7 +30,15 @@ def validate_resolved_catalog(
     config: HardwareArchitectureConfig,
     resolved: Mapping[str, str],
 ) -> None:
-    """Validate exact RFDC 2.6 and every initial skeleton IP family."""
+    """Validate the exact required family set and each resolved identity."""
+
+    expected = {family.family_id for family in config.required_families()}
+    actual = set(resolved)
+    if actual != expected:
+        raise ValueError(
+            "resolved family set mismatch: "
+            f"missing={sorted(expected - actual)}, extra={sorted(actual - expected)}"
+        )
 
     actual_rfdc = resolved.get("rfdc")
     if actual_rfdc != RFDC_2_6_VLNV:
@@ -40,16 +47,13 @@ def validate_resolved_catalog(
             f"resolved {actual_rfdc!r}"
         )
 
-    specs = {spec.logical_name: spec for spec in config.required_ip_families}
-    for logical_name in INITIAL_SKELETON_IP:
-        actual = resolved.get(logical_name)
-        if actual is None:
-            raise ValueError(f"missing resolved IP: {logical_name}")
-        spec = specs.get(logical_name)
-        if spec is None:
-            raise ValueError(f"missing configured IP family: {logical_name}")
-        expected_identity = _pattern_identity(
-            spec.catalog_pattern, f"configured {logical_name}"
+    specs = {family.family_id: family for family in config.required_families()}
+    for logical_name, spec in specs.items():
+        actual = resolved[logical_name]
+        expected_identity = (
+            _vlnv_identity(spec.vlnv, f"configured {logical_name}")
+            if spec.vlnv is not None
+            else _pattern_identity(spec.catalog_pattern, f"configured {logical_name}")
         )
         actual_identity = _vlnv_identity(actual, f"resolved {logical_name}")
         if actual_identity != expected_identity:

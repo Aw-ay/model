@@ -15,11 +15,23 @@ from .types import (
     RequiredResponsibilitiesSpec,
     RfdcIntegrationMetadata,
 )
+from .evidence import (
+    CatalogEvidence,
+    CatalogResolutionStatus,
+    ValidatedCatalogEvidence,
+    build_candidate_lock,
+    build_catalog_request,
+    canonical_json_bytes,
+    parse_catalog_evidence,
+    validate_catalog_evidence,
+)
 
 __all__ = [
     "ArchitectureBlockSpec",
     "ArchitectureStatus",
     "ConnectionStatus",
+    "CatalogEvidence",
+    "CatalogResolutionStatus",
     "HardwareArchitectureConfig",
     "ImplementationKind",
     "IntegrationProofStatus",
@@ -30,4 +42,10 @@ __all__ = [
     "RFDC_2_6_VLNV",
     "RequiredResponsibilitiesSpec",
     "RfdcIntegrationMetadata",
+    "ValidatedCatalogEvidence",
+    "build_candidate_lock",
+    "build_catalog_request",
+    "canonical_json_bytes",
+    "parse_catalog_evidence",
+    "validate_catalog_evidence",
 ]
