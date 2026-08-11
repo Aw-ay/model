@@ -528,17 +528,21 @@ def test_frozen_reflection_chain_has_one_nonlegacy_owner_per_item(self) -> None:
         )
 
 
-def test_missing_extra_and_duplicate_production_responsibilities_fail(self) -> None:
+def test_unknown_and_duplicate_production_responsibilities_fail(self) -> None:
     config = HardwareArchitectureConfig.load_default()
-    extra_required = dataclasses.replace(
+    unknown_fault_management = dataclasses.replace(
         config,
         required_responsibilities=dataclasses.replace(
             config.required_responsibilities,
-            production=config.required_responsibilities.production[:-1],
+            production=tuple(
+                responsibility
+                for responsibility in config.required_responsibilities.production
+                if responsibility != "fault_management"
+            ),
         ),
     )
     with self.assertRaisesRegex(ValueError, "unknown production responsibility"):
-        ArchitectureRegistry.from_config(extra_required)
+        ArchitectureRegistry.from_config(unknown_fault_management)
 
     duplicate_block = dataclasses.replace(
         config.architecture_blocks[0],
@@ -604,6 +608,13 @@ def test_default_is_complete_but_not_production_ready(self) -> None:
     self.assertFalse(readiness.production_integration_ready)
     self.assertIn("architecture_pending", readiness.blocking_reasons)
 ```
+
+The unknown-responsibility fixture removes only the non-chain
+`fault_management` value from the required production set. It leaves
+`continuous_dual_polar_reflection` unchanged and valid, while `system_status`
+still owns `fault_management`, so construction reaches the registry's
+`unknown production responsibility` check instead of failing
+`RequiredResponsibilitiesSpec` chain validation.
 
 Add this explicit predicate table to the same test class:
 
