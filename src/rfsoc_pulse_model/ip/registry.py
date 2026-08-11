@@ -1,211 +1,250 @@
-"""Single ownership registry for the target hardware architecture."""
+"""Validated production ownership and readiness for the IP architecture."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .types import HardwareArchitectureConfig, ImplementationKind
+from .types import (
+    ArchitectureBlockSpec,
+    ConnectionStatus,
+    HardwareArchitectureConfig,
+    ImplementationKind,
+    IntegrationProofStatus,
+    IpInstanceLifecycle,
+    ParameterStatus,
+)
 
 
-_AMD_IP_RESPONSIBILITIES: dict[str, tuple[str, ...]] = {
-    "axis_register_slice": ("axis_register_pipeline",),
-    "axis_data_fifo": ("axis_buffering",),
-    "axis_clock_converter": ("axis_clock_domain_crossing",),
-    "axis_dwidth_converter": ("axis_width_conversion",),
-    "axis_combiner": ("axis_combining",),
-    "axis_broadcaster": ("axis_broadcasting",),
-    "axis_switch": ("axis_switching",),
-    "fir_compiler": ("monitor_fir_dec2", "fractional_delay_fir"),
-    "dds_compiler": ("doppler_phasor",),
-    "complex_multiplier": ("complex_multiplication",),
-    "cordic": ("frequency_estimator_atan2",),
-    "axi_dma": ("event_to_ddr_transport",),
-}
+_LEGACY_REFERENCE_PREFIX = "legacy_reference."
+_CONTINUOUS_DUAL_POLAR_REFLECTION = (
+    "rx_2spc_continuous_ingress",
+    "adc_channel_alignment_and_calibration",
+    "dual_polar_three_range_selection",
+    "continuous_sample_time_and_stream_integrity",
+    "integer_delay_processing",
+    "fractional_delay_processing",
+    "range_rcs_complex_gain_application",
+    "polarimetric_scattering_matrix_2x2",
+    "doppler_phase_generation",
+    "doppler_complex_modulation",
+    "multi_target_output_alignment",
+    "multi_target_accumulation",
+    "tx_polarization_predistortion",
+    "eight_channel_dac_routing",
+    "tx_iq16_quantization",
+    "tx_2spc_continuous_egress",
+)
 
 
 @dataclass(frozen=True)
-class ArchitectureBlock:
-    """One block and the architecture responsibilities it owns."""
+class ArchitectureReadiness:
+    """Independent, machine-derived architecture completion state."""
 
-    logical_name: str
-    kind: ImplementationKind
-    responsibilities: tuple[str, ...]
-    production: bool
-    vlnv: str | None = None
-    source: str | None = None
-
-    def __post_init__(self) -> None:
-        if not self.logical_name.strip():
-            raise ValueError("block logical_name must be nonempty")
-        if not isinstance(self.kind, ImplementationKind):
-            raise ValueError("block kind must be an ImplementationKind")
-        if not self.responsibilities or any(
-            not responsibility.strip() for responsibility in self.responsibilities
-        ):
-            raise ValueError(
-                f"{self.logical_name} responsibilities must be nonempty"
-            )
-        if len(self.responsibilities) != len(set(self.responsibilities)):
-            raise ValueError(
-                f"{self.logical_name} responsibilities must be unique"
-            )
-        if self.production and self.kind is ImplementationKind.LEGACY_NON_PRODUCTION:
-            raise ValueError("legacy_non_production block cannot be production")
-        if self.vlnv is not None and not self.vlnv.strip():
-            raise ValueError("vlnv must be nonempty when present")
-        if self.source is not None and not self.source.strip():
-            raise ValueError("source must be nonempty when present")
+    responsibility_complete: bool
+    catalog_resolution_complete: bool
+    production_lock_valid: bool
+    production_integration_ready: bool
+    blocking_reasons: tuple[str, ...]
 
 
 @dataclass(frozen=True)
 class ArchitectureRegistry:
-    """Validated, immutable assignment of every architecture responsibility."""
+    """Exact responsibility ownership derived from schema-v2 configuration."""
 
-    blocks: tuple[ArchitectureBlock, ...]
+    config: HardwareArchitectureConfig
+    blocks: tuple[ArchitectureBlockSpec, ...]
+    production_owner_map: dict[str, str]
+    reference_responsibility_map: dict[str, str]
+    reflection_chain_owner_map: tuple[tuple[str, str], ...]
+    responsibility_complete: bool
 
-    def __post_init__(self) -> None:
-        names = [block.logical_name for block in self.blocks]
+    @classmethod
+    def from_config(cls, config: HardwareArchitectureConfig) -> "ArchitectureRegistry":
+        """Validate and derive ownership from one immutable architecture config."""
+
+        names = [block.block_name for block in config.architecture_blocks]
         if len(names) != len(set(names)):
             duplicate = next(name for name in names if names.count(name) > 1)
-            raise ValueError(f"duplicate architecture logical name: {duplicate}")
+            raise ValueError(f"duplicate architecture block name: {duplicate}")
 
-        owners: dict[str, str] = {}
-        for block in self.production_blocks():
+        required = set(config.required_responsibilities.production)
+        production_owner_map: dict[str, str] = {}
+        reference_responsibility_map: dict[str, str] = {}
+
+        for block in config.architecture_blocks:
+            if block.implementation_kind is ImplementationKind.LEGACY_NON_PRODUCTION:
+                for responsibility in block.reference_responsibilities:
+                    if not responsibility.startswith(_LEGACY_REFERENCE_PREFIX):
+                        raise ValueError(
+                            "legacy reference responsibility must use "
+                            "legacy_reference. prefix"
+                        )
+                    previous = reference_responsibility_map.get(responsibility)
+                    if previous is not None:
+                        raise ValueError(
+                            f"{responsibility} has multiple reference owners: "
+                            f"{previous}, {block.block_name}"
+                        )
+                    reference_responsibility_map[responsibility] = block.block_name
+                continue
+
             for responsibility in block.responsibilities:
-                previous = owners.get(responsibility)
+                if responsibility.startswith(_LEGACY_REFERENCE_PREFIX):
+                    raise ValueError(
+                        "production responsibility cannot use legacy_reference. prefix"
+                    )
+                if responsibility not in required:
+                    raise ValueError(
+                        f"unknown production responsibility: {responsibility}"
+                    )
+                previous = production_owner_map.get(responsibility)
                 if previous is not None:
                     raise ValueError(
                         f"{responsibility} has multiple production owners: "
-                        f"{previous}, {block.logical_name}"
+                        f"{previous}, {block.block_name}"
                     )
-                owners[responsibility] = block.logical_name
+                production_owner_map[responsibility] = block.block_name
+
+        missing = required - set(production_owner_map)
+        if missing:
+            raise ValueError(
+                "missing production responsibility owners: "
+                f"{', '.join(sorted(missing))}"
+            )
+
+        chain = config.required_responsibilities.continuous_dual_polar_reflection
+        if chain != _CONTINUOUS_DUAL_POLAR_REFLECTION:
+            raise ValueError(
+                "continuous_dual_polar_reflection must exactly match the frozen "
+                "continuous dual-polar reflection chain"
+            )
+        if any(responsibility not in required for responsibility in chain):
+            raise ValueError(
+                "continuous_dual_polar_reflection must exactly use production "
+                "responsibilities"
+            )
+
+        reflection_chain_owner_map = tuple(
+            (responsibility, production_owner_map[responsibility])
+            for responsibility in chain
+        )
+        return cls(
+            config=config,
+            blocks=config.architecture_blocks,
+            production_owner_map=production_owner_map,
+            reference_responsibility_map=reference_responsibility_map,
+            reflection_chain_owner_map=reflection_chain_owner_map,
+            responsibility_complete=True,
+        )
 
     @classmethod
     def default(cls) -> "ArchitectureRegistry":
-        architecture = HardwareArchitectureConfig.load_default()
-        blocks = [
-            ArchitectureBlock(
-                logical_name=architecture.rfdc.ip.logical_name,
-                kind=architecture.rfdc.ip.kind,
-                responsibilities=architecture.rfdc.owned_functions,
-                production=True,
-                vlnv=architecture.rfdc.ip.vlnv,
-            )
-        ]
-        for spec in architecture.required_ip_families:
-            blocks.append(
-                ArchitectureBlock(
-                    logical_name=spec.logical_name,
-                    kind=spec.kind,
-                    responsibilities=_AMD_IP_RESPONSIBILITIES[spec.logical_name],
-                    production=True,
-                    vlnv=spec.vlnv,
-                    source=spec.catalog_pattern,
-                )
-            )
-        blocks.extend(_PROJECT_AND_LEGACY_BLOCKS)
-        return cls(tuple(blocks))
+        """Build the registry from the packaged architecture authority."""
 
-    def by_name(self, logical_name: str) -> ArchitectureBlock:
-        for block in self.blocks:
-            if block.logical_name == logical_name:
-                return block
-        raise KeyError(logical_name)
+        return cls.from_config(HardwareArchitectureConfig.load_default())
 
-    def production_blocks(self) -> tuple[ArchitectureBlock, ...]:
-        return tuple(block for block in self.blocks if block.production)
+    def by_name(self, block_name: str) -> ArchitectureBlockSpec:
+        """Return a configured architecture block by stable block name."""
 
-    def legacy_blocks(self) -> tuple[ArchitectureBlock, ...]:
+        return self.config.block_by_name(block_name)
+
+    def production_blocks(self) -> tuple[ArchitectureBlockSpec, ...]:
+        """Return all non-legacy blocks in the production namespace."""
+
         return tuple(
             block
             for block in self.blocks
-            if block.kind is ImplementationKind.LEGACY_NON_PRODUCTION
+            if block.implementation_kind is not ImplementationKind.LEGACY_NON_PRODUCTION
         )
 
+    def legacy_blocks(self) -> tuple[ArchitectureBlockSpec, ...]:
+        """Return blocks that own legacy reference responsibilities only."""
 
-_PROJECT_AND_LEGACY_BLOCKS = (
-    ArchitectureBlock(
-        logical_name="integer_delay_memory",
-        kind=ImplementationKind.XPM_MACRO,
-        responsibilities=("integer_delay_storage",),
-        production=True,
-        source="xpm_memory_sdpram",
-    ),
-    ArchitectureBlock(
-        logical_name="rx_stream_control",
-        kind=ImplementationKind.CUSTOM_RTL,
-        responsibilities=("acquisition_epoch", "stream_integrity_status"),
-        production=True,
-    ),
-    ArchitectureBlock(
-        logical_name="auto_hold_range_selector",
-        kind=ImplementationKind.CUSTOM_RTL,
-        responsibilities=("auto_hold_range_selection",),
-        production=True,
-    ),
-    ArchitectureBlock(
-        logical_name="target_scheduler",
-        kind=ImplementationKind.CUSTOM_RTL,
-        responsibilities=("target_scheduling", "maximum_target_control"),
-        production=True,
-    ),
-    ArchitectureBlock(
-        logical_name="circular_delay_controller",
-        kind=ImplementationKind.CUSTOM_RTL,
-        responsibilities=("circular_delay_addressing", "lane_scheduling"),
-        production=True,
-    ),
-    ArchitectureBlock(
-        logical_name="fractional_delay_scheduler",
-        kind=ImplementationKind.CUSTOM_RTL,
-        responsibilities=("fractional_delay_coefficient_set_scheduling",),
-        production=True,
-    ),
-    ArchitectureBlock(
-        logical_name="target_alignment_accumulator",
-        kind=ImplementationKind.CUSTOM_RTL,
-        responsibilities=(
-            "multi_target_output_alignment",
-            "multi_target_accumulation",
-        ),
-        production=True,
-    ),
-    ArchitectureBlock(
-        logical_name="pulse_detector",
-        kind=ImplementationKind.CUSTOM_RTL,
-        responsibilities=(
-            "adaptive_noise",
-            "adaptive_threshold",
-            "nm_voting",
-            "toa",
-            "contiguous_main_peak_fwhm",
-            "coarse_pdw",
-        ),
-        production=True,
-    ),
-    ArchitectureBlock(
-        logical_name="event_control",
-        kind=ImplementationKind.CUSTOM_RTL,
-        responsibilities=(
-            "hit_iq_event_framing",
-            "overflow_status",
-            "bit_status",
-            "fault_management",
-        ),
-        production=True,
-    ),
-    ArchitectureBlock(
-        logical_name="rx_group_ingress_2spc",
-        kind=ImplementationKind.LEGACY_NON_PRODUCTION,
-        responsibilities=("legacy_rx_group_ingress_reference",),
-        production=False,
-        source="src/rfsoc_pulse_model/cycle/hardware/rx_group_ingress.py",
-    ),
-    ArchitectureBlock(
-        logical_name="tx_iq_axis_boundary_2spc",
-        kind=ImplementationKind.LEGACY_NON_PRODUCTION,
-        responsibilities=("legacy_tx_iq_axis_boundary_reference",),
-        production=False,
-        source="src/rfsoc_pulse_model/cycle/hardware/tx_iq_axis_boundary.py",
-    ),
-)
+        return tuple(
+            block
+            for block in self.blocks
+            if block.implementation_kind is ImplementationKind.LEGACY_NON_PRODUCTION
+        )
+
+    def evaluate_readiness(
+        self,
+        *,
+        catalog_resolution_complete: bool,
+        production_lock_valid: bool,
+        production_sources_contain_reference: bool,
+    ) -> ArchitectureReadiness:
+        """Evaluate the exact production-integration conjunction."""
+
+        reasons: list[str] = []
+        if not self.responsibility_complete:
+            reasons.append("responsibility_incomplete")
+        if not catalog_resolution_complete:
+            reasons.append("catalog_resolution_incomplete")
+        if not production_lock_valid:
+            reasons.append("production_lock_invalid")
+
+        required_blocks = tuple(
+            self.config.block_by_name(block_name)
+            for block_name in dict.fromkeys(self.production_owner_map.values())
+        )
+        if any(not block.production_accepted for block in required_blocks):
+            reasons.append("production_block_not_accepted")
+        if any(
+            block.implementation_kind is ImplementationKind.ARCHITECTURE_PENDING
+            for block in required_blocks
+        ):
+            reasons.append("architecture_pending")
+
+        amd_blocks = tuple(
+            block
+            for block in required_blocks
+            if block.implementation_kind is ImplementationKind.AMD_IP
+        )
+        if any(not block.instance_refs for block in amd_blocks):
+            reasons.append("amd_ip_owner_missing_instance")
+
+        amd_instances = tuple(
+            self.config.instance_by_name(instance_name)
+            for block in amd_blocks
+            for instance_name in block.instance_refs
+        )
+        if any(
+            instance.lifecycle is not IpInstanceLifecycle.MATERIALIZED
+            for instance in amd_instances
+        ):
+            reasons.append("amd_ip_owner_instance_not_materialized")
+        if any(
+            instance.parameter_status is not ParameterStatus.VIVADO_VERIFIED
+            for instance in amd_instances
+        ):
+            reasons.append("materialized_instance_parameters_not_vivado_verified")
+        if any(
+            instance.connection_status is not ConnectionStatus.VIVADO_VERIFIED
+            for instance in amd_instances
+        ):
+            reasons.append("materialized_instance_connections_not_vivado_verified")
+
+        accepted_custom_or_xpm_blocks = tuple(
+            block
+            for block in required_blocks
+            if block.production_accepted
+            and block.implementation_kind
+            in (ImplementationKind.CUSTOM_RTL, ImplementationKind.XPM_MACRO)
+        )
+        if any(block.source is None for block in accepted_custom_or_xpm_blocks):
+            reasons.append("accepted_custom_or_xpm_owner_missing_production_source")
+        if (
+            self.config.rfdc_integration.proof_status
+            is not IntegrationProofStatus.VIVADO_VERIFIED
+        ):
+            reasons.append("rfdc_integration_not_vivado_verified")
+        if production_sources_contain_reference:
+            reasons.append("reference_rtl_in_production_sources")
+
+        return ArchitectureReadiness(
+            responsibility_complete=self.responsibility_complete,
+            catalog_resolution_complete=catalog_resolution_complete,
+            production_lock_valid=production_lock_valid,
+            production_integration_ready=not reasons,
+            blocking_reasons=tuple(reasons),
+        )
