@@ -146,17 +146,39 @@ Each block contains:
 - `production_accepted` as a strict boolean;
 - an optional source for custom or legacy implementation.
 
+The implementation-kind enum is exactly:
+
+```text
+amd_ip | custom_rtl | xpm_macro | architecture_pending |
+legacy_non_production
+```
+
 The architecture-status enum is exactly:
 
 ```text
 frozen | architecture_pending
 ```
 
+The two fields are constrained rather than independently selectable:
+
+```text
+implementation_kind == architecture_pending
+if and only if
+architecture_status == architecture_pending
+```
+
+An `architecture_pending` block must have `production_accepted == false`, an
+empty `instance_refs` list, and no production source. A block with any other
+implementation kind must have `architecture_status == frozen`. This makes the
+pending implementation state explicit in the same type system used for AMD IP,
+custom RTL, and XPM ownership while preventing contradictory combinations.
+
 `fractional_delay_bank` owns fractional-delay processing and coefficient-set
 scheduling while remaining truthful about its maturity:
 
 ```text
 fractional_delay_bank:
+    implementation_kind = architecture_pending
     architecture_status = architecture_pending
     production_accepted = false
     instance_refs = []
@@ -211,10 +233,33 @@ implementation maturity.
 `catalog_resolution_complete` is true only when current, strongly bound Vivado
 evidence resolves every required IP family.
 
-`production_integration_ready` is true only when all production blocks are
-accepted, required materialized instances have acceptable parameter and
-connection status, the current production lock is valid, and no pending
-architecture remains. Consequently, this batch can produce:
+`production_integration_ready` is a derived value, never a user-configurable
+flag. It is true if and only if all of the following predicates are true:
+
+```text
+responsibility_complete
+and catalog_resolution_complete
+and production_lock_valid
+and every required-responsibility owner has production_accepted == true
+and no required-responsibility owner has
+    implementation_kind == architecture_pending
+and every AMD-IP owner references at least one IP instance
+and every instance referenced by an accepted AMD-IP owner has
+    lifecycle == materialized
+and every such materialized instance has
+    parameter_status == vivado_verified
+and connection_status == vivado_verified
+and every accepted custom-RTL or XPM owner has a valid production source
+and rfdc_integration proof_status == vivado_verified
+and the production source manifest contains no reference RTL
+```
+
+`production_lock_valid` is the exact lock predicate defined in Section 7.
+Planned or retired instances that are not referenced by accepted production
+blocks do not by themselves affect readiness. Dangling instance references are
+configuration errors and therefore cannot produce a readiness result.
+
+Consequently, this batch can produce:
 
 ```text
 responsibility_complete = true
@@ -251,20 +296,35 @@ availability.
 
 ## 6. Strong evidence binding
 
-Python generation deterministically creates:
+Hashes are generated in the following strict acyclic order:
 
 ```text
-build/metadata/catalog_request.json
-build/vivado/create_ip_architecture.tcl
+1. canonical architecture config bytes
+       -> architecture_config_sha256
+2. generated Tcl bytes
+       -> generated_tcl_sha256
+3. canonical catalog_request.json bytes
+       -> catalog_request_sha256
+4. external Vivado catalog evidence
+5. validated ip_lock.candidate.json
 ```
 
-The request records:
+The Tcl is generated from the parsed architecture configuration but contains
+none of `generated_tcl_sha256`, `catalog_request_sha256`, or the future evidence
+hash. Therefore it never includes its own digest. The request is generated only
+after the Tcl bytes are final and records:
 
 - architecture schema and configuration versions;
 - `architecture_config_sha256`;
 - `generated_tcl_sha256`;
 - required Vivado version;
 - the complete required family set and catalog identities.
+
+The request uses canonical UTF-8 JSON with sorted keys and one trailing newline;
+its SHA-256 covers those exact bytes. The Vivado invocation passes the three
+current hashes to the generated Tcl as explicit Tcl arguments. The Tcl validates
+the argument count and writes those values into the external evidence. It does
+not rewrite the request or regenerate any input artifact.
 
 Vivado discovery writes evidence containing:
 
@@ -319,6 +379,23 @@ installed package-data copy. Development discovery may run without a lock.
 Production and CI modes require a current, complete lock and reject wildcard
 selection or an incompatible Vivado version.
 
+The production-lock family predicate is exact set equality:
+
+```text
+set(ip_lock.families.keys())
+==
+set(family.id for family in ip_families if family.required)
+```
+
+Both a missing required family and an extra family are errors. For every entry,
+the locked VLNV must be an exact `vendor:library:name:version` value whose first
+three components match the configured family catalog identity. The RF Data
+Converter entry must equal the frozen RFDC 2.6 VLNV. The lock is valid only when
+its schema version, architecture-configuration hash, generated-Tcl hash,
+catalog-request hash, and Vivado version also match the current production
+inputs. This complete conjunction is `production_lock_valid`; partial or stale
+locks are never accepted.
+
 ## 8. Legacy RTL isolation
 
 The current non-production Cycle modules remain available for reference and
@@ -341,6 +418,7 @@ not be listed as a production architecture implementation.
 Architecture generation fails immediately for:
 
 - unsupported schema versions or enum values;
+- contradictory implementation-kind and architecture-status combinations;
 - blank, duplicate, or dangling identifiers;
 - an instance referencing an unknown family;
 - RFDC integration referencing a non-RFDC or retired instance;
@@ -348,6 +426,7 @@ Architecture generation fails immediately for:
 - Tcl attempting to materialize a planned or retired instance;
 - incomplete or identity-mismatched resolved catalogs;
 - incomplete production locks;
+- production locks with extra families or stale input bindings;
 - wildcard version selection in production or CI mode.
 
 Stale, well-formed evidence is a non-ready diagnostic state, not successful
@@ -364,7 +443,10 @@ Tests prove:
 - unique family, instance, and block identifiers;
 - valid cross-references;
 - exact missing, duplicate, and unknown responsibility rejection;
+- strict `architecture_pending` implementation-kind invariants;
 - independent responsibility and production-readiness results;
+- every individual `production_integration_ready` predicate can force a false
+  result without changing ownership completeness;
 - RFDC integration attaches only to `rfdc_0`.
 
 ### 10.2 Evidence and Tcl checkpoint
@@ -376,6 +458,7 @@ Tests prove:
 - only materialized instances create cells;
 - planned and retired instances do not create cells;
 - wrong configuration, Tcl, or request hashes yield stale evidence;
+- the config-to-Tcl-to-request hash order is deterministic and acyclic;
 - malformed, incomplete, duplicate, extra, or wrong-family evidence fails;
 - a wrong Vivado version fails;
 - only complete current evidence creates a candidate lock.
@@ -391,6 +474,8 @@ Tests prove:
 - production and reference entries are distinct in the manifest;
 - repeated generation without external evidence is byte-deterministic;
 - candidate lock generation is deterministic for identical accepted evidence;
+- a production lock requires exact required-family set equality and rejects
+  both missing and extra families;
 - all existing Golden, Cycle, equivalence, and Verilog tests remain passing.
 
 ## 11. Acceptance boundary
