@@ -351,7 +351,7 @@ class HardwareArchitectureConfig:
     required_responsibilities: RequiredResponsibilitiesSpec
 ```
 
-Provide `family_by_id()`, `instance_by_name()`, `block_by_name()`, and `required_families()` methods that raise `KeyError` for an unknown stable ID. `RequiredResponsibilitiesSpec` must reject blank or duplicate production values, blank or duplicate chain values, a chain value outside `production`, and a chain value with the `legacy_reference.` prefix. Enforce these constructor invariants:
+Provide `family_by_id()`, `instance_by_name()`, `block_by_name()`, and `required_families()` methods that raise `KeyError` for an unknown stable ID. `RequiredResponsibilitiesSpec` must reject blank or duplicate production values, blank or duplicate chain values, a chain value outside `production`, and a chain value with the `legacy_reference.` prefix. Check the reserved prefix before production-membership validation and include `legacy_reference` in that `ValueError`, so the type boundary reports the actual namespace violation. Enforce these constructor invariants:
 
 ```python
 pending_kind = self.implementation_kind is ImplementationKind.ARCHITECTURE_PENDING
@@ -558,7 +558,7 @@ def test_unknown_and_duplicate_production_responsibilities_fail(self) -> None:
         )
 
 
-def test_missing_reordered_and_legacy_only_chain_coverage_fail(self) -> None:
+def test_missing_and_reordered_chain_fail_in_registry_and_legacy_prefix_fails_at_type_boundary(self) -> None:
     config = HardwareArchitectureConfig.load_default()
     chain = config.required_responsibilities.continuous_dual_polar_reflection
     missing = dataclasses.replace(
@@ -581,18 +581,14 @@ def test_missing_reordered_and_legacy_only_chain_coverage_fail(self) -> None:
     with self.assertRaisesRegex(ValueError, "continuous_dual_polar_reflection.*exact"):
         ArchitectureRegistry.from_config(reordered)
 
-    legacy_only = dataclasses.replace(
-        config,
-        required_responsibilities=dataclasses.replace(
+    with self.assertRaisesRegex(ValueError, "legacy_reference"):
+        dataclasses.replace(
             config.required_responsibilities,
             continuous_dual_polar_reflection=(
                 "legacy_reference.rx_group_ingress_2spc",
                 *chain[1:],
             ),
-        ),
-    )
-    with self.assertRaisesRegex(ValueError, "legacy-only chain coverage"):
-        ArchitectureRegistry.from_config(legacy_only)
+        )
 
 
 def test_default_is_complete_but_not_production_ready(self) -> None:
@@ -678,7 +674,7 @@ production_owner_map: dict[str, str]
 reference_responsibility_map: dict[str, str]
 ```
 
-Reject duplicate block names, duplicate owners, missing required owners, unknown production responsibilities, legacy responsibilities outside the reserved prefix, and production responsibilities using the reserved prefix. Reject a chain with a missing, duplicate, reordered, unknown, or legacy-prefixed value. The legacy-prefixed case must raise `ValueError("legacy-only chain coverage")`; the missing and reordered cases must identify `continuous_dual_polar_reflection` and `exact` in their messages.
+Reject duplicate block names, duplicate owners, missing required owners, unknown production responsibilities, legacy responsibilities outside the reserved prefix, and production responsibilities using the reserved prefix. Task 1 `RequiredResponsibilitiesSpec` has already rejected blank, duplicate, unknown, and `legacy_reference.`-prefixed chain values; do not bypass that invariant with `object.__setattr__` or require registry behavior for impossible objects. For a constructible responsibility object, the registry rejects a missing or reordered frozen chain and identifies `continuous_dual_polar_reflection` and `exact` in its message.
 
 Build `reflection_chain_owner_map` only after verifying that the configured chain equals the frozen 16-item sequence, every item belongs to `required_responsibilities.production`, and every item has exactly one entry in `production_owner_map`. A legacy `reference_responsibility_map` entry never satisfies this lookup. Set `responsibility_complete=True` only when the exact production-owner set and this resolved ordered chain are both valid. Keep `ArchitectureRegistry.default()` as a thin call to `from_config(HardwareArchitectureConfig.load_default())`.
 
@@ -1518,7 +1514,7 @@ git commit -m "docs: accept normalized AMD IP architecture"
 | Schema-v2 family, instance, block, RFDC, and machine-traceable responsibility domains | Tasks 1–2 |
 | Formal `architecture_pending` kind and status invariants | Tasks 1–2 |
 | Production versus legacy responsibility scope isolation, including distinct pending 2SPC ingress and egress blocks | Tasks 1–2 and 6 |
-| Frozen continuous dual-polar reflection traceability chain, exact ordering, and one non-legacy owner per chain item | Tasks 1–2 |
+| Frozen continuous dual-polar reflection chain: type-boundary legacy-prefix rejection, registry exact ordering, and one non-legacy owner per item | Tasks 1–2 |
 | Exact ownership completeness and independent readiness predicate | Task 2 |
 | Catalog discovery versus instance realization separation | Task 3 |
 | Acyclic config, discovery Tcl, request, evidence, candidate chain | Tasks 3–4 |
@@ -1537,7 +1533,8 @@ git commit -m "docs: accept normalized AMD IP architecture"
 - [ ] `required_responsibilities` has only `production` and `continuous_dual_polar_reflection` members; no top-level schema domain was added.
 - [ ] Every required production responsibility has exactly one non-legacy owner.
 - [ ] `continuous_dual_polar_reflection` exactly matches the frozen 16-item sequence and every item resolves to its unique non-legacy owner.
-- [ ] Missing, reordered, duplicate, unknown, and legacy-only reflection-chain coverage are rejected by registry tests.
+- [ ] `RequiredResponsibilitiesSpec` fail-fast rejects blank, duplicate, unknown, and `legacy_reference.`-prefixed chain values without constructing impossible objects.
+- [ ] Registry tests reject constructible missing or reordered frozen chains and enforce reachable unknown/duplicate ownership errors.
 - [ ] Legacy reference responsibilities use only the reserved namespace and do not enter production maps.
 - [ ] `rx_group_ingress_2spc` and `tx_iq_axis_boundary_2spc` own only legacy references; separate pending production blocks own the continuous 2SPC ingress and egress responsibilities without instance refs.
 - [ ] PDW and monitor responsibilities remain outside the continuous reflection traceability chain.

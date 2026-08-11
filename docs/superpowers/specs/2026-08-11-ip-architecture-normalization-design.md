@@ -386,11 +386,20 @@ responsibilities and block ownership form an exact one-owner mapping *and* the
 `continuous_dual_polar_reflection` list exactly equals the frozen ordered
 sequence in Section 3.5. Every chain responsibility must be a member of
 `required_responsibilities.production` and resolve through
-`production_owner_map` to exactly one non-legacy block. A missing item, an
-item in a different order, a duplicate, an unknown item, or a legacy-only
-owner makes responsibility completeness false or is rejected as invalid
-configuration before a readiness result is produced. This result still does
-not inspect physical implementation maturity.
+`production_owner_map` to exactly one non-legacy block. The type boundary
+rejects blank, duplicate, unknown, and `legacy_reference.`-prefixed chain
+values before a registry can be constructed. For a constructible typed
+configuration, the registry rejects a missing or differently ordered frozen
+chain and enforces exact unknown/duplicate ownership. Tests must not bypass
+the frozen type invariant to manufacture a legacy-prefixed chain object. This
+result still does not inspect physical implementation maturity.
+
+Legacy-only chain coverage is therefore blocked at two layers: the
+responsibility type fail-fast rejects any `legacy_reference.` chain value, and
+the registry resolves every constructible chain item only through
+`production_owner_map`, never `reference_responsibility_map`. The registry is
+not required to accept an impossible typed object merely to repeat the prefix
+error.
 
 `catalog_resolution_complete` is true only when current, strongly bound Vivado
 evidence resolves every required IP family.
@@ -632,9 +641,10 @@ Tests prove:
 - exact missing, duplicate, and unknown responsibility rejection;
 - strict separation between production responsibilities and legacy reference
   responsibilities;
-- exact `continuous_dual_polar_reflection` membership, order, uniqueness, and
-  non-legacy owner resolution, including missing, reordered, and legacy-only
-  chain-coverage rejection;
+- type-boundary rejection of blank, duplicate, unknown, and
+  `legacy_reference.`-prefixed `continuous_dual_polar_reflection` values;
+- registry rejection of constructible missing or reordered frozen chains plus
+  exact unknown/duplicate ownership and non-legacy owner resolution;
 - strict `architecture_pending` implementation-kind invariants;
 - independent responsibility and production-readiness results;
 - every individual `production_integration_ready` predicate can force a false
