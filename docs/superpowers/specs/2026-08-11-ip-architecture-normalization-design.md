@@ -205,6 +205,34 @@ fractional_delay_bank:
 Its responsibilities remain stable when a later batch chooses and attaches a
 physical implementation.
 
+The two existing Cycle-derived boundary modules remain legacy references only:
+`rx_group_ingress_2spc` owns only
+`legacy_reference.rx_group_ingress_2spc`, and `tx_iq_axis_boundary_2spc` owns
+only `legacy_reference.tx_iq_axis_boundary_2spc`.  Neither legacy reference
+can satisfy a production responsibility.  In particular, the normalized
+configuration introduces these distinct production architecture blocks:
+
+```text
+rx_2spc_continuous_ingress:
+    responsibilities = [rx_2spc_continuous_ingress]
+    implementation_kind = architecture_pending
+    architecture_status = architecture_pending
+    production_accepted = false
+    instance_refs = []
+
+tx_2spc_continuous_egress:
+    responsibilities = [tx_2spc_continuous_egress]
+    implementation_kind = architecture_pending
+    architecture_status = architecture_pending
+    production_accepted = false
+    instance_refs = []
+```
+
+They are intentionally not aliases for the legacy module names and do not
+invent IP instances or production sources.  Their explicit ownership preserves
+the production boundary contract while their pending state preserves the truth
+that the production implementations are not frozen.
+
 ### 3.4 RFDC integration
 
 `rfdc_integration` does not define another RFDC identity. It contains only
@@ -220,9 +248,58 @@ name in the integration object and a different concrete IP instance.
 
 ### 3.5 Required responsibilities
 
-`required_responsibilities` is the exact required set for production
-architecture ownership. Validation compares it with responsibilities owned by
-all blocks except `legacy_non_production` blocks.
+`required_responsibilities` remains one top-level schema domain, but it is a
+machine-traceable object rather than a flat array:
+
+```json
+{
+  "required_responsibilities": {
+    "production": [
+      "adc", "dac", "ddc", "duc", "decimation", "interpolation", "mixer", "nco",
+      "axis_register_pipeline", "axis_buffering", "axis_clock_domain_crossing", "axis_width_conversion", "axis_combining", "axis_broadcasting", "axis_switching",
+      "monitor_fir_dec2", "fractional_delay_processing", "fractional_delay_coefficient_set_scheduling", "doppler_phasor", "complex_multiplication", "frequency_estimator_atan2", "event_to_ddr_transport",
+      "integer_delay_storage", "acquisition_epoch", "stream_integrity_status", "auto_hold_range_selection", "target_scheduling", "maximum_target_control", "circular_delay_addressing", "lane_scheduling", "multi_target_output_alignment", "multi_target_accumulation",
+      "adaptive_noise", "adaptive_threshold", "nm_voting", "toa", "contiguous_main_peak_fwhm", "coarse_pdw", "hit_iq_event_framing", "overflow_status", "bit_status", "fault_management",
+      "rx_2spc_continuous_ingress", "adc_channel_alignment_and_calibration", "dual_polar_three_range_selection", "continuous_sample_time_and_stream_integrity", "integer_delay_processing", "range_rcs_complex_gain_application", "polarimetric_scattering_matrix_2x2", "doppler_phase_generation", "doppler_complex_modulation", "tx_polarization_predistortion", "eight_channel_dac_routing", "tx_iq16_quantization", "tx_2spc_continuous_egress"
+    ],
+    "continuous_dual_polar_reflection": [
+      "rx_2spc_continuous_ingress",
+      "adc_channel_alignment_and_calibration",
+      "dual_polar_three_range_selection",
+      "continuous_sample_time_and_stream_integrity",
+      "integer_delay_processing",
+      "fractional_delay_processing",
+      "range_rcs_complex_gain_application",
+      "polarimetric_scattering_matrix_2x2",
+      "doppler_phase_generation",
+      "doppler_complex_modulation",
+      "multi_target_output_alignment",
+      "multi_target_accumulation",
+      "tx_polarization_predistortion",
+      "eight_channel_dac_routing",
+      "tx_iq16_quantization",
+      "tx_2spc_continuous_egress"
+    ]
+  }
+}
+```
+
+`production` is the exact required set for production architecture ownership;
+the ordered `continuous_dual_polar_reflection` list is a required traceability
+chain within that same domain.  It is frozen to the Golden continuous-reflection
+semantics: `GoldenReflectionSource.run()` reconstructs calibrated incident
+channels, compiles target delay/RCS/scattering/Doppler behavior, processes and
+accumulates the reflection, predistorts it, routes eight DAC channels, and
+quantizes I/Q16. `GoldenReflectionStream.process_chunk()` additionally requires
+contiguous absolute sample chunks and emits only the stable prefix.  The chain
+therefore starts and ends at the 2SPC PL/RFDC contracts and includes continuous
+sample-time integrity; it does not describe RFDC analog internals.
+
+Validation compares `production` with responsibilities owned by all blocks
+except `legacy_non_production` blocks.  The required chain is deliberately
+limited to the continuous reflection path. PDW, detector, monitor, pulse-event,
+and DDR transport responsibilities remain production responsibilities where
+applicable, but are a side branch and never appear in this chain.
 
 For every required responsibility there must be exactly one block owner:
 
@@ -240,7 +317,7 @@ production_owner_map = {
     for responsibility in block.responsibilities
 }
 
-set(production_owner_map.keys()) == set(required_responsibilities)
+set(production_owner_map.keys()) == set(required_responsibilities.production)
 ```
 
 Legacy `reference_responsibilities` are validated for syntax, reserved prefix,
@@ -253,6 +330,38 @@ A block may own a responsibility while `production_accepted` is false. This is
 necessary for an architecture-pending block to remain the unambiguous owner
 without falsely claiming that its implementation is ready.
 
+The frozen default responsibility allocation is intentionally semantic as well
+as low-level. `rfdc_frontend` owns the RFDC black-box interface functions;
+`axis_infrastructure` owns register, buffering, clock-domain, width,
+combining, broadcasting, and switching functions; and `monitor_branch` owns
+the FIR/PDW detector side branch. Its full non-chain allocation is
+`monitor_fir_dec2`, `adaptive_noise`, `adaptive_threshold`, `nm_voting`,
+`toa`, `contiguous_main_peak_fwhm`, `coarse_pdw`, and
+`hit_iq_event_framing`; `frequency_estimator` owns
+`frequency_estimator_atan2`; `event_to_ddr` owns
+`event_to_ddr_transport`; and `system_status` owns `overflow_status`,
+`bit_status`, and `fault_management`. The continuous reflection owners are:
+
+| Architecture block | Production responsibilities |
+|---|---|
+| `rx_2spc_continuous_ingress` | `rx_2spc_continuous_ingress` |
+| `adc_calibrated_frontend` | `adc_channel_alignment_and_calibration`, `dual_polar_three_range_selection`, `auto_hold_range_selection` |
+| `continuous_stream_timebase` | `continuous_sample_time_and_stream_integrity`, `acquisition_epoch`, `stream_integrity_status` |
+| `integer_delay_bank` | `integer_delay_processing`, `integer_delay_storage`, `circular_delay_addressing` |
+| `fractional_delay_bank` | `fractional_delay_processing`, `fractional_delay_coefficient_set_scheduling` |
+| `range_rcs_gain` | `range_rcs_complex_gain_application` |
+| `polarimetric_scattering` | `polarimetric_scattering_matrix_2x2` |
+| `doppler_engine` | `doppler_phase_generation`, `doppler_complex_modulation`, `doppler_phasor`, `complex_multiplication` |
+| `multi_target_accumulator` | `target_scheduling`, `maximum_target_control`, `lane_scheduling`, `multi_target_output_alignment`, `multi_target_accumulation` |
+| `tx_polarization_predistortion` | `tx_polarization_predistortion` |
+| `eight_channel_dac_router` | `eight_channel_dac_routing`, `tx_iq16_quantization` |
+| `tx_2spc_continuous_egress` | `tx_2spc_continuous_egress` |
+
+Each listed block is an `architecture_pending` production block unless and
+until its implementation is frozen; a block may own multiple responsibilities.
+The table allocates current low-level names without claiming a future AMD IP,
+RTL source, or instance topology.
+
 ## 4. Independent architecture results
 
 The architecture exposes three independent results:
@@ -263,9 +372,16 @@ catalog_resolution_complete
 production_integration_ready
 ```
 
-`responsibility_complete` is true when required responsibilities and block
-ownership form an exact one-owner mapping. It does not inspect physical
-implementation maturity.
+`responsibility_complete` is true only when required production
+responsibilities and block ownership form an exact one-owner mapping *and* the
+`continuous_dual_polar_reflection` list exactly equals the frozen ordered
+sequence in Section 3.5. Every chain responsibility must be a member of
+`required_responsibilities.production` and resolve through
+`production_owner_map` to exactly one non-legacy block. A missing item, an
+item in a different order, a duplicate, an unknown item, or a legacy-only
+owner makes responsibility completeness false or is rejected as invalid
+configuration before a readiness result is produced. This result still does
+not inspect physical implementation maturity.
 
 `catalog_resolution_complete` is true only when current, strongly bound Vivado
 evidence resolves every required IP family.
@@ -507,6 +623,9 @@ Tests prove:
 - exact missing, duplicate, and unknown responsibility rejection;
 - strict separation between production responsibilities and legacy reference
   responsibilities;
+- exact `continuous_dual_polar_reflection` membership, order, uniqueness, and
+  non-legacy owner resolution, including missing, reordered, and legacy-only
+  chain-coverage rejection;
 - strict `architecture_pending` implementation-kind invariants;
 - independent responsibility and production-readiness results;
 - every individual `production_integration_ready` predicate can force a false

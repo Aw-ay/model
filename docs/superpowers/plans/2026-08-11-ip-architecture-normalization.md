@@ -16,7 +16,10 @@
 - `rfdc_integration` references `rfdc_0`; it does not define a second RFDC identity.
 - `architecture_pending` is a formal `ImplementationKind` and is equivalent to `ArchitectureStatus.ARCHITECTURE_PENDING`.
 - Production and legacy reference responsibility namespaces are disjoint.
+- `required_responsibilities` is one top-level object with exactly `production` and `continuous_dual_polar_reflection` members; do not add a sixth top-level schema domain.
 - Every production `required_responsibility` has exactly one non-legacy architecture-block owner; missing, duplicate, and unknown production responsibilities are errors.
+- The frozen `continuous_dual_polar_reflection` order is `rx_2spc_continuous_ingress`, `adc_channel_alignment_and_calibration`, `dual_polar_three_range_selection`, `continuous_sample_time_and_stream_integrity`, `integer_delay_processing`, `fractional_delay_processing`, `range_rcs_complex_gain_application`, `polarimetric_scattering_matrix_2x2`, `doppler_phase_generation`, `doppler_complex_modulation`, `multi_target_output_alignment`, `multi_target_accumulation`, `tx_polarization_predistortion`, `eight_channel_dac_routing`, `tx_iq16_quantization`, `tx_2spc_continuous_egress`.
+- Each traceability-chain responsibility is in `required_responsibilities.production` and has exactly one non-legacy owner. PDW and monitor responsibilities are side-branch production responsibilities and never enter this chain.
 - `responsibility_complete`, `catalog_resolution_complete`, and `production_integration_ready` are independent derived results.
 - Hash order is exactly architecture config, discovery Tcl, catalog request, external evidence, candidate lock.
 - In requests, evidence, and locks, `generated_tcl_sha256` means only the SHA-256 of `build/vivado/discover_ip_catalog.tcl`.
@@ -39,8 +42,8 @@
 | `src/rfsoc_pulse_model/config/ip_architecture.json` | Byte-identical installed schema-v2 package data |
 | `config/ip_lock.json` | Explicitly promoted production catalog lock |
 | `src/rfsoc_pulse_model/config/ip_lock.json` | Byte-identical installed production lock |
-| `src/rfsoc_pulse_model/ip/types.py` | Family, instance, RFDC integration, block, enum, and config types |
-| `src/rfsoc_pulse_model/ip/registry.py` | Production ownership map and exact readiness evaluation |
+| `src/rfsoc_pulse_model/ip/types.py` | Family, instance, RFDC integration, block, required-responsibility, enum, and config types |
+| `src/rfsoc_pulse_model/ip/registry.py` | Production ownership map, frozen reflection-chain validation, and exact readiness evaluation |
 | `src/rfsoc_pulse_model/ip/tcl.py` | Separate deterministic discovery and realization Tcl emitters |
 | `src/rfsoc_pulse_model/ip/catalog.py` | Exact IP-family/VLNV identity and resolved-set validation |
 | `src/rfsoc_pulse_model/ip/evidence.py` | Canonical request, strict evidence, binding, and candidate-lock logic |
@@ -72,7 +75,7 @@
 
 **Interfaces:**
 - Consumes: the approved schema in `docs/superpowers/specs/2026-08-11-ip-architecture-normalization-design.md`.
-- Produces: `ImplementationKind`, `IpInstanceLifecycle`, `ParameterStatus`, `ConnectionStatus`, `ArchitectureStatus`, `IpFamilySpec`, `IpInstanceSpec`, `RfdcIntegrationMetadata`, `ArchitectureBlockSpec`, and `HardwareArchitectureConfig.load_default()`.
+- Produces: `ImplementationKind`, `IpInstanceLifecycle`, `ParameterStatus`, `ConnectionStatus`, `ArchitectureStatus`, `IpFamilySpec`, `IpInstanceSpec`, `RfdcIntegrationMetadata`, `ArchitectureBlockSpec`, `RequiredResponsibilitiesSpec`, and `HardwareArchitectureConfig.load_default()`.
 
 - [ ] **Step 1: Write failing schema-v2 type and package-data tests**
 
@@ -124,6 +127,62 @@ def test_fractional_delay_is_pending_without_fake_instances(self) -> None:
     )
 
 
+def test_default_declares_the_frozen_continuous_reflection_chain(self) -> None:
+    config = HardwareArchitectureConfig.load_default()
+    chain = config.required_responsibilities.continuous_dual_polar_reflection
+    self.assertEqual(
+        chain,
+        (
+            "rx_2spc_continuous_ingress",
+            "adc_channel_alignment_and_calibration",
+            "dual_polar_three_range_selection",
+            "continuous_sample_time_and_stream_integrity",
+            "integer_delay_processing",
+            "fractional_delay_processing",
+            "range_rcs_complex_gain_application",
+            "polarimetric_scattering_matrix_2x2",
+            "doppler_phase_generation",
+            "doppler_complex_modulation",
+            "multi_target_output_alignment",
+            "multi_target_accumulation",
+            "tx_polarization_predistortion",
+            "eight_channel_dac_routing",
+            "tx_iq16_quantization",
+            "tx_2spc_continuous_egress",
+        ),
+    )
+    self.assertTrue(
+        set(chain) <= set(config.required_responsibilities.production)
+    )
+
+
+def test_2spc_production_boundaries_are_pending_not_legacy_aliases(self) -> None:
+    config = HardwareArchitectureConfig.load_default()
+    for block_name, responsibility in (
+        ("rx_2spc_continuous_ingress", "rx_2spc_continuous_ingress"),
+        ("tx_2spc_continuous_egress", "tx_2spc_continuous_egress"),
+    ):
+        block = config.block_by_name(block_name)
+        self.assertEqual(block.responsibilities, (responsibility,))
+        self.assertEqual(
+            block.implementation_kind,
+            ImplementationKind.ARCHITECTURE_PENDING,
+        )
+        self.assertEqual(block.architecture_status, ArchitectureStatus.ARCHITECTURE_PENDING)
+        self.assertFalse(block.production_accepted)
+        self.assertEqual(block.instance_refs, ())
+        self.assertIsNone(block.source)
+        self.assertEqual(block.reference_responsibilities, ())
+    self.assertEqual(
+        config.block_by_name("rx_group_ingress_2spc").reference_responsibilities,
+        ("legacy_reference.rx_group_ingress_2spc",),
+    )
+    self.assertEqual(
+        config.block_by_name("tx_iq_axis_boundary_2spc").reference_responsibilities,
+        ("legacy_reference.tx_iq_axis_boundary_2spc",),
+    )
+
+
 def test_pending_kind_and_status_cannot_disagree(self) -> None:
     with self.assertRaisesRegex(ValueError, "architecture_pending.*equivalent"):
         ArchitectureBlockSpec(
@@ -160,8 +219,6 @@ class ImplementationKind(str, Enum):
     AMD_IP = "amd_ip"
     XPM_MACRO = "xpm_macro"
     CUSTOM_RTL = "custom_rtl"
-    CUSTOM_HLS = "custom_hls"
-    SOFTWARE_ONLY = "software_only"
     ARCHITECTURE_PENDING = "architecture_pending"
     LEGACY_NON_PRODUCTION = "legacy_non_production"
 
@@ -242,6 +299,12 @@ class ArchitectureBlockSpec:
 
 
 @dataclass(frozen=True)
+class RequiredResponsibilitiesSpec:
+    production: tuple[str, ...]
+    continuous_dual_polar_reflection: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class HardwareArchitectureConfig:
     architecture_schema_version: int
     architecture_config_version: int
@@ -252,10 +315,10 @@ class HardwareArchitectureConfig:
     ip_families: tuple[IpFamilySpec, ...]
     ip_instances: tuple[IpInstanceSpec, ...]
     architecture_blocks: tuple[ArchitectureBlockSpec, ...]
-    required_responsibilities: tuple[str, ...]
+    required_responsibilities: RequiredResponsibilitiesSpec
 ```
 
-Provide `family_by_id()`, `instance_by_name()`, `block_by_name()`, and `required_families()` methods that raise `KeyError` for an unknown stable ID. Enforce these constructor invariants:
+Provide `family_by_id()`, `instance_by_name()`, `block_by_name()`, and `required_families()` methods that raise `KeyError` for an unknown stable ID. `RequiredResponsibilitiesSpec` must reject blank or duplicate production values, blank or duplicate chain values, a chain value outside `production`, and a chain value with the `legacy_reference.` prefix. Enforce these constructor invariants:
 
 ```python
 pending_kind = self.implementation_kind is ImplementationKind.ARCHITECTURE_PENDING
@@ -285,7 +348,10 @@ Use these exact top-level keys:
   "ip_families": [],
   "ip_instances": [],
   "architecture_blocks": [],
-  "required_responsibilities": []
+  "required_responsibilities": {
+    "production": [],
+    "continuous_dual_polar_reflection": []
+  }
 }
 ```
 
@@ -318,25 +384,29 @@ Move current RFDC integration settings under `rfdc_integration`, replace the nes
 - `monitor_decimator` references planned `monitor_fir_dec2_0` and owns `monitor_fir_dec2`;
 - `fractional_delay_bank` is `architecture_pending`, references no instance, and owns `fractional_delay_processing` plus `fractional_delay_coefficient_set_scheduling`;
 - remove the separate production `fractional_delay_scheduler` owner;
-- all other AMD, XPM, and custom blocks retain their current responsibility names;
+- `rx_2spc_continuous_ingress` and `tx_2spc_continuous_egress` are separate `architecture_pending` production blocks. Each has one same-named production responsibility, `architecture_status="architecture_pending"`, `production_accepted=false`, `instance_refs=[]`, and no `source`;
+- `adc_calibrated_frontend` owns `adc_channel_alignment_and_calibration`, `dual_polar_three_range_selection`, and `auto_hold_range_selection`; `continuous_stream_timebase` owns `continuous_sample_time_and_stream_integrity`, `acquisition_epoch`, and `stream_integrity_status`;
+- `integer_delay_bank` owns `integer_delay_processing`, `integer_delay_storage`, and `circular_delay_addressing`; `range_rcs_gain` owns `range_rcs_complex_gain_application`; `polarimetric_scattering` owns `polarimetric_scattering_matrix_2x2`;
+- `doppler_engine` owns `doppler_phase_generation`, `doppler_complex_modulation`, `doppler_phasor`, and `complex_multiplication`; `multi_target_accumulator` owns `target_scheduling`, `maximum_target_control`, `lane_scheduling`, `multi_target_output_alignment`, and `multi_target_accumulation`;
+- `tx_polarization_predistortion` owns `tx_polarization_predistortion`; `eight_channel_dac_router` owns `eight_channel_dac_routing` and `tx_iq16_quantization`;
+- `axis_infrastructure` retains every AXIS responsibility; `frequency_estimator` owns `frequency_estimator_atan2`; `event_to_ddr` owns `event_to_ddr_transport`; `system_status` owns `overflow_status`, `bit_status`, and `fault_management`; and `monitor_branch` owns `monitor_fir_dec2`, `adaptive_noise`, `adaptive_threshold`, `nm_voting`, `toa`, `contiguous_main_peak_fwhm`, `coarse_pdw`, and `hit_iq_event_framing` outside the traceability chain;
 - legacy blocks use only `legacy_reference.rx_group_ingress_2spc` and `legacy_reference.tx_iq_axis_boundary_2spc` as `reference_responsibilities`.
 
-The exact production `required_responsibilities` set is:
+The exact `required_responsibilities` JSON value is:
 
-```python
+```json
 {
+  "production": [
     "adc", "dac", "ddc", "duc", "decimation", "interpolation", "mixer", "nco",
-    "axis_register_pipeline", "axis_buffering", "axis_clock_domain_crossing",
-    "axis_width_conversion", "axis_combining", "axis_broadcasting", "axis_switching",
-    "monitor_fir_dec2", "fractional_delay_processing",
-    "fractional_delay_coefficient_set_scheduling", "doppler_phasor",
-    "complex_multiplication", "frequency_estimator_atan2", "event_to_ddr_transport",
-    "integer_delay_storage", "acquisition_epoch", "stream_integrity_status",
-    "auto_hold_range_selection", "target_scheduling", "maximum_target_control",
-    "circular_delay_addressing", "lane_scheduling", "multi_target_output_alignment",
-    "multi_target_accumulation", "adaptive_noise", "adaptive_threshold", "nm_voting",
-    "toa", "contiguous_main_peak_fwhm", "coarse_pdw", "hit_iq_event_framing",
-    "overflow_status", "bit_status", "fault_management",
+    "axis_register_pipeline", "axis_buffering", "axis_clock_domain_crossing", "axis_width_conversion", "axis_combining", "axis_broadcasting", "axis_switching",
+    "monitor_fir_dec2", "fractional_delay_processing", "fractional_delay_coefficient_set_scheduling", "doppler_phasor", "complex_multiplication", "frequency_estimator_atan2", "event_to_ddr_transport",
+    "integer_delay_storage", "acquisition_epoch", "stream_integrity_status", "auto_hold_range_selection", "target_scheduling", "maximum_target_control", "circular_delay_addressing", "lane_scheduling", "multi_target_output_alignment", "multi_target_accumulation",
+    "adaptive_noise", "adaptive_threshold", "nm_voting", "toa", "contiguous_main_peak_fwhm", "coarse_pdw", "hit_iq_event_framing", "overflow_status", "bit_status", "fault_management",
+    "rx_2spc_continuous_ingress", "adc_channel_alignment_and_calibration", "dual_polar_three_range_selection", "continuous_sample_time_and_stream_integrity", "integer_delay_processing", "range_rcs_complex_gain_application", "polarimetric_scattering_matrix_2x2", "doppler_phase_generation", "doppler_complex_modulation", "tx_polarization_predistortion", "eight_channel_dac_routing", "tx_iq16_quantization", "tx_2spc_continuous_egress"
+  ],
+  "continuous_dual_polar_reflection": [
+    "rx_2spc_continuous_ingress", "adc_channel_alignment_and_calibration", "dual_polar_three_range_selection", "continuous_sample_time_and_stream_integrity", "integer_delay_processing", "fractional_delay_processing", "range_rcs_complex_gain_application", "polarimetric_scattering_matrix_2x2", "doppler_phase_generation", "doppler_complex_modulation", "multi_target_output_alignment", "multi_target_accumulation", "tx_polarization_predistortion", "eight_channel_dac_routing", "tx_iq16_quantization", "tx_2spc_continuous_egress"
+  ]
 }
 ```
 
@@ -370,8 +440,8 @@ git commit -m "refactor: add schema v2 IP architecture objects"
 - Modify: `docs/contracts/amd-ip-ownership.md`
 
 **Interfaces:**
-- Consumes: `HardwareArchitectureConfig`, `ArchitectureBlockSpec`, and strict enum types from Task 1.
-- Produces: `ArchitectureRegistry.from_config(config: HardwareArchitectureConfig) -> ArchitectureRegistry`, `ArchitectureReadiness`, `ArchitectureRegistry.responsibility_complete`, and `ArchitectureRegistry.evaluate_readiness(*, catalog_resolution_complete: bool, production_lock_valid: bool, production_sources_contain_reference: bool) -> ArchitectureReadiness`.
+- Consumes: `HardwareArchitectureConfig`, `ArchitectureBlockSpec`, `RequiredResponsibilitiesSpec`, and strict enum types from Task 1.
+- Produces: `ArchitectureRegistry.from_config(config: HardwareArchitectureConfig) -> ArchitectureRegistry`, `ArchitectureRegistry.production_owner_map: dict[str, str]`, `ArchitectureRegistry.reference_responsibility_map: dict[str, str]`, `ArchitectureRegistry.reflection_chain_owner_map: tuple[tuple[str, str], ...]`, `ArchitectureRegistry.responsibility_complete`, `ArchitectureReadiness`, and `ArchitectureRegistry.evaluate_readiness(*, catalog_resolution_complete: bool, production_lock_valid: bool, production_sources_contain_reference: bool) -> ArchitectureReadiness`.
 
 - [ ] **Step 1: Write failing ownership-scope and readiness tests**
 
@@ -384,7 +454,7 @@ def test_production_owner_map_exactly_matches_required_set(self) -> None:
     self.assertTrue(registry.responsibility_complete)
     self.assertEqual(
         set(registry.production_owner_map),
-        set(config.required_responsibilities),
+        set(config.required_responsibilities.production),
     )
 
 
@@ -404,14 +474,38 @@ def test_legacy_reference_responsibilities_are_out_of_production_scope(self) -> 
     )
 
 
+def test_frozen_reflection_chain_has_one_nonlegacy_owner_per_item(self) -> None:
+    config = HardwareArchitectureConfig.load_default()
+    registry = ArchitectureRegistry.from_config(config)
+    self.assertEqual(
+        registry.reflection_chain_owner_map,
+        tuple(
+            (responsibility, registry.production_owner_map[responsibility])
+            for responsibility in config.required_responsibilities.continuous_dual_polar_reflection
+        ),
+    )
+    for responsibility, block_name in registry.reflection_chain_owner_map:
+        self.assertIn(
+            responsibility,
+            config.required_responsibilities.production,
+        )
+        self.assertNotEqual(
+            config.block_by_name(block_name).implementation_kind,
+            ImplementationKind.LEGACY_NON_PRODUCTION,
+        )
+
+
 def test_missing_extra_and_duplicate_production_responsibilities_fail(self) -> None:
     config = HardwareArchitectureConfig.load_default()
-    missing = dataclasses.replace(
+    extra_required = dataclasses.replace(
         config,
-        required_responsibilities=config.required_responsibilities[:-1],
+        required_responsibilities=dataclasses.replace(
+            config.required_responsibilities,
+            production=config.required_responsibilities.production[:-1],
+        ),
     )
     with self.assertRaisesRegex(ValueError, "unknown production responsibility"):
-        ArchitectureRegistry.from_config(missing)
+        ArchitectureRegistry.from_config(extra_required)
 
     duplicate_block = dataclasses.replace(
         config.architecture_blocks[0],
@@ -425,6 +519,43 @@ def test_missing_extra_and_duplicate_production_responsibilities_fail(self) -> N
                 architecture_blocks=(*config.architecture_blocks, duplicate_block),
             )
         )
+
+
+def test_missing_reordered_and_legacy_only_chain_coverage_fail(self) -> None:
+    config = HardwareArchitectureConfig.load_default()
+    chain = config.required_responsibilities.continuous_dual_polar_reflection
+    missing = dataclasses.replace(
+        config,
+        required_responsibilities=dataclasses.replace(
+            config.required_responsibilities,
+            continuous_dual_polar_reflection=chain[:-1],
+        ),
+    )
+    with self.assertRaisesRegex(ValueError, "continuous_dual_polar_reflection.*exact"):
+        ArchitectureRegistry.from_config(missing)
+
+    reordered = dataclasses.replace(
+        config,
+        required_responsibilities=dataclasses.replace(
+            config.required_responsibilities,
+            continuous_dual_polar_reflection=(chain[1], chain[0], *chain[2:]),
+        ),
+    )
+    with self.assertRaisesRegex(ValueError, "continuous_dual_polar_reflection.*exact"):
+        ArchitectureRegistry.from_config(reordered)
+
+    legacy_only = dataclasses.replace(
+        config,
+        required_responsibilities=dataclasses.replace(
+            config.required_responsibilities,
+            continuous_dual_polar_reflection=(
+                "legacy_reference.rx_group_ingress_2spc",
+                *chain[1:],
+            ),
+        ),
+    )
+    with self.assertRaisesRegex(ValueError, "legacy-only chain coverage"):
+        ArchitectureRegistry.from_config(legacy_only)
 
 
 def test_default_is_complete_but_not_production_ready(self) -> None:
@@ -494,7 +625,7 @@ $env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
 
 Expected: failures because the current registry constructs owners from hard-coded families, has no reference namespace, and has no readiness evaluator.
 
-- [ ] **Step 3: Implement config-derived ownership maps**
+- [ ] **Step 3: Implement config-derived ownership maps and frozen-chain validation**
 
 Replace `_AMD_IP_RESPONSIBILITIES` and `_PROJECT_AND_LEGACY_BLOCKS` with configuration-derived blocks. `ArchitectureRegistry.from_config()` must build:
 
@@ -503,7 +634,9 @@ production_owner_map: dict[str, str]
 reference_responsibility_map: dict[str, str]
 ```
 
-Reject duplicate block names, duplicate owners, missing required owners, unknown production responsibilities, legacy responsibilities outside the reserved prefix, and production responsibilities using the reserved prefix. Keep `ArchitectureRegistry.default()` as a thin call to `from_config(HardwareArchitectureConfig.load_default())`.
+Reject duplicate block names, duplicate owners, missing required owners, unknown production responsibilities, legacy responsibilities outside the reserved prefix, and production responsibilities using the reserved prefix. Reject a chain with a missing, duplicate, reordered, unknown, or legacy-prefixed value. The legacy-prefixed case must raise `ValueError("legacy-only chain coverage")`; the missing and reordered cases must identify `continuous_dual_polar_reflection` and `exact` in their messages.
+
+Build `reflection_chain_owner_map` only after verifying that the configured chain equals the frozen 16-item sequence, every item belongs to `required_responsibilities.production`, and every item has exactly one entry in `production_owner_map`. A legacy `reference_responsibility_map` entry never satisfies this lookup. Set `responsibility_complete=True` only when the exact production-owner set and this resolved ordered chain are both valid. Keep `ArchitectureRegistry.default()` as a thin call to `from_config(HardwareArchitectureConfig.load_default())`.
 
 - [ ] **Step 4: Implement the exact readiness conjunction**
 
@@ -519,7 +652,7 @@ class ArchitectureReadiness:
     blocking_reasons: tuple[str, ...]
 ```
 
-`evaluate_readiness()` must return true only when every predicate frozen in design Section 4 is true: current catalog and lock, all required owners accepted, no pending owner, all accepted AMD owners reference materialized and Vivado-verified instances, accepted custom/XPM owners have production sources, RFDC proof is Vivado-verified, and the production source list contains no reference RTL. Use stable reason strings so tests can assert each failed predicate.
+`evaluate_readiness()` must return true only when every predicate frozen in design Section 4 is true: exact production ownership plus frozen resolved reflection chain, current catalog and lock, all required owners accepted, no pending owner, all accepted AMD owners reference materialized and Vivado-verified instances, accepted custom/XPM owners have production sources, RFDC proof is Vivado-verified, and the production source list contains no reference RTL. Use stable reason strings so tests can assert each failed predicate.
 
 - [ ] **Step 5: Update and run the ownership contract tests**
 
@@ -1338,9 +1471,10 @@ git commit -m "docs: accept normalized AMD IP architecture"
 
 | Approved design requirement | Implemented and verified by |
 |---|---|
-| Schema-v2 family, instance, block, RFDC, and responsibility domains | Tasks 1–2 |
+| Schema-v2 family, instance, block, RFDC, and machine-traceable responsibility domains | Tasks 1–2 |
 | Formal `architecture_pending` kind and status invariants | Tasks 1–2 |
-| Production versus legacy responsibility scope isolation | Tasks 1–2 and 6 |
+| Production versus legacy responsibility scope isolation, including distinct pending 2SPC ingress and egress blocks | Tasks 1–2 and 6 |
+| Frozen continuous dual-polar reflection traceability chain, exact ordering, and one non-legacy owner per chain item | Tasks 1–2 |
 | Exact ownership completeness and independent readiness predicate | Task 2 |
 | Catalog discovery versus instance realization separation | Task 3 |
 | Acyclic config, discovery Tcl, request, evidence, candidate chain | Tasks 3–4 |
@@ -1356,8 +1490,13 @@ git commit -m "docs: accept normalized AMD IP architecture"
 
 - [ ] `config/ip_architecture.json` and installed package copy are byte-identical.
 - [ ] `config/ip_lock.json` and installed package copy are byte-identical.
+- [ ] `required_responsibilities` has only `production` and `continuous_dual_polar_reflection` members; no top-level schema domain was added.
 - [ ] Every required production responsibility has exactly one non-legacy owner.
+- [ ] `continuous_dual_polar_reflection` exactly matches the frozen 16-item sequence and every item resolves to its unique non-legacy owner.
+- [ ] Missing, reordered, duplicate, unknown, and legacy-only reflection-chain coverage are rejected by registry tests.
 - [ ] Legacy reference responsibilities use only the reserved namespace and do not enter production maps.
+- [ ] `rx_group_ingress_2spc` and `tx_iq_axis_boundary_2spc` own only legacy references; separate pending production blocks own the continuous 2SPC ingress and egress responsibilities without instance refs.
+- [ ] PDW and monitor responsibilities remain outside the continuous reflection traceability chain.
 - [ ] Discovery Tcl contains no BD-cell creation.
 - [ ] Realization Tcl creates only materialized instances.
 - [ ] Discovery evidence resolves exactly all required families.
