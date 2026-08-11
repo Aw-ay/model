@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from importlib import resources
-import json
 from pathlib import Path
-from collections.abc import Mapping
 
 from .evidence import (
     CatalogResolutionStatus,
@@ -19,7 +17,11 @@ from .evidence import (
 from .registry import ArchitectureRegistry
 from .tcl import emit_architecture_realization_tcl, emit_catalog_discovery_tcl
 from .types import HardwareArchitectureConfig
-from .lock import GenerationMode, validate_production_lock
+from .lock import (
+    GenerationMode,
+    decode_production_lock_json,
+    validate_production_lock,
+)
 
 
 def _sha256(data: bytes) -> str:
@@ -164,21 +166,24 @@ def _validate_packaged_lock(
     config: HardwareArchitectureConfig,
     request_bytes: bytes,
     discovery_bytes: bytes,
+    *,
+    lock_resource=None,
 ) -> bool:
-    resource = resources.files("rfsoc_pulse_model.config").joinpath("ip_lock.json")
+    resource = lock_resource or resources.files("rfsoc_pulse_model.config").joinpath(
+        "ip_lock.json"
+    )
     if not resource.is_file():
         if mode is GenerationMode.PRODUCTION:
             raise ValueError("production lock is missing")
         return False
     try:
-        with resource.open("r", encoding="utf-8") as stream:
-            payload = json.load(stream)
-        if not isinstance(payload, Mapping):
-            raise ValueError("production lock must be a JSON object")
+        payload = decode_production_lock_json(
+            resource.read_bytes(), "packaged production lock"
+        )
         return validate_production_lock(
             config, request_bytes, discovery_bytes, payload
         ).valid
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+    except (OSError, ValueError) as error:
         if mode is GenerationMode.PRODUCTION:
             raise ValueError("production lock is invalid") from error
         return False

@@ -2,17 +2,21 @@ import copy
 import hashlib
 import inspect
 from importlib import resources
+import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
+import rfsoc_pulse_model.ip.lock as lock_module
 from rfsoc_pulse_model.ip.evidence import build_catalog_request, canonical_json_bytes
 from rfsoc_pulse_model.ip.lock import (
     main,
     promote_candidate_lock,
+    recover_interrupted_promotion,
     validate_production_lock,
 )
 from rfsoc_pulse_model.ip.tcl import emit_catalog_discovery_tcl
@@ -53,6 +57,32 @@ def valid_lock_fixture() -> dict[str, object]:
         "discovery_tcl_bytes": discovery_tcl_bytes,
         "lock_payload": lock_payload,
     }
+
+
+def candidate_bytes() -> bytes:
+    return canonical_json_bytes(valid_lock_fixture()["lock_payload"])
+
+
+def candidate_with_duplicate_top_level_key() -> bytes:
+    canonical = candidate_bytes().decode("utf-8")
+    return (canonical.removesuffix("}\n") + ',\n  "vivado_version": "2025.2"\n}\n').encode(
+        "utf-8"
+    )
+
+
+def candidate_with_duplicate_family_key() -> bytes:
+    payload = valid_lock_fixture()["lock_payload"]
+    families = payload["families"]
+    family_json = json.dumps(families, sort_keys=True)
+    duplicated = family_json.replace(
+        '"axis_broadcaster": "xilinx.com:ip:axis_broadcaster:1.0",',
+        '"axis_broadcaster": "xilinx.com:ip:axis_broadcaster:1.0", '
+        '"axis_broadcaster": "xilinx.com:ip:axis_broadcaster:1.0",',
+    )
+    payload_json = json.dumps(
+        {**payload, "families": None}, sort_keys=True
+    ).replace('"families": null', f'"families": {duplicated}')
+    return payload_json.encode("utf-8")
 
 
 class ProductionLockTest(unittest.TestCase):
@@ -167,6 +197,127 @@ class ProductionLockTest(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertNotIn("RuntimeWarning", completed.stderr)
+
+    def test_promotion_rejects_duplicate_top_level_and_family_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            root_lock = root / "config/ip_lock.json"
+            package_lock = root / "src/rfsoc_pulse_model/config/ip_lock.json"
+            for name, raw_bytes in (
+                ("duplicate-top.json", candidate_with_duplicate_top_level_key()),
+                ("duplicate-family.json", candidate_with_duplicate_family_key()),
+            ):
+                candidate = root / name
+                candidate.write_bytes(raw_bytes)
+                with self.subTest(candidate=name):
+                    with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
+                        promote_candidate_lock(candidate, root_lock, package_lock)
+                    self.assertFalse(root_lock.exists())
+                    self.assertFalse(package_lock.exists())
+
+    def test_promotion_refuses_an_active_repository_scope_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidate = root / "candidate.json"
+            candidate.write_bytes(candidate_bytes())
+            root_lock = root / "config/ip_lock.json"
+            package_lock = root / "src/rfsoc_pulse_model/config/ip_lock.json"
+            lock_path = lock_module._promotion_lock_path(root_lock, package_lock)
+            lock_path.write_text("other promotion", encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "promotion already in progress"):
+                promote_candidate_lock(candidate, root_lock, package_lock)
+
+    def test_snapshot_retains_the_exact_initial_bytes_for_its_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / "ip_lock.json"
+            target.write_bytes(b"initial-bytes")
+            snapshot = lock_module._snapshot_target(target)
+            target.write_bytes(b"external-later-bytes")
+
+            self.assertEqual(snapshot.contents, b"initial-bytes")
+
+    def test_promotion_cas_refuses_external_edit_since_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidate = root / "candidate.json"
+            candidate.write_bytes(candidate_bytes())
+            root_lock = root / "config/ip_lock.json"
+            package_lock = root / "src/rfsoc_pulse_model/config/ip_lock.json"
+            root_lock.parent.mkdir(parents=True)
+            package_lock.parent.mkdir(parents=True)
+            root_lock.write_bytes(b"old-root")
+            package_lock.write_bytes(b"old-package")
+            original = lock_module._assert_snapshot_current
+            edited = False
+
+            def external_edit_then_check(target, snapshot):
+                nonlocal edited
+                if not edited and target == root_lock:
+                    target.write_bytes(b"external-editor")
+                    edited = True
+                return original(target, snapshot)
+
+            with mock.patch.object(
+                lock_module,
+                "_assert_snapshot_current",
+                side_effect=external_edit_then_check,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "changed since snapshot"):
+                    promote_candidate_lock(candidate, root_lock, package_lock)
+
+            self.assertEqual(root_lock.read_bytes(), b"external-editor")
+            self.assertEqual(package_lock.read_bytes(), b"old-package")
+
+    def test_failed_rollback_retains_recovery_data_and_recover_rolls_forward(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidate = root / "candidate.json"
+            expected = candidate_bytes()
+            candidate.write_bytes(expected)
+            root_lock = root / "config/ip_lock.json"
+            package_lock = root / "src/rfsoc_pulse_model/config/ip_lock.json"
+            root_lock.parent.mkdir(parents=True)
+            package_lock.parent.mkdir(parents=True)
+            root_lock.write_bytes(b"old-root")
+            package_lock.write_bytes(b"old-package")
+            real_replace = lock_module.os.replace
+            root_replaced = False
+
+            def fail_package_replace_and_root_rollback(source, destination):
+                nonlocal root_replaced
+                if Path(destination) == package_lock:
+                    raise OSError("injected package replacement failure")
+                if Path(destination) == root_lock and root_replaced:
+                    raise OSError("injected root rollback failure")
+                result = real_replace(source, destination)
+                if Path(destination) == root_lock:
+                    root_replaced = True
+                return result
+
+            with mock.patch.object(
+                lock_module.os,
+                "replace",
+                side_effect=fail_package_replace_and_root_rollback,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "recovery required"):
+                    promote_candidate_lock(candidate, root_lock, package_lock)
+
+            transaction_dirs = list(
+                lock_module._transaction_root(root_lock, package_lock).glob("*")
+            )
+            self.assertEqual(len(transaction_dirs), 1)
+            self.assertTrue((transaction_dirs[0] / "journal.json").is_file())
+            self.assertTrue((transaction_dirs[0] / "root.before").is_file())
+            self.assertTrue((transaction_dirs[0] / "package.before").is_file())
+            self.assertEqual(root_lock.read_bytes(), expected)
+            self.assertEqual(package_lock.read_bytes(), b"old-package")
+
+            recover_interrupted_promotion(root_lock, package_lock)
+
+            self.assertEqual(root_lock.read_bytes(), expected)
+            self.assertEqual(package_lock.read_bytes(), expected)
+            self.assertFalse(list(lock_module._transaction_root(root_lock, package_lock).glob("*")))
 
 
 if __name__ == "__main__":

@@ -1,9 +1,16 @@
-"""Production IP-lock validation and explicit candidate promotion."""
+"""Production IP-lock validation and recoverable two-target promotion.
+
+Promotion is not a cross-file atomic filesystem instruction.  It serializes
+writers in the repository scope, snapshots both targets into a durable journal,
+uses compare-and-swap checks before each replacement, and leaves the journal
+and backups in place whenever a partially-applied promotion needs recovery.
+"""
 
 from __future__ import annotations
 
 import argparse
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 import hashlib
@@ -12,9 +19,9 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import tempfile
 from typing import Iterable
+import uuid
 
 from .catalog import validate_resolved_catalog
 from .evidence import build_catalog_request, canonical_json_bytes
@@ -31,6 +38,17 @@ _LOCK_KEYS = {
     "vivado_version",
     "families",
 }
+_JOURNAL_KEYS = {
+    "transaction_schema_version",
+    "root_lock_path",
+    "package_lock_path",
+    "root_snapshot",
+    "package_snapshot",
+    "new_lock_sha256",
+}
+_SNAPSHOT_KEYS = {"exists", "sha256"}
+_PROMOTION_LOCK_NAME = ".ip_lock.promotion.lock"
+_TRANSACTION_DIRECTORY = ".ip_lock.transactions"
 
 
 class GenerationMode(str, Enum):
@@ -52,6 +70,13 @@ class ProductionLock:
 class ProductionLockValidation:
     valid: bool
     lock: ProductionLock
+
+
+@dataclass(frozen=True)
+class _TargetSnapshot:
+    exists: bool
+    sha256: str | None
+    contents: bytes | None
 
 
 def validate_production_lock(
@@ -94,46 +119,92 @@ def validate_production_lock(
     return ProductionLockValidation(valid=True, lock=lock)
 
 
+def decode_production_lock_json(raw_bytes: bytes, description: str) -> Mapping[str, object]:
+    """Decode lock JSON while rejecting duplicate keys at every object depth."""
+
+    try:
+        decoded = raw_bytes.decode("utf-8")
+        payload = json.loads(decoded, object_pairs_hook=_reject_duplicate_json_object)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise ValueError(f"unable to decode {description}: {error}") from error
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{description} must be a JSON object")
+    return payload
+
+
 def promote_candidate_lock(
     candidate_path: Path,
     root_lock_path: Path,
     package_lock_path: Path,
 ) -> None:
-    """Promote one validated candidate to byte-identical source/package locks."""
+    """Promote a validated candidate through a recoverable two-file transaction.
+
+    A successful call leaves byte-identical canonical locks.  A partial I/O
+    failure preserves a transaction journal and backups, then raises an error
+    naming the required `recover` action instead of claiming cross-file atomicity.
+    """
 
     candidate = Path(candidate_path)
-    root_lock = Path(root_lock_path)
-    package_lock = Path(package_lock_path)
-    if root_lock.resolve() == package_lock.resolve():
-        raise ValueError("root and package lock targets must be distinct")
-
-    payload = _read_lock_payload(candidate)
-    config = HardwareArchitectureConfig.load_default()
-    config_bytes = resources.files("rfsoc_pulse_model.config").joinpath(
-        "ip_architecture.json"
-    ).read_bytes()
-    discovery_bytes = emit_catalog_discovery_tcl(config).encode("utf-8")
-    request_bytes = canonical_json_bytes(
-        build_catalog_request(
-            config,
-            hashlib.sha256(config_bytes).hexdigest(),
-            hashlib.sha256(discovery_bytes).hexdigest(),
-        )
+    root_lock, package_lock = _normalise_distinct_targets(
+        root_lock_path, package_lock_path
     )
-    validate_production_lock(config, request_bytes, discovery_bytes, payload)
+    payload = _read_lock_payload(candidate)
+    _validate_current_lock_payload(payload)
     lock_bytes = canonical_json_bytes(payload)
-    _replace_both_or_restore(root_lock, package_lock, lock_bytes)
+    with _repository_promotion_lock(root_lock, package_lock):
+        _promote_with_journal(root_lock, package_lock, lock_bytes)
+
+
+def recover_interrupted_promotion(root_lock_path: Path, package_lock_path: Path) -> int:
+    """Roll forward every interrupted promotion for these exact two targets.
+
+    Recovery only overwrites a target that still contains either its journaled
+    pre-promotion bytes or the journaled new canonical lock.  Any other bytes
+    are treated as an external edit and leave the journal intact for an operator.
+    """
+
+    root_lock, package_lock = _normalise_distinct_targets(
+        root_lock_path, package_lock_path
+    )
+    with _repository_promotion_lock(root_lock, package_lock):
+        transaction_root = _transaction_root(root_lock, package_lock)
+        if not transaction_root.is_dir():
+            return 0
+        recovered = 0
+        for transaction in sorted(transaction_root.iterdir()):
+            if not transaction.is_dir():
+                continue
+            _recover_transaction(transaction, root_lock, package_lock)
+            recovered += 1
+        return recovered
 
 
 def main(argv: Iterable[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Promote a validated IP lock")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Promote or recover an IP lock. Promotion is a recoverable two-file "
+            "transaction, not a cross-file atomic filesystem instruction."
+        )
+    )
     subcommands = parser.add_subparsers(dest="command", required=True)
-    promote = subcommands.add_parser("promote", help="promote a candidate lock")
+    promote = subcommands.add_parser(
+        "promote",
+        help="validate a candidate and commit both locks; retain recovery data on I/O failure",
+    )
     promote.add_argument("--candidate", type=Path, required=True)
     promote.add_argument("--root-lock", type=Path, required=True)
     promote.add_argument("--package-lock", type=Path, required=True)
+    recover = subcommands.add_parser(
+        "recover",
+        help="roll forward interrupted transactions for one root/package lock pair",
+    )
+    recover.add_argument("--root-lock", type=Path, required=True)
+    recover.add_argument("--package-lock", type=Path, required=True)
     args = parser.parse_args(list(argv) if argv is not None else None)
-    promote_candidate_lock(args.candidate, args.root_lock, args.package_lock)
+    if args.command == "promote":
+        promote_candidate_lock(args.candidate, args.root_lock, args.package_lock)
+    else:
+        recover_interrupted_promotion(args.root_lock, args.package_lock)
     return 0
 
 
@@ -184,54 +255,295 @@ def _parse_lock(payload: Mapping[str, object]) -> ProductionLock:
 
 def _read_lock_payload(path: Path) -> Mapping[str, object]:
     try:
-        decoded = path.read_text(encoding="utf-8")
-        payload = json.loads(decoded)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        return decode_production_lock_json(path.read_bytes(), "production lock candidate")
+    except OSError as error:
         raise ValueError(f"unable to read production lock candidate: {path}") from error
-    if not isinstance(payload, Mapping):
-        raise ValueError("production lock candidate must be a JSON object")
-    return payload
 
 
-def _replace_both_or_restore(root_lock: Path, package_lock: Path, lock_bytes: bytes) -> None:
+def _reject_duplicate_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    decoded: dict[str, object] = {}
+    for key, value in pairs:
+        if key in decoded:
+            raise ValueError(f"duplicate JSON key: {key}")
+        decoded[key] = value
+    return decoded
+
+
+def _validate_current_lock_payload(payload: Mapping[str, object]) -> None:
+    config = HardwareArchitectureConfig.load_default()
+    config_bytes = resources.files("rfsoc_pulse_model.config").joinpath(
+        "ip_architecture.json"
+    ).read_bytes()
+    discovery_bytes = emit_catalog_discovery_tcl(config).encode("utf-8")
+    request_bytes = canonical_json_bytes(
+        build_catalog_request(
+            config,
+            hashlib.sha256(config_bytes).hexdigest(),
+            hashlib.sha256(discovery_bytes).hexdigest(),
+        )
+    )
+    validate_production_lock(config, request_bytes, discovery_bytes, payload)
+
+
+def _normalise_distinct_targets(
+    root_lock_path: Path, package_lock_path: Path
+) -> tuple[Path, Path]:
+    root_lock = Path(root_lock_path).resolve()
+    package_lock = Path(package_lock_path).resolve()
+    if root_lock == package_lock:
+        raise ValueError("root and package lock targets must be distinct")
+    return root_lock, package_lock
+
+
+@contextmanager
+def _repository_promotion_lock(root_lock: Path, package_lock: Path) -> Iterator[None]:
+    lock_path = _promotion_lock_path(root_lock, package_lock)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        descriptor = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as error:
+        raise RuntimeError(f"promotion already in progress: {lock_path}") from error
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(f"pid={os.getpid()}\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        yield
+    finally:
+        try:
+            lock_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _promotion_lock_path(root_lock: Path, package_lock: Path) -> Path:
+    return _transaction_scope(root_lock, package_lock) / _PROMOTION_LOCK_NAME
+
+
+def _transaction_root(root_lock: Path, package_lock: Path) -> Path:
+    return _transaction_scope(root_lock, package_lock) / _TRANSACTION_DIRECTORY
+
+
+def _transaction_scope(root_lock: Path, package_lock: Path) -> Path:
+    common = os.path.commonpath((str(root_lock.parent), str(package_lock.parent)))
+    return Path(common)
+
+
+def _promote_with_journal(root_lock: Path, package_lock: Path, lock_bytes: bytes) -> None:
     root_lock.parent.mkdir(parents=True, exist_ok=True)
     package_lock.parent.mkdir(parents=True, exist_ok=True)
+    root_snapshot = _snapshot_target(root_lock)
+    package_snapshot = _snapshot_target(package_lock)
+    transaction = _create_transaction(
+        root_lock, package_lock, root_snapshot, package_snapshot, lock_bytes
+    )
     temporary_paths: list[Path] = []
-    backup_paths: dict[Path, Path | None] = {}
-    targets = (root_lock, package_lock)
-    replaced: list[Path] = []
+    replaced: list[tuple[Path, _TargetSnapshot, str]] = []
     try:
-        for target in targets:
-            temporary_paths.append(_write_temporary(target.parent, lock_bytes))
-            backup_paths[target] = _backup_existing(target)
-        for target, temporary in zip(targets, temporary_paths, strict=True):
+        temporary_paths = [
+            _write_temporary(root_lock.parent, lock_bytes),
+            _write_temporary(package_lock.parent, lock_bytes),
+        ]
+        for target, snapshot, temporary, backup_name in (
+            (root_lock, root_snapshot, temporary_paths[0], "root.before"),
+            (package_lock, package_snapshot, temporary_paths[1], "package.before"),
+        ):
+            _assert_snapshot_current(target, snapshot)
             os.replace(temporary, target)
-            replaced.append(target)
+            replaced.append((target, snapshot, backup_name))
         temporary_paths.clear()
+        _assert_exact_bytes(root_lock, lock_bytes)
+        _assert_exact_bytes(package_lock, lock_bytes)
+    except Exception as error:
+        for temporary in temporary_paths:
+            _unlink_quietly(temporary)
+        if not replaced:
+            _remove_transaction(transaction)
+            raise RuntimeError(f"promotion target changed since snapshot: {error}") from error
+        rollback_errors = _attempt_rollback(transaction, replaced, lock_bytes)
+        detail = "; ".join(rollback_errors) if rollback_errors else "rollback staged"
+        raise RuntimeError(
+            "promotion failed; recovery required; "
+            f"transaction={transaction}; {detail}; run `ip.lock recover`"
+        ) from error
+    _remove_transaction(transaction)
+
+
+def _create_transaction(
+    root_lock: Path,
+    package_lock: Path,
+    root_snapshot: _TargetSnapshot,
+    package_snapshot: _TargetSnapshot,
+    lock_bytes: bytes,
+) -> Path:
+    transaction_root = _transaction_root(root_lock, package_lock)
+    transaction_root.mkdir(parents=True, exist_ok=True)
+    transaction = transaction_root / uuid.uuid4().hex
+    transaction.mkdir()
+    try:
+        _write_transaction_file(transaction / "new.lock", lock_bytes)
+        _write_backup(transaction / "root.before", root_lock, root_snapshot)
+        _write_backup(transaction / "package.before", package_lock, package_snapshot)
+        journal = {
+            "transaction_schema_version": 1,
+            "root_lock_path": str(root_lock),
+            "package_lock_path": str(package_lock),
+            "root_snapshot": _snapshot_payload(root_snapshot),
+            "package_snapshot": _snapshot_payload(package_snapshot),
+            "new_lock_sha256": _sha256(lock_bytes),
+        }
+        _write_transaction_file(
+            transaction / "journal.json", canonical_json_bytes(journal)
+        )
     except Exception:
-        for target in reversed(replaced):
-            backup = backup_paths.get(target)
-            try:
-                if backup is None:
-                    if target.exists():
-                        target.unlink()
-                elif backup.exists():
-                    os.replace(backup, target)
-            except OSError:
-                pass
+        _remove_transaction(transaction)
         raise
-    finally:
-        for path in temporary_paths:
-            try:
-                path.unlink(missing_ok=True)
-            except OSError:
-                pass
-        for backup in backup_paths.values():
-            if backup is not None:
+    return transaction
+
+
+def _snapshot_target(target: Path) -> _TargetSnapshot:
+    if not target.exists():
+        return _TargetSnapshot(exists=False, sha256=None, contents=None)
+    if not target.is_file():
+        raise ValueError(f"lock target is not a file: {target}")
+    contents = target.read_bytes()
+    return _TargetSnapshot(exists=True, sha256=_sha256(contents), contents=contents)
+
+
+def _snapshot_payload(snapshot: _TargetSnapshot) -> dict[str, object]:
+    return {"exists": snapshot.exists, "sha256": snapshot.sha256}
+
+
+def _write_backup(backup: Path, target: Path, snapshot: _TargetSnapshot) -> None:
+    if snapshot.exists:
+        assert snapshot.contents is not None
+        _write_transaction_file(backup, snapshot.contents)
+
+
+def _assert_snapshot_current(target: Path, snapshot: _TargetSnapshot) -> None:
+    current = _snapshot_target(target)
+    if current != snapshot:
+        raise RuntimeError(f"lock target changed since snapshot: {target}")
+
+
+def _attempt_rollback(
+    transaction: Path,
+    replaced: list[tuple[Path, _TargetSnapshot, str]],
+    lock_bytes: bytes,
+) -> list[str]:
+    errors: list[str] = []
+    for target, snapshot, backup_name in reversed(replaced):
+        try:
+            _assert_exact_bytes(target, lock_bytes)
+            if snapshot.exists:
+                backup_bytes = (transaction / backup_name).read_bytes()
+                _assert_sha256(backup_bytes, snapshot.sha256, backup_name)
+                temporary = _write_temporary(target.parent, backup_bytes)
                 try:
-                    backup.unlink(missing_ok=True)
-                except OSError:
-                    pass
+                    os.replace(temporary, target)
+                finally:
+                    _unlink_quietly(temporary)
+            else:
+                target.unlink()
+            _assert_snapshot_current(target, snapshot)
+        except Exception as error:
+            errors.append(f"rollback {target}: {error}")
+    return errors
+
+
+def _recover_transaction(transaction: Path, root_lock: Path, package_lock: Path) -> None:
+    journal = _read_journal(transaction / "journal.json")
+    if Path(journal["root_lock_path"]).resolve() != root_lock:
+        raise RuntimeError(f"transaction targets a different root lock: {transaction}")
+    if Path(journal["package_lock_path"]).resolve() != package_lock:
+        raise RuntimeError(f"transaction targets a different package lock: {transaction}")
+    root_snapshot = _parse_snapshot(journal["root_snapshot"], "root_snapshot")
+    package_snapshot = _parse_snapshot(journal["package_snapshot"], "package_snapshot")
+    lock_bytes = (transaction / "new.lock").read_bytes()
+    _assert_sha256(lock_bytes, journal["new_lock_sha256"], "new.lock")
+    payload = decode_production_lock_json(lock_bytes, "journaled new lock")
+    if lock_bytes != canonical_json_bytes(payload):
+        raise RuntimeError(f"journaled new lock is not canonical: {transaction}")
+    _validate_current_lock_payload(payload)
+    _assert_recovery_state(transaction, root_lock, root_snapshot, "root.before", lock_bytes)
+    _assert_recovery_state(
+        transaction, package_lock, package_snapshot, "package.before", lock_bytes
+    )
+    temporary_paths = [
+        _write_temporary(root_lock.parent, lock_bytes),
+        _write_temporary(package_lock.parent, lock_bytes),
+    ]
+    try:
+        os.replace(temporary_paths[0], root_lock)
+        os.replace(temporary_paths[1], package_lock)
+        _assert_exact_bytes(root_lock, lock_bytes)
+        _assert_exact_bytes(package_lock, lock_bytes)
+    except Exception as error:
+        raise RuntimeError(
+            f"recovery required but roll-forward failed; transaction={transaction}"
+        ) from error
+    finally:
+        for temporary in temporary_paths:
+            _unlink_quietly(temporary)
+    _remove_transaction(transaction)
+
+
+def _read_journal(path: Path) -> Mapping[str, object]:
+    try:
+        journal = decode_production_lock_json(path.read_bytes(), "promotion journal")
+    except OSError as error:
+        raise RuntimeError(f"unable to read promotion journal: {path}") from error
+    if set(journal) != _JOURNAL_KEYS:
+        raise RuntimeError(f"invalid promotion journal keys: {path}")
+    if journal["transaction_schema_version"] != 1:
+        raise RuntimeError(f"unsupported promotion journal schema: {path}")
+    for key in ("root_lock_path", "package_lock_path", "new_lock_sha256"):
+        if not isinstance(journal[key], str) or not journal[key]:
+            raise RuntimeError(f"invalid {key} in promotion journal: {path}")
+    if not _SHA256_RE.fullmatch(journal["new_lock_sha256"]):
+        raise RuntimeError(f"invalid new_lock_sha256 in promotion journal: {path}")
+    return journal
+
+
+def _parse_snapshot(value: object, name: str) -> _TargetSnapshot:
+    if not isinstance(value, Mapping) or set(value) != _SNAPSHOT_KEYS:
+        raise RuntimeError(f"invalid {name} in promotion journal")
+    exists = value["exists"]
+    sha256 = value["sha256"]
+    if not isinstance(exists, bool):
+        raise RuntimeError(f"invalid {name}.exists in promotion journal")
+    if exists:
+        if not isinstance(sha256, str) or not _SHA256_RE.fullmatch(sha256):
+            raise RuntimeError(f"invalid {name}.sha256 in promotion journal")
+    elif sha256 is not None:
+        raise RuntimeError(f"invalid absent {name}.sha256 in promotion journal")
+    return _TargetSnapshot(exists=exists, sha256=sha256, contents=None)
+
+
+def _assert_recovery_state(
+    transaction: Path,
+    target: Path,
+    snapshot: _TargetSnapshot,
+    backup_name: str,
+    lock_bytes: bytes,
+) -> None:
+    current = _read_target_or_none(target)
+    expected_before = None
+    if snapshot.exists:
+        expected_before = (transaction / backup_name).read_bytes()
+        _assert_sha256(expected_before, snapshot.sha256, backup_name)
+    if current not in {expected_before, lock_bytes}:
+        raise RuntimeError(
+            f"recovery required but target has external bytes: {target}; journal retained"
+        )
+
+
+def _read_target_or_none(target: Path) -> bytes | None:
+    if not target.exists():
+        return None
+    if not target.is_file():
+        raise RuntimeError(f"recovery target is not a file: {target}")
+    return target.read_bytes()
 
 
 def _write_temporary(directory: Path, payload: bytes) -> Path:
@@ -247,20 +559,38 @@ def _write_temporary(directory: Path, payload: bytes) -> Path:
     return Path(temporary)
 
 
-def _backup_existing(target: Path) -> Path | None:
-    if not target.exists():
-        return None
-    if not target.is_file():
-        raise ValueError(f"lock target is not a file: {target}")
-    descriptor, backup = tempfile.mkstemp(prefix=".ip_lock.backup.", dir=target.parent)
-    os.close(descriptor)
-    backup_path = Path(backup)
+def _write_transaction_file(path: Path, payload: bytes) -> None:
+    with path.open("xb") as stream:
+        stream.write(payload)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def _assert_exact_bytes(path: Path, expected: bytes) -> None:
+    if _read_target_or_none(path) != expected:
+        raise RuntimeError(f"lock target changed unexpectedly: {path}")
+
+
+def _assert_sha256(payload: bytes, expected: object, description: str) -> None:
+    if not isinstance(expected, str) or _sha256(payload) != expected:
+        raise RuntimeError(f"SHA-256 mismatch for {description}")
+
+
+def _sha256(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _unlink_quietly(path: Path) -> None:
     try:
-        shutil.copyfile(target, backup_path)
-    except Exception:
-        backup_path.unlink(missing_ok=True)
-        raise
-    return backup_path
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _remove_transaction(transaction: Path) -> None:
+    for path in transaction.iterdir():
+        path.unlink()
+    transaction.rmdir()
 
 
 if __name__ == "__main__":
