@@ -9,7 +9,9 @@ from rfsoc_pulse_model.ip.evidence import (
     canonical_json_bytes,
 )
 from rfsoc_pulse_model.ip.generate import generate_ip_architecture
+from rfsoc_pulse_model.ip.lock import GenerationMode
 from rfsoc_pulse_model.ip.types import HardwareArchitectureConfig
+from rfsoc_pulse_model.generate import main as generate_main
 
 
 class GenerateIpArchitectureTest(unittest.TestCase):
@@ -46,6 +48,32 @@ class GenerateIpArchitectureTest(unittest.TestCase):
                 first["catalog_request_sha256"],
                 hashlib.sha256(first_bytes[Path("metadata/catalog_request.json")]).hexdigest(),
             )
+
+    def test_development_mode_reports_missing_production_lock_truthfully(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            architecture = generate_ip_architecture(
+                Path(temporary), GenerationMode.DEVELOPMENT
+            )
+
+        self.assertFalse(architecture["production_lock_valid"])
+
+    def test_production_mode_fails_closed_without_a_lock_before_output_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "not-written"
+            with self.assertRaisesRegex(ValueError, "production lock.*missing"):
+                generate_ip_architecture(root, GenerationMode.PRODUCTION)
+            self.assertFalse(root.exists())
+
+    def test_top_level_cli_accepts_explicit_ip_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            self.assertEqual(
+                generate_main(
+                    ["--output", temporary, "--ip-mode", "development"]
+                ),
+                0,
+            )
+            metadata = Path(temporary) / "metadata/ip_architecture.json"
+            self.assertFalse(json.loads(metadata.read_text(encoding="utf-8"))["production_lock_valid"])
 
 
 if __name__ == "__main__":

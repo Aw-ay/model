@@ -11,6 +11,7 @@ from .common.types import SampleTimeReference
 from .cycle.dsl.emitter import VerilogEmitter
 from .cycle.registry import HARDWARE_MODULES
 from .ip.generate import generate_ip_architecture
+from .ip.lock import GenerationMode
 
 
 def _sha256(data: bytes) -> str:
@@ -29,17 +30,20 @@ def _ports(module) -> list[dict[str, object]]:
     ]
 
 
-def generate(output_root: Path) -> dict[str, object]:
+def generate(
+    output_root: Path,
+    ip_mode: GenerationMode | str = GenerationMode.DEVELOPMENT,
+) -> dict[str, object]:
     """Regenerate all registered hardware RTL and its machine manifest."""
 
     root = Path(output_root)
+    config = ModelConfig.load_default()
+    ip_architecture = generate_ip_architecture(root, ip_mode)
     rtl_root = root / "rtl"
     metadata_root = root / "metadata"
     rtl_root.mkdir(parents=True, exist_ok=True)
     metadata_root.mkdir(parents=True, exist_ok=True)
 
-    config = ModelConfig.load_default()
-    ip_architecture = generate_ip_architecture(root)
     ip_architecture_bytes = (metadata_root / "ip_architecture.json").read_bytes()
     emitter = VerilogEmitter()
     modules = []
@@ -127,8 +131,13 @@ def generate(output_root: Path) -> dict[str, object]:
 def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate Cycle-derived Verilog")
     parser.add_argument("--output", type=Path, default=Path("build"))
+    parser.add_argument(
+        "--ip-mode",
+        choices=tuple(mode.value for mode in GenerationMode),
+        default=GenerationMode.DEVELOPMENT.value,
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
-    generate(args.output)
+    generate(args.output, GenerationMode(args.ip_mode))
     return 0
 
 

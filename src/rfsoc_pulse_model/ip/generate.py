@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 from importlib import resources
+import json
 from pathlib import Path
+from collections.abc import Mapping
 
 from .evidence import (
     CatalogResolutionStatus,
@@ -17,21 +19,21 @@ from .evidence import (
 from .registry import ArchitectureRegistry
 from .tcl import emit_architecture_realization_tcl, emit_catalog_discovery_tcl
 from .types import HardwareArchitectureConfig
+from .lock import GenerationMode, validate_production_lock
 
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def generate_ip_architecture(output_root: Path) -> dict[str, object]:
+def generate_ip_architecture(
+    output_root: Path,
+    ip_mode: GenerationMode | str = GenerationMode.DEVELOPMENT,
+) -> dict[str, object]:
     """Generate unconnected architecture artifacts in strict provenance order."""
 
+    mode = GenerationMode(ip_mode)
     root = Path(output_root)
-    metadata_root = root / "metadata"
-    vivado_root = root / "vivado"
-    metadata_root.mkdir(parents=True, exist_ok=True)
-    vivado_root.mkdir(parents=True, exist_ok=True)
-
     config_resource = resources.files("rfsoc_pulse_model.config").joinpath(
         "ip_architecture.json"
     )
@@ -41,16 +43,22 @@ def generate_ip_architecture(output_root: Path) -> dict[str, object]:
     registry = ArchitectureRegistry.default()
 
     discovery_bytes = emit_catalog_discovery_tcl(config).encode("utf-8")
-    (vivado_root / "discover_ip_catalog.tcl").write_bytes(discovery_bytes)
     generated_tcl_sha256 = _sha256(discovery_bytes)
-
     realization_bytes = emit_architecture_realization_tcl(config).encode("utf-8")
-    (vivado_root / "realize_ip_architecture.tcl").write_bytes(realization_bytes)
     realization_tcl_sha256 = _sha256(realization_bytes)
-
     request_bytes = canonical_json_bytes(
         build_catalog_request(config, source_config_sha256, generated_tcl_sha256)
     )
+    production_lock_valid = _validate_packaged_lock(
+        mode, config, request_bytes, discovery_bytes
+    )
+
+    metadata_root = root / "metadata"
+    vivado_root = root / "vivado"
+    metadata_root.mkdir(parents=True, exist_ok=True)
+    vivado_root.mkdir(parents=True, exist_ok=True)
+    (vivado_root / "discover_ip_catalog.tcl").write_bytes(discovery_bytes)
+    (vivado_root / "realize_ip_architecture.tcl").write_bytes(realization_bytes)
     (metadata_root / "catalog_request.json").write_bytes(request_bytes)
     catalog_request_sha256 = _sha256(request_bytes)
 
@@ -85,6 +93,7 @@ def generate_ip_architecture(output_root: Path) -> dict[str, object]:
         "architecture_config_version": config.architecture_config_version,
         "vivado_version": config.vivado_version,
         "generation_mode": config.generation_mode,
+        "ip_mode": mode.value,
         "topology_status": config.topology_status,
         "integration_accepted": False,
         "rfdc": {
@@ -142,8 +151,34 @@ def generate_ip_architecture(output_root: Path) -> dict[str, object]:
             if validated_evidence is None
             else validated_evidence.catalog_resolution_complete
         ),
+        "production_lock_valid": production_lock_valid,
     }
     (metadata_root / "ip_architecture.json").write_bytes(
         canonical_json_bytes(architecture)
     )
     return architecture
+
+
+def _validate_packaged_lock(
+    mode: GenerationMode,
+    config: HardwareArchitectureConfig,
+    request_bytes: bytes,
+    discovery_bytes: bytes,
+) -> bool:
+    resource = resources.files("rfsoc_pulse_model.config").joinpath("ip_lock.json")
+    if not resource.is_file():
+        if mode is GenerationMode.PRODUCTION:
+            raise ValueError("production lock is missing")
+        return False
+    try:
+        with resource.open("r", encoding="utf-8") as stream:
+            payload = json.load(stream)
+        if not isinstance(payload, Mapping):
+            raise ValueError("production lock must be a JSON object")
+        return validate_production_lock(
+            config, request_bytes, discovery_bytes, payload
+        ).valid
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        if mode is GenerationMode.PRODUCTION:
+            raise ValueError("production lock is invalid") from error
+        return False
