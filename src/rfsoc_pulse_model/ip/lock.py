@@ -19,6 +19,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import sys
 import tempfile
 from typing import Iterable
@@ -50,6 +51,10 @@ _JOURNAL_KEYS = {
 _SNAPSHOT_KEYS = {"exists", "sha256"}
 _PROMOTION_LOCK_NAME = ".ip_lock.promotion.lock"
 _TRANSACTION_DIRECTORY = ".ip_lock.transactions"
+_TRANSACTION_FILENAMES = frozenset(
+    {"journal.json", "new.lock", "root.before", "package.before"}
+)
+_TRANSACTION_NAME_RE = re.compile(r"^[0-9a-f]{32}$")
 LOCK_WRITER_CONCURRENCY_CONTRACT = (
     "Only promote/recover writers holding the same repository advisory lock are "
     "supported. Manual edits to config/ip_lock.json and "
@@ -178,12 +183,11 @@ def recover_interrupted_promotion(root_lock_path: Path, package_lock_path: Path)
     )
     with _repository_promotion_lock(root_lock, package_lock):
         transaction_root = _transaction_root(root_lock, package_lock)
-        if not transaction_root.is_dir():
+        if not _lstat_exists(transaction_root):
             return 0
+        _assert_real_directory(transaction_root, "transaction root")
         recovered = 0
-        for transaction in sorted(transaction_root.iterdir()):
-            if not transaction.is_dir():
-                continue
+        for transaction in _trusted_transaction_entries(transaction_root):
             _recover_transaction(transaction, root_lock, package_lock)
             recovered += 1
         return recovered
@@ -402,9 +406,11 @@ def _create_transaction(
 ) -> Path:
     transaction_root = _transaction_root(root_lock, package_lock)
     transaction_root.mkdir(parents=True, exist_ok=True)
+    _assert_real_directory(transaction_root, "transaction root")
     _flush_directory(transaction_root.parent)
     transaction = transaction_root / uuid.uuid4().hex
     transaction.mkdir()
+    _assert_trusted_transaction_directory(transaction, transaction_root)
     _flush_directory(transaction_root)
     try:
         _write_transaction_file(transaction / "new.lock", lock_bytes)
@@ -462,7 +468,7 @@ def _attempt_rollback(
         try:
             _assert_exact_bytes(target, lock_bytes)
             if snapshot.exists:
-                backup_bytes = (transaction / backup_name).read_bytes()
+                backup_bytes = _read_transaction_file(transaction, backup_name)
                 _assert_sha256(backup_bytes, snapshot.sha256, backup_name)
                 temporary = _write_temporary(target.parent, backup_bytes)
                 try:
@@ -480,14 +486,15 @@ def _attempt_rollback(
 
 
 def _recover_transaction(transaction: Path, root_lock: Path, package_lock: Path) -> None:
-    journal = _read_journal(transaction / "journal.json")
+    _assert_trusted_transaction_directory(transaction, transaction.parent)
+    journal = _read_journal(transaction)
     if Path(journal["root_lock_path"]).resolve() != root_lock:
         raise RuntimeError(f"transaction targets a different root lock: {transaction}")
     if Path(journal["package_lock_path"]).resolve() != package_lock:
         raise RuntimeError(f"transaction targets a different package lock: {transaction}")
     root_snapshot = _parse_snapshot(journal["root_snapshot"], "root_snapshot")
     package_snapshot = _parse_snapshot(journal["package_snapshot"], "package_snapshot")
-    lock_bytes = (transaction / "new.lock").read_bytes()
+    lock_bytes = _read_transaction_file(transaction, "new.lock")
     _assert_sha256(lock_bytes, journal["new_lock_sha256"], "new.lock")
     payload = decode_production_lock_json(lock_bytes, "journaled new lock")
     if lock_bytes != canonical_json_bytes(payload):
@@ -518,20 +525,22 @@ def _recover_transaction(transaction: Path, root_lock: Path, package_lock: Path)
     _remove_transaction(transaction)
 
 
-def _read_journal(path: Path) -> Mapping[str, object]:
+def _read_journal(transaction: Path) -> Mapping[str, object]:
     try:
-        journal = decode_production_lock_json(path.read_bytes(), "promotion journal")
+        journal = decode_production_lock_json(
+            _read_transaction_file(transaction, "journal.json"), "promotion journal"
+        )
     except OSError as error:
-        raise RuntimeError(f"unable to read promotion journal: {path}") from error
+        raise RuntimeError(f"unable to read promotion journal: {transaction}") from error
     if set(journal) != _JOURNAL_KEYS:
-        raise RuntimeError(f"invalid promotion journal keys: {path}")
+        raise RuntimeError(f"invalid promotion journal keys: {transaction}")
     if journal["transaction_schema_version"] != 1:
-        raise RuntimeError(f"unsupported promotion journal schema: {path}")
+        raise RuntimeError(f"unsupported promotion journal schema: {transaction}")
     for key in ("root_lock_path", "package_lock_path", "new_lock_sha256"):
         if not isinstance(journal[key], str) or not journal[key]:
-            raise RuntimeError(f"invalid {key} in promotion journal: {path}")
+            raise RuntimeError(f"invalid {key} in promotion journal: {transaction}")
     if not _SHA256_RE.fullmatch(journal["new_lock_sha256"]):
-        raise RuntimeError(f"invalid new_lock_sha256 in promotion journal: {path}")
+        raise RuntimeError(f"invalid new_lock_sha256 in promotion journal: {transaction}")
     return journal
 
 
@@ -560,7 +569,7 @@ def _assert_recovery_state(
     current = _read_target_or_none(target)
     expected_before = None
     if snapshot.exists:
-        expected_before = (transaction / backup_name).read_bytes()
+        expected_before = _read_transaction_file(transaction, backup_name)
         _assert_sha256(expected_before, snapshot.sha256, backup_name)
     if current not in {expected_before, lock_bytes}:
         raise RuntimeError(
@@ -671,11 +680,146 @@ def _write_temporary(directory: Path, payload: bytes) -> Path:
 
 
 def _write_transaction_file(path: Path, payload: bytes) -> None:
-    with path.open("xb") as stream:
-        stream.write(payload)
-        stream.flush()
-        os.fsync(stream.fileno())
+    _assert_trusted_transaction_directory(path.parent, path.parent.parent)
+    if path.name not in _TRANSACTION_FILENAMES:
+        raise RuntimeError(f"unsafe transaction filename: {path.name}")
+    if os.name == "posix":
+        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        directory_flags |= getattr(os, "O_NOFOLLOW", 0)
+        directory_descriptor = os.open(path.parent, directory_flags)
+        try:
+            file_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            file_flags |= getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(path.name, file_flags, 0o600, dir_fd=directory_descriptor)
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+        finally:
+            os.close(directory_descriptor)
+    else:
+        with path.open("xb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+    _assert_regular_transaction_file(path.parent, path.name)
     _flush_directory(path.parent)
+
+
+def _lstat_exists(path: Path) -> bool:
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _is_link_or_reparse(path: Path) -> bool:
+    """Return whether *path* is a link-like object without following it."""
+
+    info = os.lstat(path)
+    if stat.S_ISLNK(info.st_mode):
+        return True
+    is_junction = getattr(path, "is_junction", None)
+    if callable(is_junction) and is_junction():
+        return True
+    if os.name == "nt":
+        attributes = getattr(info, "st_file_attributes", 0)
+        reparse_point = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400)
+        if attributes & reparse_point:
+            return True
+    return False
+
+
+def _assert_real_directory(path: Path, description: str) -> None:
+    try:
+        info = os.lstat(path)
+    except OSError as error:
+        raise RuntimeError(f"unable to inspect {description}: {path}") from error
+    if _is_link_or_reparse(path):
+        raise RuntimeError(f"unsafe {description}: symlink or reparse point: {path}")
+    if not stat.S_ISDIR(info.st_mode):
+        raise RuntimeError(f"unsafe {description}: not a directory: {path}")
+
+
+def _assert_trusted_transaction_directory(
+    transaction: Path, transaction_root: Path
+) -> None:
+    if transaction_root.name != _TRANSACTION_DIRECTORY:
+        raise RuntimeError(f"unsafe transaction root name: {transaction_root}")
+    if transaction.parent != transaction_root:
+        raise RuntimeError(f"unsafe transaction outside transaction root: {transaction}")
+    if not _TRANSACTION_NAME_RE.fullmatch(transaction.name):
+        raise RuntimeError(f"unsafe transaction name: {transaction.name}")
+    _assert_real_directory(transaction_root, "transaction root")
+    _assert_real_directory(transaction, "transaction entry")
+
+
+def _trusted_transaction_entries(transaction_root: Path) -> Iterator[Path]:
+    _assert_real_directory(transaction_root, "transaction root")
+    for name in sorted(_list_real_directory(transaction_root, "transaction root")):
+        transaction = transaction_root / name
+        _assert_trusted_transaction_directory(transaction, transaction_root)
+        yield transaction
+
+
+def _list_real_directory(directory: Path, description: str) -> list[str]:
+    _assert_real_directory(directory, description)
+    if os.name != "posix":
+        return list(os.listdir(directory))
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(directory, flags)
+    try:
+        return list(os.listdir(descriptor))
+    finally:
+        os.close(descriptor)
+
+
+def _assert_regular_transaction_file(transaction: Path, name: str) -> Path:
+    if name not in _TRANSACTION_FILENAMES:
+        raise RuntimeError(f"unsafe transaction filename: {name}")
+    _assert_trusted_transaction_directory(transaction, transaction.parent)
+    path = transaction / name
+    try:
+        info = os.lstat(path)
+    except OSError as error:
+        raise RuntimeError(f"unable to inspect transaction file: {path}") from error
+    if _is_link_or_reparse(path):
+        raise RuntimeError(f"unsafe transaction file symlink or reparse point: {path}")
+    if not stat.S_ISREG(info.st_mode):
+        raise RuntimeError(f"unsafe transaction file is not regular: {path}")
+    return path
+
+
+def _read_transaction_file(transaction: Path, name: str) -> bytes:
+    """Read a whitelisted ordinary transaction file without following links."""
+
+    path = _assert_regular_transaction_file(transaction, name)
+    if os.name != "posix":
+        # Windows has no dir_fd/O_NOFOLLOW equivalent in this module.  Rejecting
+        # every reparse object before opening is the fail-closed contract.
+        return path.read_bytes()
+
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_flags |= getattr(os, "O_NOFOLLOW", 0)
+    directory_descriptor = os.open(transaction, directory_flags)
+    try:
+        file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(name, file_flags, dir_fd=directory_descriptor)
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise RuntimeError(f"unsafe transaction file is not regular: {path}")
+            chunks: list[bytes] = []
+            while True:
+                chunk = os.read(descriptor, 65536)
+                if not chunk:
+                    return b"".join(chunks)
+                chunks.append(chunk)
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(directory_descriptor)
 
 
 def _assert_exact_bytes(path: Path, expected: bytes) -> None:
@@ -701,11 +845,52 @@ def _unlink_quietly(path: Path) -> None:
 
 
 def _remove_transaction(transaction: Path) -> None:
-    for path in transaction.iterdir():
-        path.unlink()
-        _flush_directory(transaction)
-    transaction.rmdir()
-    _flush_directory(transaction.parent)
+    """Remove only a fully verified transaction directory.
+
+    Recovery material is untrusted after a crash.  In particular, never walk
+    arbitrary children here: an unexpected object means an operator must retain
+    the whole directory for inspection or explicit recovery.
+    """
+
+    transaction_root = transaction.parent
+    _assert_trusted_transaction_directory(transaction, transaction_root)
+    names = set(_list_real_directory(transaction, "transaction entry"))
+    unknown = names - _TRANSACTION_FILENAMES
+    if unknown:
+        raise RuntimeError(
+            "unknown transaction entry; recovery material retained: "
+            f"{sorted(unknown)}"
+        )
+    # Validate every object before unlinking any one of them, so an unsafe
+    # known-name object cannot produce a partial cleanup either.
+    for name in names:
+        _assert_regular_transaction_file(transaction, name)
+
+    if os.name == "posix":
+        root_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        root_flags |= getattr(os, "O_NOFOLLOW", 0)
+        root_descriptor = os.open(transaction_root, root_flags)
+        try:
+            transaction_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+            transaction_flags |= getattr(os, "O_NOFOLLOW", 0)
+            transaction_descriptor = os.open(
+                transaction.name, transaction_flags, dir_fd=root_descriptor
+            )
+            try:
+                for name in sorted(names):
+                    os.unlink(name, dir_fd=transaction_descriptor)
+                    _flush_directory(transaction)
+            finally:
+                os.close(transaction_descriptor)
+            os.rmdir(transaction.name, dir_fd=root_descriptor)
+        finally:
+            os.close(root_descriptor)
+    else:
+        for name in sorted(names):
+            (transaction / name).unlink()
+            _flush_directory(transaction)
+        transaction.rmdir()
+    _flush_directory(transaction_root)
 
 
 if __name__ == "__main__":
