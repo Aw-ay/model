@@ -183,6 +183,39 @@ def test_2spc_production_boundaries_are_pending_not_legacy_aliases(self) -> None
     )
 
 
+def test_monitor_branch_is_the_only_monitor_and_pdw_owner(self) -> None:
+    config = HardwareArchitectureConfig.load_default()
+    monitor_branch = config.block_by_name("monitor_branch")
+    self.assertEqual(monitor_branch.instance_refs, ("monitor_fir_dec2_0",))
+    self.assertEqual(
+        set(monitor_branch.responsibilities),
+        {
+            "monitor_fir_dec2",
+            "adaptive_noise",
+            "adaptive_threshold",
+            "nm_voting",
+            "toa",
+            "contiguous_main_peak_fwhm",
+            "coarse_pdw",
+            "hit_iq_event_framing",
+        },
+    )
+    self.assertEqual(
+        config.instance_by_name("monitor_fir_dec2_0").logical_role,
+        "monitor_decimator",
+    )
+    self.assertEqual(
+        config.instance_by_name("monitor_fir_dec2_0").lifecycle,
+        IpInstanceLifecycle.PLANNED,
+    )
+    self.assertFalse(
+        any(
+            block.block_name == "monitor_decimator"
+            for block in config.architecture_blocks
+        )
+    )
+
+
 def test_pending_kind_and_status_cannot_disagree(self) -> None:
     with self.assertRaisesRegex(ValueError, "architecture_pending.*equivalent"):
         ArchitectureBlockSpec(
@@ -381,7 +414,7 @@ Declare all 13 family IDs from `EXPECTED_FAMILIES`. RFDC uses exact pattern and 
 Move current RFDC integration settings under `rfdc_integration`, replace the nested IP object with `"instance_ref": "rfdc_0"`, and retain exact mixer/NCO/output/proof values. Populate architecture blocks and required responsibilities with the exact production ownership names currently present in `ip/registry.py`, with these deliberate changes:
 
 - `rfdc_frontend` references `rfdc_0` and owns the eight RFDC functions;
-- `monitor_decimator` references planned `monitor_fir_dec2_0` and owns `monitor_fir_dec2`;
+- `monitor_branch` is the only monitor/PDW architecture block and references planned `monitor_fir_dec2_0`; its instance `logical_role` remains `monitor_decimator`, but no `monitor_decimator` architecture block exists. Because the instance is planned, realization must not materialize it;
 - `fractional_delay_bank` is `architecture_pending`, references no instance, and owns `fractional_delay_processing` plus `fractional_delay_coefficient_set_scheduling`;
 - remove the separate production `fractional_delay_scheduler` owner;
 - `rx_2spc_continuous_ingress` and `tx_2spc_continuous_egress` are separate `architecture_pending` production blocks. Each has one same-named production responsibility, `architecture_status="architecture_pending"`, `production_accepted=false`, `instance_refs=[]`, and no `source`;

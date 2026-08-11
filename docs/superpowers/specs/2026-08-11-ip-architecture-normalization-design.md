@@ -122,6 +122,7 @@ rfdc_0:
 
 monitor_fir_dec2_0:
     family_ref = fir_compiler
+    logical_role = monitor_decimator
     lifecycle = planned
     parameter_status = drafted
     connection_status = unconnected
@@ -361,6 +362,14 @@ Each listed block is an `architecture_pending` production block unless and
 until its implementation is frozen; a block may own multiple responsibilities.
 The table allocates current low-level names without claiming a future AMD IP,
 RTL source, or instance topology.
+
+`monitor_branch.instance_refs` is exactly `[monitor_fir_dec2_0]`. The instance
+is still `planned`, so realization must not materialize it. Its
+`logical_role = monitor_decimator` describes the intended role of that one
+instance; it does not create, imply, or permit a separate
+`monitor_decimator` architecture block. `monitor_branch` is the sole
+production owner of `monitor_fir_dec2` and every listed PDW side-branch
+responsibility.
 
 ## 4. Independent architecture results
 
