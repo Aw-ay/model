@@ -520,14 +520,25 @@ manifest and later integration evidence. Changing
 changing `discover_ip_catalog.tcl` must invalidate it. The production lock does
 not include `realization_tcl_sha256`.
 
-Vivado discovery writes evidence containing:
+Vivado discovery writes the only accepted three-column TSV evidence grammar.
+The first six rows are metadata in this exact, non-reorderable order:
 
-- `architecture_config_sha256`;
-- `generated_tcl_sha256`;
-- `catalog_request_sha256`;
-- the actual full Vivado version;
-- a run identifier;
-- the exact resolved VLNV for every required family.
+```text
+meta<TAB>evidence_schema_version<TAB>1
+meta<TAB>architecture_config_sha256<TAB><64 lowercase hex>
+meta<TAB>generated_tcl_sha256<TAB><64 lowercase hex>
+meta<TAB>catalog_request_sha256<TAB><64 lowercase hex>
+meta<TAB>vivado_version<TAB><version -short result>
+meta<TAB>run_id<TAB><pid>-<clock milliseconds>
+```
+
+The emitter then writes one `ip<TAB><family_id><TAB><exact VLNV>` row for every
+required family. `run_id` must match `^[0-9]+-[0-9]+$`. Metadata may not be
+reordered or repeated, `ip` rows may not appear before all six metadata rows,
+metadata may not resume after `ip` rows begin, and the complete evidence text
+must end with exactly one trailing newline. These six fields and their order
+are the actual output contract of `emit_catalog_discovery_tcl()`; parsers must
+not accept an alternate metadata section.
 
 Python accepts evidence only when all three hashes match current files, the
 Vivado version satisfies the frozen version requirement, and the resolved
@@ -664,6 +675,9 @@ Tests prove:
 - `generated_tcl_sha256` binds only discovery Tcl, while realization Tcl has
   independent manifest provenance;
 - malformed, incomplete, duplicate, extra, or wrong-family evidence fails;
+- evidence accepts only the fixed six-row metadata order, numeric
+  `<pid>-<milliseconds>` run IDs, metadata-before-IP phase ordering, and one
+  trailing newline;
 - a wrong Vivado version fails;
 - only complete current evidence creates a candidate lock.
 

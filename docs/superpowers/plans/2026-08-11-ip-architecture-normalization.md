@@ -795,6 +795,16 @@ meta<TAB>run_id<TAB><pid>-<clock milliseconds>
 ip<TAB><family_id><TAB><exact VLNV>
 ```
 
+This is the only accepted evidence wire grammar. The first six rows are fixed
+metadata rows in exactly the order shown: `evidence_schema_version`,
+`architecture_config_sha256`, `generated_tcl_sha256`,
+`catalog_request_sha256`, `vivado_version`, then `run_id`. This order is the
+exact order emitted by `emit_catalog_discovery_tcl()`. Metadata rows may not be
+reordered or repeated, and no `ip` row may appear before all six metadata rows
+are complete. `run_id` must match `^[0-9]+-[0-9]+$`. One or more `ip` rows
+follow the metadata section, and the complete text ends with exactly one
+trailing newline, never zero or two.
+
 - [ ] **Step 4: Implement realization Tcl over concrete instances**
 
 `emit_architecture_realization_tcl()` must create the in-memory ZU27DR project and unconnected BD, iterate `config.ip_instances`, skip planned and retired instances, and emit stable cell names only for materialized instances. In the initial config it creates exactly `rfdc_0`. Emit `IP_ARCHITECTURE_STATUS=UNCONNECTED_SKELETON`; do not call `validate_bd_design`.
@@ -875,10 +885,23 @@ def make_evidence_fixture():
         generated_tcl_sha256=request_payload["generated_tcl_sha256"],
         catalog_request_sha256=hashlib.sha256(request_bytes).hexdigest(),
         vivado_version="2025.2",
-        run_id="unit-test-1",
+        run_id="1234-1730000000000",
         resolved_vlnv=tuple(sorted(resolved.items())),
     )
     return config, request_bytes, discovery_tcl_bytes, evidence
+
+
+def evidence_tsv(evidence: CatalogEvidence) -> str:
+    rows = [
+        ("meta", "evidence_schema_version", str(evidence.evidence_schema_version)),
+        ("meta", "architecture_config_sha256", evidence.architecture_config_sha256),
+        ("meta", "generated_tcl_sha256", evidence.generated_tcl_sha256),
+        ("meta", "catalog_request_sha256", evidence.catalog_request_sha256),
+        ("meta", "vivado_version", evidence.vivado_version),
+        ("meta", "run_id", evidence.run_id),
+    ]
+    rows.extend(("ip", family_id, vlnv) for family_id, vlnv in evidence.resolved_vlnv)
+    return "".join(f"{kind}\t{key}\t{value}\n" for kind, key, value in rows)
 
 
 def test_current_complete_evidence_is_resolved(self) -> None:
@@ -940,11 +963,41 @@ def test_missing_extra_duplicate_and_wrong_identity_fail(self) -> None:
             dataclasses.replace(evidence, resolved_vlnv=tuple(sorted(wrong.items()))),
         )
 
+    duplicate_ip = (
+        evidence_tsv(evidence)
+        + "ip\trfdc\txilinx.com:ip:usp_rf_data_converter:2.6\n"
+    )
     with self.assertRaisesRegex(ValueError, "duplicate"):
+        parse_catalog_evidence(duplicate_ip)
+
+
+def test_parser_enforces_exact_wire_grammar(self) -> None:
+    _, _, _, evidence = make_evidence_fixture()
+    valid = evidence_tsv(evidence)
+    self.assertEqual(parse_catalog_evidence(valid).run_id, "1234-1730000000000")
+
+    with self.assertRaisesRegex(ValueError, "run_id"):
         parse_catalog_evidence(
-            "ip\trfdc\txilinx.com:ip:usp_rf_data_converter:2.6\n"
-            "ip\trfdc\txilinx.com:ip:usp_rf_data_converter:2.6\n"
+            valid.replace("1234-1730000000000", "unit-test-1")
         )
+
+    first_ip = "ip\trfdc\txilinx.com:ip:usp_rf_data_converter:2.6\n"
+    with self.assertRaisesRegex(ValueError, "ip row before metadata"):
+        parse_catalog_evidence(first_ip + valid)
+
+    rows = valid.splitlines(keepends=True)
+    reordered = "".join((rows[0], rows[2], rows[1], *rows[3:]))
+    with self.assertRaisesRegex(ValueError, "metadata order"):
+        parse_catalog_evidence(reordered)
+
+    repeated = "".join((rows[0], rows[0], *rows[1:]))
+    with self.assertRaisesRegex(ValueError, "metadata.*duplicate"):
+        parse_catalog_evidence(repeated)
+
+    for malformed_ending in (valid.removesuffix("\n"), valid + "\n"):
+        with self.subTest(malformed_ending=repr(malformed_ending[-2:])):
+            with self.assertRaisesRegex(ValueError, "single trailing newline"):
+                parse_catalog_evidence(malformed_ending)
 ```
 
 Add a generation test that writes a current fixture as strict TSV, reruns `generate_ip_architecture()`, and requires `ip_lock.candidate.json`. Replace its `generated_tcl_sha256` row with 64 zeros, rerun generation, and require status `stale_evidence` plus absence of `ip_lock.candidate.json`. The generator must remove only that known derived candidate path when evidence is absent or stale; it must not delete unrelated metadata.
@@ -1005,7 +1058,28 @@ class ValidatedCatalogEvidence:
     evidence: CatalogEvidence
 ```
 
-Parse the exact three-column grammar from Task 3. Reject unknown row kinds, duplicate metadata, duplicate families, missing metadata, padded values, malformed SHA-256, blank run IDs, and malformed VLNV values. Treat a hash or Vivado-version mismatch as `STALE_EVIDENCE` only after the evidence is structurally valid and its resolved family set is exact. Treat malformed content and wrong family identities as errors.
+Parse the exact three-column grammar from Task 3 with one fixed metadata order:
+
+```python
+META_ORDER = (
+    "evidence_schema_version",
+    "architecture_config_sha256",
+    "generated_tcl_sha256",
+    "catalog_request_sha256",
+    "vivado_version",
+    "run_id",
+)
+RUN_ID_RE = re.compile(r"^[0-9]+-[0-9]+$")
+```
+
+Accept exactly those six metadata rows in that order, followed only by `ip`
+rows. Reject metadata reordering or repetition, an `ip` row before the sixth
+metadata row, any metadata after the first `ip` row, unknown row kinds,
+duplicate families, missing metadata, padded values, malformed SHA-256,
+malformed `run_id`, malformed VLNV values, and a file without exactly one
+trailing newline. Treat a hash or Vivado-version mismatch as `STALE_EVIDENCE`
+only after the evidence is structurally valid and its resolved family set is
+exact. Treat malformed content and wrong family identities as errors.
 
 Remove schema-v1 ingestion of `metadata/resolved_ip_vlnv.tsv`; schema v2 reads only `metadata/catalog_evidence.tsv`.
 
@@ -1520,6 +1594,7 @@ git commit -m "docs: accept normalized AMD IP architecture"
 | Acyclic config, discovery Tcl, request, evidence, candidate chain | Tasks 3–4 |
 | Discovery-only `generated_tcl_sha256` provenance | Tasks 3–5 |
 | Complete required-family evidence and stale-evidence rejection | Task 4 |
+| Strict six-row TSV metadata order, numeric run ID, row phases, and one trailing newline | Tasks 3–4 |
 | Exact production lock and explicit promotion | Tasks 5 and 7 |
 | Legacy RTL production-source isolation | Task 6 |
 | Vivado 2025.2 full-family validation and bounded claims | Tasks 7–8 |
@@ -1541,6 +1616,7 @@ git commit -m "docs: accept normalized AMD IP architecture"
 - [ ] Discovery Tcl contains no BD-cell creation.
 - [ ] Realization Tcl creates only materialized instances.
 - [ ] Discovery evidence resolves exactly all required families.
+- [ ] Catalog evidence uses the fixed six-row metadata order, numeric `<pid>-<milliseconds>` run ID, metadata-before-IP phase, and exactly one trailing newline.
 - [ ] Old or mismatched evidence reports stale and cannot produce a current candidate lock.
 - [ ] Production lock family set is exact, uses RFDC 2.6, and binds discovery Tcl only.
 - [ ] Legacy Verilog appears only under `build/reference_rtl/`.
