@@ -26,6 +26,25 @@ class IpArchitectureTclTest(unittest.TestCase):
         self.assertIn("llength $argv", tcl)
         self.assertIn("catalog_evidence.tsv", tcl)
 
+    def test_discovery_validates_provenance_hashes_before_opening_evidence(self) -> None:
+        tcl = emit_catalog_discovery_tcl(HardwareArchitectureConfig.load_default())
+
+        self.assertIn("regexp {^[0-9a-f]{64}$}", tcl)
+        for argument_name in (
+            "architecture_config_sha256",
+            "generated_tcl_sha256",
+            "catalog_request_sha256",
+        ):
+            self.assertIn(argument_name, tcl)
+        self.assertLess(
+            tcl.index("regexp {^[0-9a-f]{64}$}"),
+            tcl.index("set catalog_evidence [open $evidence_path {w}]"),
+        )
+        self.assertIn(
+            "expected 64 lowercase hexadecimal characters",
+            tcl,
+        )
+
     def test_realization_creates_only_materialized_instances(self) -> None:
         config = HardwareArchitectureConfig.load_default()
         tcl = emit_architecture_realization_tcl(config)
