@@ -201,6 +201,42 @@ class HardwareArchitectureConfigTest(unittest.TestCase):
                 source=None,
             )
 
+    def test_dataclass_replace_rejects_mutable_responsibility_collections(self) -> None:
+        config = HardwareArchitectureConfig.load_default()
+        with self.assertRaisesRegex(ValueError, "production must be a tuple"):
+            dataclasses.replace(
+                config.required_responsibilities,
+                production=list(config.required_responsibilities.production),
+            )
+        with self.assertRaisesRegex(
+            ValueError, "continuous_dual_polar_reflection must be a tuple"
+        ):
+            dataclasses.replace(
+                config.required_responsibilities,
+                continuous_dual_polar_reflection=list(
+                    config.required_responsibilities.continuous_dual_polar_reflection
+                ),
+            )
+
+    def test_dataclass_replace_rejects_mutable_architecture_collections(self) -> None:
+        config = HardwareArchitectureConfig.load_default()
+        for field_name in ("ip_families", "ip_instances", "architecture_blocks"):
+            with self.subTest(field_name=field_name):
+                with self.assertRaisesRegex(ValueError, f"{field_name} must be a tuple"):
+                    dataclasses.replace(
+                        config,
+                        **{field_name: list(getattr(config, field_name))},
+                    )
+
+    def test_architecture_collections_reject_wrong_declared_element_types(self) -> None:
+        config = HardwareArchitectureConfig.load_default()
+        for field_name in ("ip_families", "ip_instances", "architecture_blocks"):
+            with self.subTest(field_name=field_name):
+                with self.assertRaisesRegex(
+                    ValueError, f"{field_name} entries have the wrong type"
+                ):
+                    dataclasses.replace(config, **{field_name: (object(),)})
+
     def test_rfdc_internal_settings_live_only_in_architecture_config(self) -> None:
         rfdc_integration = HardwareArchitectureConfig.load_default().rfdc_integration
         self.assertEqual(rfdc_integration.dac_analog_output_type, "real")

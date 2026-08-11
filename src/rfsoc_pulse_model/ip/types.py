@@ -62,6 +62,8 @@ def _require_nonempty(value: str, field_name: str) -> None:
 
 
 def _require_distinct_nonempty(values: tuple[str, ...], field_name: str) -> None:
+    if not isinstance(values, tuple):
+        raise ValueError(f"{field_name} must be a tuple")
     if not values or any(not isinstance(value, str) or not value.strip() for value in values):
         raise ValueError(f"{field_name} must contain nonempty values")
     if len(values) != len(set(values)):
@@ -261,6 +263,15 @@ class HardwareArchitectureConfig:
             raise ValueError("rfdc_integration must be RfdcIntegrationMetadata")
         if not isinstance(self.required_responsibilities, RequiredResponsibilitiesSpec):
             raise ValueError("required_responsibilities must be RequiredResponsibilitiesSpec")
+        _require_tuple_of_elements(
+            self.ip_families, IpFamilySpec, "ip_families"
+        )
+        _require_tuple_of_elements(
+            self.ip_instances, IpInstanceSpec, "ip_instances"
+        )
+        _require_tuple_of_elements(
+            self.architecture_blocks, ArchitectureBlockSpec, "architecture_blocks"
+        )
         _require_unique_ids(
             self.ip_families, "family_id", "ip family identifiers"
         )
@@ -540,6 +551,15 @@ def _require_unique_ids(
     identifiers = [getattr(value, attribute) for value in values]
     if len(identifiers) != len(set(identifiers)):
         raise ValueError(f"{label} must be unique")
+
+
+def _require_tuple_of_elements(
+    values: tuple[object, ...], element_type: type[object], field_name: str
+) -> None:
+    if not isinstance(values, tuple):
+        raise ValueError(f"{field_name} must be a tuple")
+    if any(not isinstance(value, element_type) for value in values):
+        raise ValueError(f"{field_name} entries have the wrong type")
 
 
 def _require_exact_keys(
