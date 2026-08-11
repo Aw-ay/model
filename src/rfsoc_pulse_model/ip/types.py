@@ -7,10 +7,10 @@ from dataclasses import dataclass
 from enum import Enum
 from importlib import resources
 import json
-from typing import Any
 
 
 RFDC_2_6_VLNV = "xilinx.com:ip:usp_rf_data_converter:2.6"
+_LEGACY_REFERENCE_PREFIX = "legacy_reference."
 _RFDC_OWNED_FUNCTIONS = frozenset(
     {"adc", "dac", "ddc", "duc", "decimation", "interpolation", "mixer", "nco"}
 )
@@ -22,150 +22,324 @@ class ImplementationKind(str, Enum):
     AMD_IP = "amd_ip"
     XPM_MACRO = "xpm_macro"
     CUSTOM_RTL = "custom_rtl"
-    CUSTOM_HLS = "custom_hls"
-    SOFTWARE_ONLY = "software_only"
+    ARCHITECTURE_PENDING = "architecture_pending"
     LEGACY_NON_PRODUCTION = "legacy_non_production"
 
 
+class IpInstanceLifecycle(str, Enum):
+    PLANNED = "planned"
+    MATERIALIZED = "materialized"
+    RETIRED = "retired"
+
+
+class ParameterStatus(str, Enum):
+    UNSPECIFIED = "unspecified"
+    DRAFTED = "drafted"
+    FROZEN = "frozen"
+    VIVADO_VERIFIED = "vivado_verified"
+
+
+class ConnectionStatus(str, Enum):
+    UNCONNECTED = "unconnected"
+    PARTIAL = "partial"
+    CONNECTED = "connected"
+    VIVADO_VERIFIED = "vivado_verified"
+
+
+class ArchitectureStatus(str, Enum):
+    FROZEN = "frozen"
+    ARCHITECTURE_PENDING = "architecture_pending"
+
+
+class IntegrationProofStatus(str, Enum):
+    UNVERIFIED = "unverified"
+    VIVADO_VERIFIED = "vivado_verified"
+
+
 def _require_nonempty(value: str, field_name: str) -> None:
-    if not value.strip():
+    if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field_name} must be nonempty")
 
 
-@dataclass(frozen=True)
-class ExternalIpSpec:
-    """One external IP requirement, optionally locked to an exact VLNV."""
+def _require_distinct_nonempty(values: tuple[str, ...], field_name: str) -> None:
+    if not values or any(not isinstance(value, str) or not value.strip() for value in values):
+        raise ValueError(f"{field_name} must contain nonempty values")
+    if len(values) != len(set(values)):
+        raise ValueError(f"{field_name} must not contain duplicates")
 
-    logical_name: str
-    kind: ImplementationKind
+
+@dataclass(frozen=True)
+class IpFamilySpec:
+    family_id: str
+    implementation_kind: ImplementationKind
     catalog_pattern: str
+    required: bool
     vlnv: str | None = None
 
     def __post_init__(self) -> None:
-        _require_nonempty(self.logical_name, "logical_name")
+        _require_nonempty(self.family_id, "family_id")
+        if not isinstance(self.implementation_kind, ImplementationKind):
+            raise ValueError("implementation_kind must be an ImplementationKind")
         _require_nonempty(self.catalog_pattern, "catalog_pattern")
+        if not isinstance(self.required, bool):
+            raise ValueError("required must be a boolean")
         if self.vlnv is not None:
             _require_nonempty(self.vlnv, "vlnv")
 
 
 @dataclass(frozen=True)
-class RfdcIntegrationMetadata:
-    """RFDC settings owned by Vivado Block Design, not by model arithmetic."""
+class IpInstanceSpec:
+    instance_name: str
+    family_ref: str
+    logical_role: str
+    lifecycle: IpInstanceLifecycle
+    parameter_status: ParameterStatus
+    connection_status: ConnectionStatus
 
-    ip: ExternalIpSpec
-    owned_functions: tuple[str, ...]
+    def __post_init__(self) -> None:
+        _require_nonempty(self.instance_name, "instance_name")
+        _require_nonempty(self.family_ref, "family_ref")
+        _require_nonempty(self.logical_role, "logical_role")
+        if not isinstance(self.lifecycle, IpInstanceLifecycle):
+            raise ValueError("lifecycle must be an IpInstanceLifecycle")
+        if not isinstance(self.parameter_status, ParameterStatus):
+            raise ValueError("parameter_status must be a ParameterStatus")
+        if not isinstance(self.connection_status, ConnectionStatus):
+            raise ValueError("connection_status must be a ConnectionStatus")
+
+
+@dataclass(frozen=True)
+class RfdcIntegrationMetadata:
+    instance_ref: str
     configuration_authority: str
     dac_analog_output_type: str
     dac_mixer_mode: str
     dac_mixer_scale_mode: str
     dac_nco_frequency_hz: int
-    proof_status: str
+    proof_status: IntegrationProofStatus
 
     def __post_init__(self) -> None:
-        if self.ip.vlnv != RFDC_2_6_VLNV:
-            raise ValueError(f"RFDC must use exact VLNV {RFDC_2_6_VLNV}")
-        if self.ip.kind is not ImplementationKind.AMD_IP:
-            raise ValueError("RFDC implementation kind must be amd_ip")
-        if self.ip.catalog_pattern != RFDC_2_6_VLNV:
-            raise ValueError(f"RFDC catalog pattern must be {RFDC_2_6_VLNV}")
-        if len(self.owned_functions) != len(_RFDC_OWNED_FUNCTIONS) or set(
-            self.owned_functions
-        ) != _RFDC_OWNED_FUNCTIONS:
-            raise ValueError(
-                "RFDC owned_functions must be exactly adc, dac, ddc, duc, "
-                "decimation, interpolation, mixer, and nco"
-            )
         for field_name in (
+            "instance_ref",
             "configuration_authority",
             "dac_analog_output_type",
             "dac_mixer_mode",
             "dac_mixer_scale_mode",
-            "proof_status",
         ):
-            _require_nonempty(str(getattr(self, field_name)), field_name)
-        if self.dac_nco_frequency_hz < 0:
-            raise ValueError("dac_nco_frequency_hz must be nonnegative")
+            _require_nonempty(getattr(self, field_name), field_name)
+        if (
+            not isinstance(self.dac_nco_frequency_hz, int)
+            or isinstance(self.dac_nco_frequency_hz, bool)
+            or self.dac_nco_frequency_hz < 0
+        ):
+            raise ValueError("dac_nco_frequency_hz must be a nonnegative integer")
+        if not isinstance(self.proof_status, IntegrationProofStatus):
+            raise ValueError("proof_status must be an IntegrationProofStatus")
+
+
+@dataclass(frozen=True)
+class ArchitectureBlockSpec:
+    block_name: str
+    implementation_kind: ImplementationKind
+    responsibilities: tuple[str, ...]
+    reference_responsibilities: tuple[str, ...]
+    instance_refs: tuple[str, ...]
+    architecture_status: ArchitectureStatus
+    production_accepted: bool
+    source: str | None = None
+
+    def __post_init__(self) -> None:
+        _require_nonempty(self.block_name, "block_name")
+        if not isinstance(self.implementation_kind, ImplementationKind):
+            raise ValueError("implementation_kind must be an ImplementationKind")
+        if not isinstance(self.architecture_status, ArchitectureStatus):
+            raise ValueError("architecture_status must be an ArchitectureStatus")
+        if not isinstance(self.production_accepted, bool):
+            raise ValueError("production_accepted must be a boolean")
+        if self.source is not None:
+            _require_nonempty(self.source, "source")
+        _require_tuple_of_nonempty_strings(
+            self.responsibilities, "responsibilities", allow_empty=True
+        )
+        _require_tuple_of_nonempty_strings(
+            self.reference_responsibilities,
+            "reference_responsibilities",
+            allow_empty=True,
+        )
+        _require_tuple_of_nonempty_strings(
+            self.instance_refs, "instance_refs", allow_empty=True
+        )
+
+        pending_kind = (
+            self.implementation_kind is ImplementationKind.ARCHITECTURE_PENDING
+        )
+        pending_status = (
+            self.architecture_status is ArchitectureStatus.ARCHITECTURE_PENDING
+        )
+        if pending_kind != pending_status:
+            raise ValueError("architecture_pending kind and status must be equivalent")
+        if pending_kind and (
+            self.production_accepted or self.instance_refs or self.source is not None
+        ):
+            raise ValueError(
+                "architecture_pending block cannot be production accepted or implemented"
+            )
+
+        if self.implementation_kind is ImplementationKind.LEGACY_NON_PRODUCTION:
+            if self.responsibilities:
+                raise ValueError("legacy block responsibilities must be empty")
+            if not self.reference_responsibilities:
+                raise ValueError("legacy block reference_responsibilities must be nonempty")
+            if self.production_accepted:
+                raise ValueError("legacy block cannot be production accepted")
+            if any(
+                not responsibility.startswith(_LEGACY_REFERENCE_PREFIX)
+                for responsibility in self.reference_responsibilities
+            ):
+                raise ValueError("legacy reference responsibilities require legacy_reference. prefix")
+            return
+
+        if not self.responsibilities:
+            raise ValueError("non-legacy block responsibilities must be nonempty")
+        if self.reference_responsibilities:
+            raise ValueError("non-legacy block reference_responsibilities must be empty")
+        if any(
+            responsibility.startswith(_LEGACY_REFERENCE_PREFIX)
+            for responsibility in self.responsibilities
+        ):
+            raise ValueError("production responsibilities cannot use legacy_reference. prefix")
+
+
+@dataclass(frozen=True)
+class RequiredResponsibilitiesSpec:
+    production: tuple[str, ...]
+    continuous_dual_polar_reflection: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        _require_distinct_nonempty(self.production, "production")
+        _require_distinct_nonempty(
+            self.continuous_dual_polar_reflection,
+            "continuous_dual_polar_reflection",
+        )
+        production = set(self.production)
+        for responsibility in self.continuous_dual_polar_reflection:
+            if responsibility.startswith(_LEGACY_REFERENCE_PREFIX):
+                raise ValueError(
+                    "continuous_dual_polar_reflection cannot use legacy_reference. prefix"
+                )
+            if responsibility not in production:
+                raise ValueError(
+                    "continuous_dual_polar_reflection values must be in production"
+                )
 
 
 @dataclass(frozen=True)
 class HardwareArchitectureConfig:
-    """Validated source of truth for external hardware implementation."""
-
     architecture_schema_version: int
     architecture_config_version: int
     vivado_version: str
     generation_mode: str
     topology_status: str
-    rfdc: RfdcIntegrationMetadata
-    required_ip_families: tuple[ExternalIpSpec, ...]
+    rfdc_integration: RfdcIntegrationMetadata
+    ip_families: tuple[IpFamilySpec, ...]
+    ip_instances: tuple[IpInstanceSpec, ...]
+    architecture_blocks: tuple[ArchitectureBlockSpec, ...]
+    required_responsibilities: RequiredResponsibilitiesSpec
 
     def __post_init__(self) -> None:
-        if self.architecture_schema_version != 1:
-            raise ValueError("architecture_schema_version must be 1")
-        if self.architecture_config_version < 1:
-            raise ValueError("architecture_config_version must be positive")
+        if self.architecture_schema_version != 2:
+            raise ValueError("architecture_schema_version must be 2")
+        if self.architecture_config_version != 2:
+            raise ValueError("architecture_config_version must be 2")
         if self.vivado_version != "2025.2":
             raise ValueError("vivado_version must be 2025.2")
         if self.generation_mode != "vivado_ip_first":
             raise ValueError("generation_mode must be vivado_ip_first")
         if self.topology_status != "unconnected_skeleton":
             raise ValueError("topology_status must be unconnected_skeleton")
-        names = [self.rfdc.ip.logical_name]
-        names.extend(spec.logical_name for spec in self.required_ip_families)
-        if len(names) != len(set(names)):
-            raise ValueError("IP logical names must be unique")
-        if not self.required_ip_families:
-            raise ValueError("required_ip_families must be nonempty")
-        if any(
-            spec.kind is not ImplementationKind.AMD_IP
-            for spec in self.required_ip_families
+        if not isinstance(self.rfdc_integration, RfdcIntegrationMetadata):
+            raise ValueError("rfdc_integration must be RfdcIntegrationMetadata")
+        if not isinstance(self.required_responsibilities, RequiredResponsibilitiesSpec):
+            raise ValueError("required_responsibilities must be RequiredResponsibilitiesSpec")
+        _require_unique_ids(
+            self.ip_families, "family_id", "ip family identifiers"
+        )
+        _require_unique_ids(
+            self.ip_instances, "instance_name", "IP instance names"
+        )
+        _require_unique_ids(
+            self.architecture_blocks, "block_name", "architecture block names"
+        )
+
+        rfdc_family = self.family_by_id("rfdc")
+        if (
+            rfdc_family.implementation_kind is not ImplementationKind.AMD_IP
+            or rfdc_family.catalog_pattern != RFDC_2_6_VLNV
+            or rfdc_family.vlnv != RFDC_2_6_VLNV
         ):
-            raise ValueError("required IP families must use amd_ip")
+            raise ValueError(f"RFDC must use exact VLNV {RFDC_2_6_VLNV}")
+        if not rfdc_family.required:
+            raise ValueError("RFDC family must be required")
+        for family in self.required_families():
+            if family.implementation_kind is not ImplementationKind.AMD_IP:
+                raise ValueError("required IP families must use amd_ip")
+
+        family_ids = {family.family_id for family in self.ip_families}
+        for instance in self.ip_instances:
+            if instance.family_ref not in family_ids:
+                raise ValueError(f"unknown family_ref: {instance.family_ref}")
+        instance_names = {instance.instance_name for instance in self.ip_instances}
+        rfdc_instance = self.instance_by_name(self.rfdc_integration.instance_ref)
+        if rfdc_instance.family_ref != "rfdc":
+            raise ValueError("rfdc_integration instance_ref must reference rfdc")
+        if rfdc_instance.lifecycle is IpInstanceLifecycle.RETIRED:
+            raise ValueError("rfdc_integration instance_ref cannot be retired")
+        for block in self.architecture_blocks:
+            unknown_refs = set(block.instance_refs) - instance_names
+            if unknown_refs:
+                raise ValueError(
+                    f"{block.block_name} has unknown instance_refs: {sorted(unknown_refs)}"
+                )
+
+    def family_by_id(self, family_id: str) -> IpFamilySpec:
+        for family in self.ip_families:
+            if family.family_id == family_id:
+                return family
+        raise KeyError(family_id)
+
+    def instance_by_name(self, instance_name: str) -> IpInstanceSpec:
+        for instance in self.ip_instances:
+            if instance.instance_name == instance_name:
+                return instance
+        raise KeyError(instance_name)
+
+    def block_by_name(self, block_name: str) -> ArchitectureBlockSpec:
+        for block in self.architecture_blocks:
+            if block.block_name == block_name:
+                return block
+        raise KeyError(block_name)
+
+    def required_families(self) -> tuple[IpFamilySpec, ...]:
+        return tuple(family for family in self.ip_families if family.required)
 
     @classmethod
-    def from_mapping(
-        cls, values: Mapping[str, object]
-    ) -> "HardwareArchitectureConfig":
+    def from_mapping(cls, values: Mapping[str, object]) -> "HardwareArchitectureConfig":
         root = _as_mapping(values, "architecture")
-        rfdc_values = _as_mapping(root.get("rfdc"), "rfdc")
-        rfdc_ip = _external_ip(_as_mapping(rfdc_values.get("ip"), "rfdc.ip"))
-        owned_functions = tuple(
-            _as_str(item, "rfdc.owned_functions item")
-            for item in _as_sequence(
-                rfdc_values.get("owned_functions"), "rfdc.owned_functions"
-            )
-        )
-        rfdc = RfdcIntegrationMetadata(
-            ip=rfdc_ip,
-            owned_functions=owned_functions,
-            configuration_authority=_as_str(
-                rfdc_values.get("configuration_authority"),
-                "rfdc.configuration_authority",
-            ),
-            dac_analog_output_type=_as_str(
-                rfdc_values.get("dac_analog_output_type"),
-                "rfdc.dac_analog_output_type",
-            ),
-            dac_mixer_mode=_as_str(
-                rfdc_values.get("dac_mixer_mode"), "rfdc.dac_mixer_mode"
-            ),
-            dac_mixer_scale_mode=_as_str(
-                rfdc_values.get("dac_mixer_scale_mode"),
-                "rfdc.dac_mixer_scale_mode",
-            ),
-            dac_nco_frequency_hz=_as_int(
-                rfdc_values.get("dac_nco_frequency_hz"),
-                "rfdc.dac_nco_frequency_hz",
-            ),
-            proof_status=_as_str(
-                rfdc_values.get("proof_status"), "rfdc.proof_status"
-            ),
-        )
-        families = tuple(
-            _external_ip(_as_mapping(item, "required_ip_families item"))
-            for item in _as_sequence(
-                root.get("required_ip_families"), "required_ip_families"
-            )
+        _require_exact_keys(
+            root,
+            {
+                "architecture_schema_version",
+                "architecture_config_version",
+                "vivado_version",
+                "generation_mode",
+                "topology_status",
+                "rfdc_integration",
+                "ip_families",
+                "ip_instances",
+                "architecture_blocks",
+                "required_responsibilities",
+            },
+            "architecture",
         )
         return cls(
             architecture_schema_version=_as_int(
@@ -177,14 +351,31 @@ class HardwareArchitectureConfig:
                 "architecture_config_version",
             ),
             vivado_version=_as_str(root.get("vivado_version"), "vivado_version"),
-            generation_mode=_as_str(
-                root.get("generation_mode"), "generation_mode"
+            generation_mode=_as_str(root.get("generation_mode"), "generation_mode"),
+            topology_status=_as_str(root.get("topology_status"), "topology_status"),
+            rfdc_integration=_rfdc_integration(
+                _as_mapping(root.get("rfdc_integration"), "rfdc_integration")
             ),
-            topology_status=_as_str(
-                root.get("topology_status"), "topology_status"
+            ip_families=tuple(
+                _ip_family(_as_mapping(item, "ip_families item"))
+                for item in _as_sequence(root.get("ip_families"), "ip_families")
             ),
-            rfdc=rfdc,
-            required_ip_families=families,
+            ip_instances=tuple(
+                _ip_instance(_as_mapping(item, "ip_instances item"))
+                for item in _as_sequence(root.get("ip_instances"), "ip_instances")
+            ),
+            architecture_blocks=tuple(
+                _architecture_block(_as_mapping(item, "architecture_blocks item"))
+                for item in _as_sequence(
+                    root.get("architecture_blocks"), "architecture_blocks"
+                )
+            ),
+            required_responsibilities=_required_responsibilities(
+                _as_mapping(
+                    root.get("required_responsibilities"),
+                    "required_responsibilities",
+                )
+            ),
         )
 
     @classmethod
@@ -197,21 +388,168 @@ class HardwareArchitectureConfig:
         return cls.from_mapping(_as_mapping(values, "architecture"))
 
 
-def _external_ip(values: Mapping[str, object]) -> ExternalIpSpec:
-    raw_vlnv = values.get("vlnv")
-    vlnv = None if raw_vlnv is None else _as_str(raw_vlnv, "vlnv")
-    try:
-        kind = ImplementationKind(_as_str(values.get("kind"), "kind"))
-    except ValueError as error:
-        raise ValueError(f"unsupported implementation kind: {values.get('kind')!r}") from error
-    return ExternalIpSpec(
-        logical_name=_as_str(values.get("logical_name"), "logical_name"),
-        kind=kind,
-        catalog_pattern=_as_str(
-            values.get("catalog_pattern"), "catalog_pattern"
-        ),
-        vlnv=vlnv,
+def _ip_family(values: Mapping[str, object]) -> IpFamilySpec:
+    _require_exact_keys(
+        values,
+        {"family_id", "implementation_kind", "catalog_pattern", "required", "vlnv"},
+        "ip family",
     )
+    return IpFamilySpec(
+        family_id=_as_str(values.get("family_id"), "family_id"),
+        implementation_kind=_as_enum(
+            ImplementationKind, values.get("implementation_kind"), "implementation_kind"
+        ),
+        catalog_pattern=_as_str(values.get("catalog_pattern"), "catalog_pattern"),
+        required=_as_bool(values.get("required"), "required"),
+        vlnv=_as_optional_str(values.get("vlnv"), "vlnv"),
+    )
+
+
+def _ip_instance(values: Mapping[str, object]) -> IpInstanceSpec:
+    _require_exact_keys(
+        values,
+        {
+            "instance_name",
+            "family_ref",
+            "logical_role",
+            "lifecycle",
+            "parameter_status",
+            "connection_status",
+        },
+        "ip instance",
+    )
+    return IpInstanceSpec(
+        instance_name=_as_str(values.get("instance_name"), "instance_name"),
+        family_ref=_as_str(values.get("family_ref"), "family_ref"),
+        logical_role=_as_str(values.get("logical_role"), "logical_role"),
+        lifecycle=_as_enum(
+            IpInstanceLifecycle, values.get("lifecycle"), "lifecycle"
+        ),
+        parameter_status=_as_enum(
+            ParameterStatus, values.get("parameter_status"), "parameter_status"
+        ),
+        connection_status=_as_enum(
+            ConnectionStatus, values.get("connection_status"), "connection_status"
+        ),
+    )
+
+
+def _rfdc_integration(values: Mapping[str, object]) -> RfdcIntegrationMetadata:
+    _require_exact_keys(
+        values,
+        {
+            "instance_ref",
+            "configuration_authority",
+            "dac_analog_output_type",
+            "dac_mixer_mode",
+            "dac_mixer_scale_mode",
+            "dac_nco_frequency_hz",
+            "proof_status",
+        },
+        "rfdc_integration",
+    )
+    return RfdcIntegrationMetadata(
+        instance_ref=_as_str(values.get("instance_ref"), "instance_ref"),
+        configuration_authority=_as_str(
+            values.get("configuration_authority"), "configuration_authority"
+        ),
+        dac_analog_output_type=_as_str(
+            values.get("dac_analog_output_type"), "dac_analog_output_type"
+        ),
+        dac_mixer_mode=_as_str(values.get("dac_mixer_mode"), "dac_mixer_mode"),
+        dac_mixer_scale_mode=_as_str(
+            values.get("dac_mixer_scale_mode"), "dac_mixer_scale_mode"
+        ),
+        dac_nco_frequency_hz=_as_int(
+            values.get("dac_nco_frequency_hz"), "dac_nco_frequency_hz"
+        ),
+        proof_status=_as_enum(
+            IntegrationProofStatus, values.get("proof_status"), "proof_status"
+        ),
+    )
+
+
+def _architecture_block(values: Mapping[str, object]) -> ArchitectureBlockSpec:
+    _require_exact_keys(
+        values,
+        {
+            "block_name",
+            "implementation_kind",
+            "responsibilities",
+            "reference_responsibilities",
+            "instance_refs",
+            "architecture_status",
+            "production_accepted",
+            "source",
+        },
+        "architecture block",
+    )
+    return ArchitectureBlockSpec(
+        block_name=_as_str(values.get("block_name"), "block_name"),
+        implementation_kind=_as_enum(
+            ImplementationKind, values.get("implementation_kind"), "implementation_kind"
+        ),
+        responsibilities=_as_string_tuple(values.get("responsibilities"), "responsibilities"),
+        reference_responsibilities=_as_string_tuple(
+            values.get("reference_responsibilities"), "reference_responsibilities"
+        ),
+        instance_refs=_as_string_tuple(values.get("instance_refs"), "instance_refs"),
+        architecture_status=_as_enum(
+            ArchitectureStatus, values.get("architecture_status"), "architecture_status"
+        ),
+        production_accepted=_as_bool(
+            values.get("production_accepted"), "production_accepted"
+        ),
+        source=_as_optional_str(values.get("source"), "source"),
+    )
+
+
+def _required_responsibilities(
+    values: Mapping[str, object],
+) -> RequiredResponsibilitiesSpec:
+    _require_exact_keys(
+        values,
+        {"production", "continuous_dual_polar_reflection"},
+        "required_responsibilities",
+    )
+    return RequiredResponsibilitiesSpec(
+        production=_as_string_tuple(values.get("production"), "production"),
+        continuous_dual_polar_reflection=_as_string_tuple(
+            values.get("continuous_dual_polar_reflection"),
+            "continuous_dual_polar_reflection",
+        ),
+    )
+
+
+def _require_tuple_of_nonempty_strings(
+    values: tuple[str, ...], field_name: str, *, allow_empty: bool
+) -> None:
+    if not isinstance(values, tuple):
+        raise ValueError(f"{field_name} must be a tuple")
+    if not allow_empty and not values:
+        raise ValueError(f"{field_name} must be nonempty")
+    if any(not isinstance(value, str) or not value.strip() for value in values):
+        raise ValueError(f"{field_name} must contain nonempty strings")
+    if len(values) != len(set(values)):
+        raise ValueError(f"{field_name} must not contain duplicates")
+
+
+def _require_unique_ids(
+    values: tuple[object, ...], attribute: str, label: str
+) -> None:
+    identifiers = [getattr(value, attribute) for value in values]
+    if len(identifiers) != len(set(identifiers)):
+        raise ValueError(f"{label} must be unique")
+
+
+def _require_exact_keys(
+    values: Mapping[str, object], expected: set[str], field_name: str
+) -> None:
+    actual = set(values)
+    if actual != expected:
+        raise ValueError(
+            f"{field_name} keys must be exactly {sorted(expected)}; got {sorted(actual)}"
+        )
 
 
 def _as_mapping(value: object, field_name: str) -> Mapping[str, object]:
@@ -226,13 +564,36 @@ def _as_sequence(value: object, field_name: str) -> Sequence[object]:
     return value
 
 
+def _as_string_tuple(value: object, field_name: str) -> tuple[str, ...]:
+    return tuple(_as_str(item, f"{field_name} item") for item in _as_sequence(value, field_name))
+
+
 def _as_str(value: object, field_name: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{field_name} must be a string")
     return value
 
 
+def _as_optional_str(value: object, field_name: str) -> str | None:
+    if value is None:
+        return None
+    return _as_str(value, field_name)
+
+
 def _as_int(value: object, field_name: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool):
         raise ValueError(f"{field_name} must be an integer")
     return value
+
+
+def _as_bool(value: object, field_name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a boolean")
+    return value
+
+
+def _as_enum(enum_type: type[Enum], value: object, field_name: str) -> Enum:
+    try:
+        return enum_type(_as_str(value, field_name))
+    except ValueError as error:
+        raise ValueError(f"unsupported {field_name}: {value!r}") from error
