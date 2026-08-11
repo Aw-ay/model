@@ -127,6 +127,12 @@ def write_recovery_journal(root: Path) -> tuple[Path, Path, Path, Path]:
     return root_lock, package_lock, new_lock, journal_path
 
 
+def rewrite_journal(journal_path: Path, mutate) -> None:
+    payload = json.loads(journal_path.read_text(encoding="utf-8"))
+    mutate(payload)
+    journal_path.write_bytes(canonical_json_bytes(payload))
+
+
 class ProductionLockTest(unittest.TestCase):
     def test_lock_family_set_must_equal_required_family_set(self) -> None:
         fixture = valid_lock_fixture()
@@ -575,6 +581,117 @@ class ProductionLockTest(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
+                recover_interrupted_promotion(root_lock, package_lock)
+
+            self.assertEqual(root_lock.read_bytes(), b"root-before")
+            self.assertEqual(package_lock.read_bytes(), b"package-before")
+
+    def test_recovery_rejects_noninteger_journal_schema_before_target_write(self) -> None:
+        for invalid_version in (True, 1.0, "1"):
+            with self.subTest(invalid_version=invalid_version), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                root_lock, package_lock, _, journal_path = write_recovery_journal(root)
+                rewrite_journal(
+                    journal_path,
+                    lambda payload, value=invalid_version: payload.__setitem__(
+                        "journal_schema_version", value
+                    ),
+                )
+
+                with self.assertRaisesRegex(RuntimeError, "journal schema"):
+                    recover_interrupted_promotion(root_lock, package_lock)
+
+                self.assertEqual(root_lock.read_bytes(), b"root-before")
+                self.assertEqual(package_lock.read_bytes(), b"package-before")
+                self.assertTrue(journal_path.is_file())
+
+    def test_recovery_rejects_noncanonical_journal_target_paths(self) -> None:
+        cases = (
+            (
+                "root dotdot",
+                "root_lock_path",
+                lambda root_lock, package_lock: str(
+                    root_lock.parent / ".." / "config" / "ip_lock.json"
+                ),
+            ),
+            (
+                "package trailing whitespace",
+                "package_lock_path",
+                lambda root_lock, package_lock: str(package_lock) + " ",
+            ),
+        )
+        for name, field, value_for in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                root_lock, package_lock, _, journal_path = write_recovery_journal(root)
+                rewrite_journal(
+                    journal_path,
+                    lambda payload: payload.__setitem__(
+                        field, value_for(root_lock, package_lock)
+                    ),
+                )
+
+                with self.assertRaisesRegex(RuntimeError, "noncanonical .*_lock_path"):
+                    recover_interrupted_promotion(root_lock, package_lock)
+
+                self.assertEqual(root_lock.read_bytes(), b"root-before")
+                self.assertEqual(package_lock.read_bytes(), b"package-before")
+                self.assertTrue(journal_path.is_file())
+
+    def test_recovery_rejects_noncanonical_hex_and_scalar_types(self) -> None:
+        cases = (
+            (
+                "new hex whitespace",
+                lambda payload: payload.__setitem__(
+                    "new_lock_hex", payload["new_lock_hex"][:2] + " " + payload["new_lock_hex"][2:]
+                ),
+            ),
+            (
+                "new hex uppercase",
+                lambda payload: payload.__setitem__("new_lock_hex", payload["new_lock_hex"].upper()),
+            ),
+            ("new hex odd", lambda payload: payload.__setitem__("new_lock_hex", "a")),
+            (
+                "snapshot hex whitespace",
+                lambda payload: payload["root_snapshot"].__setitem__("contents_hex", "72 6f6f74"),
+            ),
+            ("new hex bool", lambda payload: payload.__setitem__("new_lock_hex", True)),
+            ("phase bool", lambda payload: payload.__setitem__("phase", True)),
+            ("root path bool", lambda payload: payload.__setitem__("root_lock_path", True)),
+            ("hash bool", lambda payload: payload.__setitem__("new_lock_sha256", True)),
+            (
+                "exists integer",
+                lambda payload: payload["root_snapshot"].__setitem__("exists", 1),
+            ),
+            (
+                "snapshot hash integer",
+                lambda payload: payload["root_snapshot"].__setitem__("sha256", 1),
+            ),
+            (
+                "snapshot hex integer",
+                lambda payload: payload["root_snapshot"].__setitem__("contents_hex", 1),
+            ),
+        )
+        for name, mutate in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                root_lock, package_lock, _, journal_path = write_recovery_journal(root)
+                rewrite_journal(journal_path, mutate)
+
+                with self.assertRaises(RuntimeError):
+                    recover_interrupted_promotion(root_lock, package_lock)
+
+                self.assertEqual(root_lock.read_bytes(), b"root-before")
+                self.assertEqual(package_lock.read_bytes(), b"package-before")
+                self.assertTrue(journal_path.is_file())
+
+    def test_recovery_rejects_noncanonical_raw_journal_encoding(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            root_lock, package_lock, _, journal_path = write_recovery_journal(root)
+            journal_path.write_bytes(journal_path.read_bytes() + b"\n")
+
+            with self.assertRaisesRegex(RuntimeError, "not canonical"):
                 recover_interrupted_promotion(root_lock, package_lock)
 
             self.assertEqual(root_lock.read_bytes(), b"root-before")

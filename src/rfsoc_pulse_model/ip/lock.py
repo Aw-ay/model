@@ -32,6 +32,7 @@ from .types import HardwareArchitectureConfig
 
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_CANONICAL_HEX_RE = re.compile(r"^(?:[0-9a-f]{2})*$")
 _LOCK_KEYS = {
     "lock_schema_version",
     "architecture_config_sha256",
@@ -472,10 +473,10 @@ def _attempt_rollback(
 
 def _recover_journal(journal_path: Path, root_lock: Path, package_lock: Path) -> None:
     journal = _read_journal(journal_path)
-    if Path(journal["root_lock_path"]).resolve() != root_lock:
-        raise RuntimeError(f"journal targets a different root lock: {journal_path}")
-    if Path(journal["package_lock_path"]).resolve() != package_lock:
-        raise RuntimeError(f"journal targets a different package lock: {journal_path}")
+    if journal["root_lock_path"] != str(root_lock):
+        raise RuntimeError(f"noncanonical root_lock_path in journal: {journal_path}")
+    if journal["package_lock_path"] != str(package_lock):
+        raise RuntimeError(f"noncanonical package_lock_path in journal: {journal_path}")
     root_snapshot = _parse_snapshot(journal["root_snapshot"], "root_snapshot")
     package_snapshot = _parse_snapshot(journal["package_snapshot"], "package_snapshot")
     lock_bytes = _decode_hex(journal["new_lock_hex"], "new_lock_hex")
@@ -509,19 +510,27 @@ def _recover_journal(journal_path: Path, root_lock: Path, package_lock: Path) ->
 
 def _read_journal(journal_path: Path) -> Mapping[str, object]:
     try:
-        journal = decode_production_lock_json(
-            _read_promotion_journal_bytes(journal_path), "promotion journal"
-        )
+        raw_bytes = _read_promotion_journal_bytes(journal_path)
+        journal = decode_production_lock_json(raw_bytes, "promotion journal")
     except OSError as error:
         raise RuntimeError(f"unable to read promotion journal: {journal_path}") from error
+    if raw_bytes != canonical_json_bytes(journal):
+        raise RuntimeError(f"promotion journal is not canonical: {journal_path}")
     if set(journal) != _JOURNAL_KEYS:
         raise RuntimeError(f"invalid promotion journal keys: {journal_path}")
-    if journal["journal_schema_version"] != 1:
+    if type(journal["journal_schema_version"]) is not int or journal[
+        "journal_schema_version"
+    ] != 1:
         raise RuntimeError(f"unsupported promotion journal schema: {journal_path}")
-    if journal["phase"] != "prepared":
+    if type(journal["phase"]) is not str or journal["phase"] != "prepared":
         raise RuntimeError(f"unsupported promotion journal phase: {journal_path}")
-    for key in ("root_lock_path", "package_lock_path", "new_lock_sha256"):
-        if not isinstance(journal[key], str) or not journal[key]:
+    for key in (
+        "root_lock_path",
+        "package_lock_path",
+        "new_lock_sha256",
+        "new_lock_hex",
+    ):
+        if type(journal[key]) is not str or not journal[key]:
             raise RuntimeError(f"invalid {key} in promotion journal: {journal_path}")
     if not _SHA256_RE.fullmatch(journal["new_lock_sha256"]):
         raise RuntimeError(f"invalid new_lock_sha256 in promotion journal: {journal_path}")
@@ -534,10 +543,10 @@ def _parse_snapshot(value: object, name: str) -> _TargetSnapshot:
         raise RuntimeError(f"invalid {name} in promotion journal")
     exists = value["exists"]
     sha256 = value["sha256"]
-    if not isinstance(exists, bool):
+    if type(exists) is not bool:
         raise RuntimeError(f"invalid {name}.exists in promotion journal")
     if exists:
-        if not isinstance(sha256, str) or not _SHA256_RE.fullmatch(sha256):
+        if type(sha256) is not str or not _SHA256_RE.fullmatch(sha256):
             raise RuntimeError(f"invalid {name}.sha256 in promotion journal")
         contents = _decode_hex(value["contents_hex"], f"{name}.contents_hex")
         _assert_sha256(contents, sha256, name)
@@ -805,12 +814,9 @@ def _unlink_quietly(path: Path) -> None:
 
 
 def _decode_hex(value: object, description: str) -> bytes:
-    if not isinstance(value, str):
+    if type(value) is not str or not _CANONICAL_HEX_RE.fullmatch(value):
         raise RuntimeError(f"invalid {description} in promotion journal")
-    try:
-        return bytes.fromhex(value)
-    except ValueError as error:
-        raise RuntimeError(f"invalid {description} in promotion journal") from error
+    return bytes.fromhex(value)
 
 
 def _remove_promotion_journal(journal_path: Path) -> None:
