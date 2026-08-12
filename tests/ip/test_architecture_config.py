@@ -2,7 +2,9 @@ import dataclasses
 import json
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
+from rfsoc_pulse_model.common.config import ModelConfig
 from rfsoc_pulse_model.ip.types import (
     ArchitectureBlockSpec,
     ArchitectureStatus,
@@ -40,6 +42,8 @@ class HardwareArchitectureConfigTest(unittest.TestCase):
     def test_default_uses_schema_v2_and_separates_family_instance_block(self) -> None:
         config = HardwareArchitectureConfig.load_default()
         self.assertEqual(config.architecture_schema_version, 2)
+        self.assertEqual(config.device_part, ModelConfig.load_default().device_part)
+        self.assertEqual(config.device_part, "xczu27dr-fsve1156-2-i")
         self.assertEqual(
             {family.family_id for family in config.ip_families}, EXPECTED_FAMILIES
         )
@@ -69,6 +73,31 @@ class HardwareArchitectureConfigTest(unittest.TestCase):
         root = Path(__file__).resolve().parents[2]
         self.assertEqual(
             (root / "config/ip_architecture.json").read_bytes(),
+            (root / "src/rfsoc_pulse_model/config/ip_architecture.json").read_bytes(),
+        )
+
+    def test_architecture_device_part_rejects_blank_or_model_config_mismatch(self) -> None:
+        blank = self.root_payload()
+        blank["device_part"] = " "
+        with self.assertRaisesRegex(ValueError, "device_part.*nonempty"):
+            HardwareArchitectureConfig.from_mapping(blank)
+
+        mismatch = self.root_payload()
+        mismatch["device_part"] = "xczu28dr-ffvg1517-2-e"
+        with self.assertRaisesRegex(ValueError, "device_part.*ModelConfig"):
+            HardwareArchitectureConfig.from_mapping(mismatch)
+
+    def test_dataclass_replace_cannot_bypass_model_config_device_part_authority(self) -> None:
+        config = HardwareArchitectureConfig.load_default()
+        with self.assertRaisesRegex(ValueError, "device_part.*ModelConfig"):
+            dataclasses.replace(config, device_part="xczu28dr-ffvg1517-2-e")
+
+    def test_device_part_is_a_config_byte_and_not_a_second_request_field(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        root_bytes = (root / "config/ip_architecture.json").read_bytes()
+        self.assertIn(b'"device_part": "xczu27dr-fsve1156-2-i"', root_bytes)
+        self.assertEqual(
+            root_bytes,
             (root / "src/rfsoc_pulse_model/config/ip_architecture.json").read_bytes(),
         )
 

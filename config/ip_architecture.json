@@ -2,6 +2,7 @@
   "architecture_schema_version": 2,
   "architecture_config_version": 2,
   "vivado_version": "2025.2",
+  "device_part": "xczu27dr-fsve1156-2-i",
   "generation_mode": "vivado_ip_first",
   "topology_status": "unconnected_skeleton",
   "rfdc_integration": {

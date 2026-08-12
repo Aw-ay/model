@@ -35,6 +35,9 @@ def emit_catalog_discovery_tcl(config: HardwareArchitectureConfig) -> str:
         "  }",
         "}",
         "",
+        f"create_project -in_memory -part {{{config.device_part}}}",
+        "update_ip_catalog",
+        "",
         "set script_dir [file dirname [file normalize [info script]]]",
         "set build_root [file dirname $script_dir]",
         "set metadata_dir [file join $build_root {metadata}]",
@@ -112,7 +115,7 @@ def emit_architecture_realization_tcl(
     lines = [
         "# Generated file. Modify the Python architecture source, not this Tcl.",
         "if {[llength [get_projects -quiet]] == 0} {",
-        "  create_project -in_memory -part {xczu27dr-fsve1156-2-i}",
+        f"  create_project -in_memory -part {{{config.device_part}}}",
         "}",
         "if {[current_bd_design -quiet] eq {}} {",
         "  create_bd_design {ip_architecture_skeleton}",

@@ -8,6 +8,8 @@ from enum import Enum
 from importlib import resources
 import json
 
+from rfsoc_pulse_model.common.config import ModelConfig
+
 
 RFDC_2_6_VLNV = "xilinx.com:ip:usp_rf_data_converter:2.6"
 _LEGACY_REFERENCE_PREFIX = "legacy_reference."
@@ -240,6 +242,7 @@ class HardwareArchitectureConfig:
     architecture_schema_version: int
     architecture_config_version: int
     vivado_version: str
+    device_part: str
     generation_mode: str
     topology_status: str
     rfdc_integration: RfdcIntegrationMetadata
@@ -255,6 +258,9 @@ class HardwareArchitectureConfig:
             raise ValueError("architecture_config_version must be 2")
         if self.vivado_version != "2025.2":
             raise ValueError("vivado_version must be 2025.2")
+        _require_nonempty(self.device_part, "device_part")
+        if self.device_part != ModelConfig.load_default().device_part:
+            raise ValueError("device_part must equal ModelConfig.device_part")
         if self.generation_mode != "vivado_ip_first":
             raise ValueError("generation_mode must be vivado_ip_first")
         if self.topology_status != "unconnected_skeleton":
@@ -342,6 +348,7 @@ class HardwareArchitectureConfig:
                 "architecture_schema_version",
                 "architecture_config_version",
                 "vivado_version",
+                "device_part",
                 "generation_mode",
                 "topology_status",
                 "rfdc_integration",
@@ -362,6 +369,7 @@ class HardwareArchitectureConfig:
                 "architecture_config_version",
             ),
             vivado_version=_as_str(root.get("vivado_version"), "vivado_version"),
+            device_part=_as_str(root.get("device_part"), "device_part"),
             generation_mode=_as_str(root.get("generation_mode"), "generation_mode"),
             topology_status=_as_str(root.get("topology_status"), "topology_status"),
             rfdc_integration=_rfdc_integration(
