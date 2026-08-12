@@ -5,8 +5,8 @@ Acceptance date: 2026-08-12 (Asia/Shanghai)
 ## Scope and authority
 
 - Branch under test: `model-update-20260811`.
-- Commit under test: `dbf4b96` (`build: lock Vivado 2025.2 AMD IP catalog`),
-  before this acceptance-document commit.
+- Commit under test: `b75bc3e` (`fix: reject realization project part
+  mismatch`), before this acceptance-document refresh commit.
 - Schema-v2 design:
   [`2026-08-11-ip-architecture-normalization-design.md`](../superpowers/specs/2026-08-11-ip-architecture-normalization-design.md).
 - Implementation plan:
@@ -32,9 +32,9 @@ integration.
 | `build/metadata/catalog_request.json` | `9dbb0ae0de091a461ae88cef055d999b4fa1452788c9ae9e594d0807a0cda552` |
 | `build/metadata/catalog_evidence.tsv` | `58bf0631271a1492166d8a5b286e47ca05e406c73ff515f4db2d2e9086b18cc8` |
 | `config/ip_lock.json` | `b6b5955df8ec8c8054d58bb68f0bd8a704af88bf4206e43be97b6448b4af66bc` |
-| `build/vivado/realize_ip_architecture.tcl` | `b97b1286024da85bd290bf43300faece6a4ec2691b3153b56e370478207c20ce` |
-| `build/metadata/ip_architecture.json` | `899252b34fca1da65881ae81f40f77cf7d29e5790e1645a179f21041eff58cff` |
-| `build/manifest.json` | `cbdc3a6cbed124d711fa69fda2c7d7cf8484f0ad0f0a35d074f3e9d4b139cbf2` |
+| `build/vivado/realize_ip_architecture.tcl` | `e6e9d31d1d2c5ccee7d4e788db01ca962c2e51b394be3348df7be23b72ef6467` |
+| `build/metadata/ip_architecture.json` | `2a56b9659dd57500c35665dcd80f0e14d1ec739af5f2dae86d37748a96e41369` |
+| `build/manifest.json` | `09269129636ce4bcd65185f68e71da7c88c92db084828e5c151b7f1549bd66d6` |
 
 `config/ip_architecture.json` and its packaged copy are byte-identical.
 `config/ip_lock.json` and its packaged copy are byte-identical. The current
@@ -71,9 +71,17 @@ required families:
 Discovery contains exactly one fixed-part in-memory `create_project` and one
 `update_ip_catalog`. It contains no `create_bd_design`, `create_bd_cell`,
 `connect_bd*`, or `validate_bd_design`. Its real Vivado evidence therefore
-proves catalog discovery only. The separately generated realization Tcl
-creates exactly one cell, `rfdc_0`, and contains no connection or validation
-command. Its real Vivado run is an unconnected realization only.
+proves catalog discovery only.
+
+The separately generated realization Tcl has an existing-project part guard
+before any `create_bd_design` or `create_bd_cell`: it reads `PART` from the
+open project and errors unless it is `xczu27dr-fsve1156-2-i`. A real wrong-part
+probe exited 1 at that guard and created no BD or cell. A real matching-part
+production-Tcl probe passed the guard, created the unconnected BD and exactly
+one `rfdc_0` cell, and printed `IP_ARCHITECTURE_STATUS=UNCONNECTED_SKELETON`.
+The wrapper's clean-exit recheck after its correction was not rerun because the
+approval backend disconnected. That missing wrapper probe is not evidence that
+the production Tcl failed, and no clean-exit claim is made for it here.
 
 ## Determinism, manifest, and Python regression
 
@@ -89,10 +97,10 @@ The following hashes were identical on both runs:
 | Artifact | SHA-256 |
 | --- | --- |
 | `build/vivado/discover_ip_catalog.tcl` | `13ac8327c36879910a44b2eb924d2f0ce0f7fdb85ad7f6dae125a06ffabdaee8` |
-| `build/vivado/realize_ip_architecture.tcl` | `b97b1286024da85bd290bf43300faece6a4ec2691b3153b56e370478207c20ce` |
+| `build/vivado/realize_ip_architecture.tcl` | `e6e9d31d1d2c5ccee7d4e788db01ca962c2e51b394be3348df7be23b72ef6467` |
 | `build/metadata/catalog_request.json` | `9dbb0ae0de091a461ae88cef055d999b4fa1452788c9ae9e594d0807a0cda552` |
-| `build/metadata/ip_architecture.json` | `899252b34fca1da65881ae81f40f77cf7d29e5790e1645a179f21041eff58cff` |
-| `build/manifest.json` | `cbdc3a6cbed124d711fa69fda2c7d7cf8484f0ad0f0a35d074f3e9d4b139cbf2` |
+| `build/metadata/ip_architecture.json` | `2a56b9659dd57500c35665dcd80f0e14d1ec739af5f2dae86d37748a96e41369` |
+| `build/manifest.json` | `09269129636ce4bcd65185f68e71da7c88c92db084828e5c151b7f1549bd66d6` |
 
 The current production manifest declares zero `production_rtl` files and two
 `reference_rtl` files. The reference files are the older 2SPC ingress and TX
@@ -105,7 +113,7 @@ $env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
 & 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest discover -s tests -v
 ```
 
-It completed with `Ran 216 tests in 3.487s`, `OK (skipped=8)`, and process exit
+It completed with `Ran 217 tests in 5.842s`, `OK (skipped=8)`, and process exit
 code 0.
 
 ## Derived readiness result and remaining gates

@@ -455,6 +455,14 @@ separately to realize only the unconnected `rfdc_0` skeleton:
 vivado -mode batch -source build/vivado/realize_ip_architecture.tcl
 ```
 
+When a Vivado project is already open, realization first requires its `PART`
+to equal the cross-authority-checked `device_part`; a mismatch stops before
+any Block Design or cell is created. A matching-part probe reached the guard,
+created the unconnected design and `rfdc_0`, and printed the skeleton status.
+The clean-exit wrapper recheck after that probe was not completed because the
+approval backend disconnected; this is an unverified wrapper boundary, not a
+production-Tcl failure or integration acceptance.
+
 See [`docs/contracts/amd-ip-ownership.md`](docs/contracts/amd-ip-ownership.md)
 for the production ownership boundary and
 [`docs/verification/amd-ip-normalization-acceptance.md`](docs/verification/amd-ip-normalization-acceptance.md)

@@ -35,6 +35,12 @@ RF Data Converter is the required family
 the single instance `rfdc_0`. An integration record never defines a second
 RFDC identity.
 
+Realization derives its expected part from that same cross-authority-checked
+configuration. With no open Vivado project it creates one in-memory project
+for that part; with an open project it reads `PART` and rejects a mismatch
+before any Block Design or IP cell operation. Passing this guard authorizes
+only the unconnected `rfdc_0` skeleton, not integration readiness.
+
 ## Ownership rules
 
 Every production responsibility has exactly one non-legacy architecture-block
