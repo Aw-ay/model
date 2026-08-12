@@ -344,7 +344,7 @@ named functions unrelated implementations.
 
 | Algorithm contract | Golden source | Cycle source | Generated RTL |
 | --- | --- | --- | --- |
-| 8-channel RFDC 2SPC ingress reference | `common/rfdc_axis.py` | legacy `cycle/hardware/rx_group_ingress.py` | legacy `rx_group_ingress_2spc.v` |
+| 8-channel RFDC 2SPC ingress reference | `common/rfdc_axis.py` | legacy `cycle/hardware/rx_group_ingress.py` | legacy reference `reference_rtl/rx_group_ingress_2spc.v` |
 | 15-tap 2:1 complex FIR | `golden/receive.py::GoldenReceivePipeline` | AMD FIR Compiler boundary vectors | vendor IP; no generated project RTL |
 | I/Q power | NumPy magnitude squared in `golden/detector.py` | `cycle/hardware/iq_power.py` | `iq_power.v` |
 | Adaptive threshold | `GoldenPulseDetector` | `cycle/hardware/noise_threshold.py` | `noise_threshold.v` |
@@ -362,6 +362,11 @@ All layers consume `ModelConfig`, `common/types.py`, `common/fixed.py`, and
 `common/tables.py`. `cycle/registry.py` is the transitional legacy-RTL emission
 allow-list; `ip/registry.py` is the target production-ownership authority.
 Unregistered `.v` files make generation fail rather than being preserved.
+The current 2SPC ingress and TX AXIS boundary modules are legacy reference
+outputs only: their generated Verilog is written to `build/reference_rtl/` and
+is excluded from the production source list. The corresponding production
+2SPC ingress and egress responsibilities remain pending in the AMD-IP-first
+architecture; these reference modules do not satisfy them.
 Their equivalence gates differ intentionally:
 
 1. **Golden -> Cycle:** compare normalized semantics. Detection count/order,
@@ -410,17 +415,20 @@ model/
   build/                         # generated locally, ignored
 ```
 
-Generate the architecture metadata, non-accepted Vivado skeleton and
-transitional legacy RTL with:
+Generate the architecture metadata, non-accepted Vivado realization skeleton
+and transitional legacy RTL with:
 
 ```text
 python -m rfsoc_pulse_model.generate --output build
 ```
 
-This writes Cycle-derived legacy RTL, numeric metadata,
-`metadata/ip_architecture.json`, `vivado/create_ip_architecture.tcl` and the
-combined `manifest.json`. The build directory is disposable and must be
-regenerated rather than hand-edited. See
+This writes production-only generated RTL to `build/rtl/`, non-production
+legacy verification RTL to `build/reference_rtl/`, numeric metadata,
+`metadata/ip_architecture.json`, the discovery-only
+`vivado/discover_ip_catalog.tcl`, the unconnected realization-provenance
+`vivado/realize_ip_architecture.tcl`, and a manifest with separate
+`production_rtl` and `reference_rtl` arrays. The build directory is disposable
+and must be regenerated rather than hand-edited. See
 `docs/contracts/amd-ip-ownership.md` for production ownership and
 `docs/verification/amd-ip-foundation-acceptance.md` for the current proof
 boundary.

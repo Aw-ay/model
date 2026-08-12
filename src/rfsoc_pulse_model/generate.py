@@ -10,8 +10,11 @@ from .common.config import ModelConfig
 from .common.types import SampleTimeReference
 from .cycle.dsl.emitter import VerilogEmitter
 from .cycle.registry import HARDWARE_MODULES
+from .ip.evidence import canonical_json_bytes
 from .ip.generate import generate_ip_architecture
 from .ip.lock import GenerationMode
+from .ip.registry import ArchitectureRegistry
+from .ip.types import ImplementationKind
 
 
 def _sha256(data: bytes) -> str:
@@ -30,6 +33,18 @@ def _ports(module) -> list[dict[str, object]]:
     ]
 
 
+def _reject_unregistered_rtl(
+    directory: Path, expected_filenames: set[str], scope: str
+) -> None:
+    stale = sorted(
+        path.name for path in directory.glob("*.v") if path.name not in expected_filenames
+    )
+    if stale:
+        raise RuntimeError(
+            f"unregistered generated RTL exists in {scope}: " + ", ".join(stale)
+        )
+
+
 def generate(
     output_root: Path,
     ip_mode: GenerationMode | str = GenerationMode.DEVELOPMENT,
@@ -40,28 +55,30 @@ def generate(
     config = ModelConfig.load_default()
     ip_architecture = generate_ip_architecture(root, ip_mode)
     rtl_root = root / "rtl"
+    reference_rtl_root = root / "reference_rtl"
     metadata_root = root / "metadata"
     rtl_root.mkdir(parents=True, exist_ok=True)
+    reference_rtl_root.mkdir(parents=True, exist_ok=True)
     metadata_root.mkdir(parents=True, exist_ok=True)
-
-    ip_architecture_bytes = (metadata_root / "ip_architecture.json").read_bytes()
     emitter = VerilogEmitter()
-    modules = []
-    expected_files = set()
+    production_rtl = []
+    reference_rtl = []
+    expected_production_files = set()
+    expected_reference_files = set()
+    emitted = []
     for registration in HARDWARE_MODULES:
         module = registration.cycle_class(config)
         rtl = emitter.emit(module).encode("utf-8")
-        path = rtl_root / registration.verilog_filename
-        path.write_bytes(rtl)
-        expected_files.add(path.name)
-        modules.append(
+        output_directory = rtl_root if registration.production else reference_rtl_root
+        output_scope = "rtl" if registration.production else "reference_rtl"
+        entry = (
             {
                 "module_name": module.module_name,
                 "cycle_class": (
                     f"{registration.cycle_class.__module__}."
                     f"{registration.cycle_class.__qualname__}"
                 ),
-                "verilog_file": f"rtl/{path.name}",
+                "verilog_file": f"{output_scope}/{registration.verilog_filename}",
                 "rtl_sha256": _sha256(rtl),
                 "latency_cycles": module.latency_cycles,
                 "samples_per_cycle": module.samples_per_cycle,
@@ -71,12 +88,57 @@ def generate(
                 "ports": _ports(module),
             }
         )
+        emitted.append((registration, output_directory / registration.verilog_filename, rtl, entry))
+        if registration.production:
+            production_rtl.append(entry)
+            expected_production_files.add(registration.verilog_filename)
+        else:
+            reference_rtl.append(entry)
+            expected_reference_files.add(registration.verilog_filename)
 
-    stale = [path for path in rtl_root.glob("*.v") if path.name not in expected_files]
-    if stale:
-        raise RuntimeError(
-            "unregistered generated RTL exists: " + ", ".join(path.name for path in stale)
-        )
+    for registration, reference_path, reference_bytes, _entry in emitted:
+        if registration.production:
+            continue
+        old_production_path = rtl_root / registration.verilog_filename
+        if not old_production_path.exists():
+            continue
+        if old_production_path.read_bytes() != reference_bytes:
+            raise RuntimeError(
+                "possible hand edit in old production RTL: "
+                f"{old_production_path.name} differs from fresh reference bytes"
+            )
+        old_production_path.unlink()
+
+    _reject_unregistered_rtl(rtl_root, expected_production_files, "rtl")
+    _reject_unregistered_rtl(
+        reference_rtl_root, expected_reference_files, "reference_rtl"
+    )
+    for _registration, path, rtl, _entry in emitted:
+        path.write_bytes(rtl)
+
+    modules = production_rtl + reference_rtl
+    production_sources_contain_reference = any(
+        entry["verilog_file"].startswith("reference_rtl/")
+        or entry["implementation_kind"]
+        == ImplementationKind.LEGACY_NON_PRODUCTION.value
+        for entry in production_rtl
+    )
+    readiness = ArchitectureRegistry.default().evaluate_readiness(
+        catalog_resolution_complete=ip_architecture["catalog_resolution_complete"],
+        production_lock_valid=ip_architecture["production_lock_valid"],
+        production_sources_contain_reference=production_sources_contain_reference,
+    )
+    ip_architecture.update(
+        {
+            "responsibility_complete": readiness.responsibility_complete,
+            "production_integration_ready": readiness.production_integration_ready,
+            "production_integration_blocking_reasons": list(
+                readiness.blocking_reasons
+            ),
+        }
+    )
+    ip_architecture_bytes = canonical_json_bytes(ip_architecture)
+    (metadata_root / "ip_architecture.json").write_bytes(ip_architecture_bytes)
 
     numeric_formats = config.numeric_formats.as_tuples()
     numeric_bytes = json.dumps(
@@ -121,6 +183,8 @@ def generate(
         "numeric_formats_sha256": _sha256(numeric_bytes),
         "ip_architecture": ip_architecture,
         "ip_architecture_sha256": _sha256(ip_architecture_bytes),
+        "production_rtl": production_rtl,
+        "reference_rtl": reference_rtl,
         "modules": modules,
     }
     manifest_bytes = json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8") + b"\n"
