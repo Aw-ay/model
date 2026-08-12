@@ -1,7 +1,9 @@
 import json
 import hashlib
 import importlib
+import os
 from pathlib import Path
+import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -13,6 +15,137 @@ from rfsoc_pulse_model.ip.types import ImplementationKind
 
 
 class GenerateTest(unittest.TestCase):
+    @staticmethod
+    def _legacy_registration(filename: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            cycle_class=RxGroupIngress2Spc,
+            verilog_filename=filename,
+            implementation_kind=ImplementationKind.LEGACY_NON_PRODUCTION,
+            production=False,
+        )
+
+    def test_registered_verilog_filename_rejects_path_escape_before_elaboration(self) -> None:
+        generator_module = importlib.import_module("rfsoc_pulse_model.generate")
+        for filename in ("../../escaped.v", "nested/file.v", r"nested\\file.v", "", ".", ".."):
+            with self.subTest(filename=filename), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary) / "build"
+                marker = Path(temporary) / "outside-marker.txt"
+                marker.write_bytes(b"do not modify")
+                with patch.object(
+                    generator_module,
+                    "HARDWARE_MODULES",
+                    (self._legacy_registration(filename),),
+                ):
+                    with self.assertRaisesRegex(ValueError, "unsafe registered Verilog filename"):
+                        generate(root)
+
+                self.assertEqual(marker.read_bytes(), b"do not modify")
+                self.assertFalse((Path(temporary) / "escaped.v").exists())
+
+    def test_output_root_and_generated_directories_reject_symlinks(self) -> None:
+        for scope in ("output", "rtl", "reference_rtl"):
+            with self.subTest(scope=scope), tempfile.TemporaryDirectory() as temporary:
+                temporary_root = Path(temporary)
+                output_root = temporary_root / "build"
+                external = temporary_root / "external"
+                external.mkdir()
+                marker = external / "do-not-write.txt"
+                marker.write_bytes(b"external data")
+                link_path = output_root if scope == "output" else output_root / scope
+                if scope != "output":
+                    output_root.mkdir()
+                try:
+                    os.symlink(external, link_path, target_is_directory=True)
+                except OSError as error:
+                    self.skipTest(f"directory symlink creation unavailable: {error}")
+
+                with self.assertRaisesRegex(RuntimeError, "unsafe.*(symlink|reparse)"):
+                    generate(output_root)
+
+                self.assertEqual(marker.read_bytes(), b"external data")
+                self.assertFalse((external / "rx_group_ingress_2spc.v").exists())
+
+    @unittest.skipUnless(os.name == "nt", "real NTFS junction probe")
+    def test_output_root_and_generated_directories_reject_junctions(self) -> None:
+        for scope in ("output", "rtl", "reference_rtl"):
+            with self.subTest(scope=scope), tempfile.TemporaryDirectory() as temporary:
+                temporary_root = Path(temporary)
+                output_root = temporary_root / "build"
+                external = temporary_root / "external"
+                external.mkdir()
+                marker = external / "do-not-write.txt"
+                marker.write_bytes(b"external data")
+                link_path = output_root if scope == "output" else output_root / scope
+                if scope != "output":
+                    output_root.mkdir()
+                completed = subprocess.run(
+                    ["cmd", "/c", "mklink", "/J", str(link_path), str(external)],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+
+                with self.assertRaisesRegex(RuntimeError, "unsafe.*reparse"):
+                    generate(output_root)
+
+                self.assertEqual(marker.read_bytes(), b"external data")
+                self.assertFalse((external / "rx_group_ingress_2spc.v").exists())
+
+    def test_registered_target_symlink_is_rejected_without_touching_external_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            reference_rtl = root / "reference_rtl"
+            reference_rtl.mkdir()
+            external = root / "external.v"
+            external.write_bytes(b"external data")
+            target = reference_rtl / "rx_group_ingress_2spc.v"
+            try:
+                os.symlink(external, target)
+            except OSError as error:
+                self.skipTest(f"file symlink creation unavailable: {error}")
+
+            with self.assertRaisesRegex(RuntimeError, "unsafe.*symlink"):
+                generate(root)
+
+            self.assertEqual(external.read_bytes(), b"external data")
+
+    def test_legacy_migration_rejects_symlink_without_touching_external_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rtl_root = root / "rtl"
+            rtl_root.mkdir()
+            external = root / "external.v"
+            external.write_bytes(b"external data")
+            target = rtl_root / "rx_group_ingress_2spc.v"
+            try:
+                os.symlink(external, target)
+            except OSError as error:
+                self.skipTest(f"file symlink creation unavailable: {error}")
+
+            with self.assertRaisesRegex(RuntimeError, "unsafe.*symlink"):
+                generate(root)
+
+            self.assertEqual(external.read_bytes(), b"external data")
+
+    def test_stale_rtl_symlink_is_rejected_without_touching_external_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rtl_root = root / "rtl"
+            rtl_root.mkdir()
+            external = root / "external.v"
+            external.write_bytes(b"external data")
+            stale = rtl_root / "unregistered.v"
+            try:
+                os.symlink(external, stale)
+            except OSError as error:
+                self.skipTest(f"file symlink creation unavailable: {error}")
+
+            with self.assertRaisesRegex(RuntimeError, "unsafe generated RTL entry"):
+                generate(root)
+
+            self.assertEqual(external.read_bytes(), b"external data")
+
     def test_nonproduction_cycle_rtl_is_emitted_only_as_reference(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
