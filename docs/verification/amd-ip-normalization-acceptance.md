@@ -77,10 +77,11 @@ command. Its real Vivado run is an unconnected realization only.
 
 ## Determinism, manifest, and Python regression
 
-Two consecutive production invocations used:
+Two consecutive production invocations used this exact PowerShell command:
 
-```text
-python -m rfsoc_pulse_model.generate --output D:\AWAY\RFSOC\model\build --ip-mode production
+```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m rfsoc_pulse_model.generate --output 'D:\AWAY\RFSOC\model\build' --ip-mode production
 ```
 
 The following hashes were identical on both runs:
@@ -99,12 +100,13 @@ boundary only; they are not production implementations.
 
 The full regression command was:
 
-```text
-python -m unittest discover -s tests -v
+```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest discover -s tests -v
 ```
 
-It completed with `Ran 216 tests in 3.505s`, `OK (skipped=8)`, and process exit
-code 0. The measured outer wall-clock time was 4.195 s.
+It completed with `Ran 216 tests in 3.487s`, `OK (skipped=8)`, and process exit
+code 0.
 
 ## Derived readiness result and remaining gates
 

@@ -426,8 +426,9 @@ remain byte-identical.
 Generate the architecture metadata, production-lock-validated unconnected
 realization skeleton, and transitional legacy reference RTL with:
 
-```text
-python -m rfsoc_pulse_model.generate --output build
+```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m rfsoc_pulse_model.generate --output 'D:\AWAY\RFSOC\model\build' --ip-mode production
 ```
 
 This writes production-only generated RTL to `build/rtl/`, non-production
@@ -464,10 +465,12 @@ acceptance is historical only and is not the current invocation contract.
 
 ```powershell
 cd D:\AWAY\RFSOC\model
-py -m pip install -e .
-py -m unittest discover -s tests\golden -v
+$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m pip install -e .
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest discover -s tests -v
 ```
 
-The default `py` installation on a development machine must have a working
-NumPy installation. Model tests do not validate Vivado Block Design, CDC,
-timing closure, bitstream generation, or board operation.
+The Windows acceptance commands intentionally use the frozen runtime above;
+they do not rely on a machine-default interpreter. Model tests do not validate
+Vivado Block Design, CDC, timing closure, bitstream generation, or board
+operation.
