@@ -265,4 +265,3 @@ Block Design in place, claim timing closure or claim board-level validation.
   fixed-point PL parameters.
 - Migration is replacement-gated; no working reference is deleted first.
 - The independent `model` project remains the architecture authority.
-

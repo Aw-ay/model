@@ -1,7 +1,7 @@
 # IP Architecture Normalization Design
 
-**Date:** 2026-08-11  
-**Status:** Approved design  
+**Date:** 2026-08-11
+**Status:** Approved design
 **Target branch:** `model-update-20260811`
 
 ## 1. Purpose
