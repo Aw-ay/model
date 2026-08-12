@@ -415,8 +415,16 @@ model/
   build/                         # generated locally, ignored
 ```
 
-Generate the architecture metadata, non-accepted Vivado realization skeleton
-and transitional legacy RTL with:
+The schema-v2 AMD-IP architecture is specified in
+[`docs/superpowers/specs/2026-08-11-ip-architecture-normalization-design.md`](docs/superpowers/specs/2026-08-11-ip-architecture-normalization-design.md)
+and implemented according to
+[`docs/superpowers/plans/2026-08-11-ip-architecture-normalization.md`](docs/superpowers/plans/2026-08-11-ip-architecture-normalization.md).
+Its current resolved production catalog lock is
+[`config/ip_lock.json`](config/ip_lock.json); the installed package copy must
+remain byte-identical.
+
+Generate the architecture metadata, production-lock-validated unconnected
+realization skeleton, and transitional legacy reference RTL with:
 
 ```text
 python -m rfsoc_pulse_model.generate --output build
@@ -428,10 +436,29 @@ legacy verification RTL to `build/reference_rtl/`, numeric metadata,
 `vivado/discover_ip_catalog.tcl`, the unconnected realization-provenance
 `vivado/realize_ip_architecture.tcl`, and a manifest with separate
 `production_rtl` and `reference_rtl` arrays. The build directory is disposable
-and must be regenerated rather than hand-edited. See
-`docs/contracts/amd-ip-ownership.md` for production ownership and
-`docs/verification/amd-ip-foundation-acceptance.md` for the current proof
-boundary.
+and generated files must be regenerated rather than hand-edited.
+
+Run catalog discovery first, passing the three SHA-256 values emitted in
+`build/metadata/catalog_request.json`; it creates only a fixed-part in-memory
+catalog project and writes `build/metadata/catalog_evidence.tsv`:
+
+```text
+vivado -mode batch -source build/vivado/discover_ip_catalog.tcl -tclargs <architecture_config_sha256> <generated_tcl_sha256> <catalog_request_sha256>
+```
+
+After strict evidence ingestion and explicit lock promotion, production
+generation emits `build/vivado/realize_ip_architecture.tcl`. Run that script
+separately to realize only the unconnected `rfdc_0` skeleton:
+
+```text
+vivado -mode batch -source build/vivado/realize_ip_architecture.tcl
+```
+
+See [`docs/contracts/amd-ip-ownership.md`](docs/contracts/amd-ip-ownership.md)
+for the production ownership boundary and
+[`docs/verification/amd-ip-normalization-acceptance.md`](docs/verification/amd-ip-normalization-acceptance.md)
+for the current acceptance evidence and remaining gates. The older foundation
+acceptance is historical only and is not the current invocation contract.
 
 ## Run
 

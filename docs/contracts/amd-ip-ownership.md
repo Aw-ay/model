@@ -3,6 +3,15 @@
 Status: schema-v2 ownership is complete; production integration is not yet
 accepted. The configured topology remains an unconnected skeleton.
 
+The schema-v2 design and implementation plan are
+[`2026-08-11-ip-architecture-normalization-design.md`](../superpowers/specs/2026-08-11-ip-architecture-normalization-design.md)
+and
+[`2026-08-11-ip-architecture-normalization.md`](../superpowers/plans/2026-08-11-ip-architecture-normalization.md).
+The current production catalog authority is the explicit, byte-identical pair
+[`config/ip_lock.json`](../../config/ip_lock.json) and
+`src/rfsoc_pulse_model/config/ip_lock.json`; acceptance evidence is recorded
+in [`amd-ip-normalization-acceptance.md`](../verification/amd-ip-normalization-acceptance.md).
+
 `HardwareArchitectureConfig` is the source authority. `ArchitectureRegistry`
 derives and validates responsibility ownership from it, then retains its public
 owner maps as read-only snapshots; readiness evaluates those validated snapshots
@@ -65,3 +74,8 @@ yet production-ready.
 each false predicate, including catalog or lock invalidity and reference RTL in
 the production source list. It does not claim connected Block Design validity,
 CDC, timing, MTS/SYSREF, DMA/Ethernet, or board-loopback closure.
+
+The production 2SPC ingress and egress responsibilities remain separate
+`architecture_pending` blocks. The older Cycle-derived 2SPC modules are
+legacy reference-only artifacts under `build/reference_rtl/`; they cannot
+fulfil either pending production responsibility or make integration ready.
