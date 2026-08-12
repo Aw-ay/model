@@ -42,17 +42,29 @@ This batch does not implement:
 
 ## 3. Schema v2 boundaries
 
-`HardwareArchitectureConfig` has five top-level domains: four architecture
-object collections plus one RFDC integration domain.
+`HardwareArchitectureConfig` has one explicit device target plus five
+top-level architecture domains: four object collections and one RFDC
+integration domain. `device_part` is source data in both byte-identical
+`ip_architecture.json` copies; it is not a Tcl-local default or a second
+hardware authority.
 
 ```text
 HardwareArchitectureConfig
+├── device_part
 ├── rfdc_integration
 ├── ip_families
 ├── ip_instances
 ├── architecture_blocks
 └── required_responsibilities
 ```
+
+`device_part` is required, nonblank, and is the one target used by both
+generated Tcl scripts. Loading the default architecture configuration must
+cross-check it against the shared `ModelConfig.device_part`; a mismatch is a
+configuration error before catalog discovery, realization, or evidence
+validation begins. This preserves `ModelConfig` as the shared device contract
+while making the exact architecture JSON bytes (and therefore their hash) the
+authority for an individual IP-architecture run.
 
 The hard type invariant is:
 
@@ -454,9 +466,17 @@ build/vivado/realize_ip_architecture.tcl
 ### 5.1 Catalog discovery
 
 Discovery queries every required family with `get_ipdefs`. It does not call
-`create_bd_cell`. Development discovery may use the configured wildcard
-pattern and resolves a candidate exact VLNV. Production and CI may use only
-exact VLNV values from the checked-in lock.
+`create_bd_design` or `create_bd_cell`. Before the queries, it creates exactly
+one fixed-part in-memory Vivado project using `config.device_part`, solely to
+initialize the default IP catalog. This is necessary because, in the verified
+Vivado 2025.2 context, an invocation with no open project has no RFDC IP defs
+and `update_ip_catalog` reports `No open project`; creating an in-memory
+`xczu27dr-fsve1156-2-i` project and updating the catalog makes RFDC 2.6
+visible. The discovery project must not be written to disk and discovery must
+not create a BD, a cell, a connection, or call `validate_bd_design`.
+Development discovery may use the configured wildcard pattern and resolves a
+candidate exact VLNV. Production and CI may use only exact VLNV values from the
+checked-in lock.
 
 The discovery set is derived from all required families in schema v2. There is
 no smaller hard-coded initial-family tuple and no global resolved status based
@@ -467,6 +487,10 @@ on a subset.
 The realization Tcl iterates IP instances, not families. It emits a BD cell
 only for a materialized instance and uses the instance name as the stable cell
 name. Planned and retired instances never produce cells.
+
+Realization also obtains its in-memory project target from
+`config.device_part`; it must contain no literal board part as an independent
+default. Its separate unconnected skeleton rules remain unchanged.
 
 The normalized skeleton therefore materializes `rfdc_0` but does not create
 dummy AXIS, FIR, DDS, CMPY, CORDIC, or DMA cells merely to prove catalog
@@ -498,6 +522,14 @@ after the Tcl bytes are final and records:
 - `generated_tcl_sha256`;
 - required Vivado version;
 - the complete required family set and catalog identities.
+
+Catalog requests, TSV evidence, candidate locks, and production locks do not
+repeat a standalone `device_part` field. Their
+`architecture_config_sha256` binds the exact architecture JSON bytes that
+already contain it, avoiding duplicate fields whose values could disagree.
+Their metadata and contract descriptions must state this transitive binding;
+a `device_part` change requires regeneration of discovery Tcl, request,
+evidence, candidate lock, and production-lock validation.
 
 The request uses canonical UTF-8 JSON with sorted keys and one trailing newline;
 its SHA-256 covers those exact bytes. The Vivado invocation passes the three
@@ -627,6 +659,7 @@ Architecture generation fails immediately for:
 - production responsibilities in a legacy block or legacy-prefixed
   responsibilities in a production block;
 - blank, duplicate, or dangling identifiers;
+- a blank `device_part` or a `device_part` mismatch with `ModelConfig`;
 - an instance referencing an unknown family;
 - RFDC integration referencing a non-RFDC or retired instance;
 - missing, duplicate, or unknown responsibility ownership;
@@ -647,6 +680,8 @@ to old evidence or a latest-version wildcard.
 Tests prove:
 
 - parsing and strict enum validation;
+- `device_part` parsing, byte-identical package copies, and cross-authority
+  equality with `ModelConfig.device_part`;
 - unique family, instance, and block identifiers;
 - valid cross-references;
 - exact missing, duplicate, and unknown responsibility rejection;
@@ -667,7 +702,8 @@ Tests prove:
 Tests prove:
 
 - every required family is queried;
-- discovery creates no dummy cell;
+- discovery creates exactly one in-memory project for `config.device_part` and
+  no disk project, BD, dummy cell, connection, or validation operation;
 - only materialized instances create cells;
 - planned and retired instances do not create cells;
 - wrong configuration, Tcl, or request hashes yield stale evidence;
@@ -680,6 +716,8 @@ Tests prove:
   trailing newline;
 - a wrong Vivado version fails;
 - only complete current evidence creates a candidate lock.
+- changing `device_part` changes the architecture-config hash and requires
+  regenerated discovery Tcl, request, evidence, and candidate/production lock.
 
 Vivado 2025.2 must run the generated Tcl and resolve all configured required
 families before this checkpoint is accepted.

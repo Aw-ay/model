@@ -4,7 +4,7 @@
 
 **Goal:** Replace the current IP-family skeleton with schema-v2 family, instance, block, responsibility, evidence, and lock authorities that are truthful, reproducible, and safe to use as the foundation for a future connected Block Design.
 
-**Architecture:** A single packaged `HardwareArchitectureConfig` declares four architecture object collections plus RFDC integration metadata. Separate discovery and realization Tcl emitters preserve the boundary between IP catalog provenance and BD-cell materialization. Strongly bound Vivado evidence produces a candidate lock; only an explicit promotion creates the production lock, while ownership completeness and production readiness remain independent machine-derived results.
+**Architecture:** A single packaged `HardwareArchitectureConfig` declares `device_part`, four architecture object collections, and RFDC integration metadata. Its `device_part` must equal the shared `ModelConfig.device_part`; both discovery and realization use that parsed value. Discovery creates one fixed-part in-memory project only to initialize the Vivado IP catalog, while realization remains separately responsible for its unconnected skeleton cells. Strongly bound Vivado evidence produces a candidate lock; only an explicit promotion creates the production lock, while ownership completeness and production readiness remain independent machine-derived results.
 
 **Tech Stack:** Python 3.12, immutable dataclasses and enums, canonical JSON, strict TSV evidence, `unittest`, generated Verilog-2001 reference RTL, Vivado 2025.2 Tcl, AMD IP Catalog, SHA-256, Git checkpoints.
 
@@ -14,6 +14,7 @@
 - RF Data Converter is exactly `xilinx.com:ip:usp_rf_data_converter:2.6`.
 - `IP Family != IP Instance != Architecture Block` is a hard invariant.
 - `rfdc_integration` references `rfdc_0`; it does not define a second RFDC identity.
+- Schema-v2 `HardwareArchitectureConfig.device_part` is required in both byte-identical `ip_architecture.json` copies and must equal shared `ModelConfig.device_part`; neither Tcl emitter may hard-code a different part.
 - `architecture_pending` is a formal `ImplementationKind` and is equivalent to `ArchitectureStatus.ARCHITECTURE_PENDING`.
 - Production and legacy reference responsibility namespaces are disjoint.
 - `required_responsibilities` is one top-level object with exactly `production` and `continuous_dual_polar_reflection` members; do not add a sixth top-level schema domain.
@@ -25,7 +26,7 @@
 - In requests, evidence, and locks, `generated_tcl_sha256` means only the SHA-256 of `build/vivado/discover_ip_catalog.tcl`.
 - `realize_ip_architecture.tcl` uses separate `realization_tcl_sha256` provenance and does not affect IP-lock validity.
 - A production lock must match the required IP-family set exactly; both missing and extra families are errors.
-- Catalog discovery must query every required family and must not create BD cells.
+- Catalog discovery must query every required family after creating exactly one fixed-part in-memory project from `config.device_part` to initialize the catalog. It must not create a disk project, BD, cell, connection, or run `validate_bd_design`.
 - Only `IpInstanceLifecycle.MATERIALIZED` instances may emit `create_bd_cell`.
 - Legacy Cycle-derived Verilog is generated only under `build/reference_rtl/` and never appears in the production source list.
 - Do not migrate `ModelConfig`, choose a multi-target fractional-delay implementation, add IP parameter dictionaries, connect AXIS, run `validate_bd_design`, or claim CDC/timing/board closure in this plan.
@@ -75,7 +76,7 @@
 
 **Interfaces:**
 - Consumes: the approved schema in `docs/superpowers/specs/2026-08-11-ip-architecture-normalization-design.md`.
-- Produces: `ImplementationKind`, `IpInstanceLifecycle`, `ParameterStatus`, `ConnectionStatus`, `ArchitectureStatus`, `IpFamilySpec`, `IpInstanceSpec`, `RfdcIntegrationMetadata`, `ArchitectureBlockSpec`, `RequiredResponsibilitiesSpec`, and `HardwareArchitectureConfig.load_default()`.
+- Produces: `ImplementationKind`, `IpInstanceLifecycle`, `ParameterStatus`, `ConnectionStatus`, `ArchitectureStatus`, `IpFamilySpec`, `IpInstanceSpec`, `RfdcIntegrationMetadata`, `ArchitectureBlockSpec`, `RequiredResponsibilitiesSpec`, and `HardwareArchitectureConfig.load_default()` with a cross-authority device-part check.
 
 - [ ] **Step 1: Write failing schema-v2 type and package-data tests**
 
@@ -98,10 +99,14 @@ EXPECTED_FAMILIES = {
     "axi_dma",
 }
 
+from rfsoc_pulse_model.common.config import ModelConfig
+
 
 def test_default_uses_schema_v2_and_separates_family_instance_block(self) -> None:
     config = HardwareArchitectureConfig.load_default()
     self.assertEqual(config.architecture_schema_version, 2)
+    self.assertEqual(config.device_part, ModelConfig.load_default().device_part)
+    self.assertEqual(config.device_part, "xczu27dr-fsve1156-2-i")
     self.assertEqual({family.family_id for family in config.ip_families}, EXPECTED_FAMILIES)
     self.assertEqual(
         {instance.instance_name for instance in config.ip_instances},
@@ -112,6 +117,13 @@ def test_default_uses_schema_v2_and_separates_family_instance_block(self) -> Non
         config.instance_by_name("rfdc_0").family_ref,
         "rfdc",
     )
+
+
+def test_default_rejects_architecture_model_device_part_mismatch(self) -> None:
+    payload = self.root_payload()
+    payload["device_part"] = "xczu28dr-ffvg1517-2-e"
+    with self.assertRaisesRegex(ValueError, "device_part.*ModelConfig"):
+        HardwareArchitectureConfig.from_mapping(payload)
 
 
 def test_fractional_delay_is_pending_without_fake_instances(self) -> None:
@@ -349,6 +361,7 @@ class HardwareArchitectureConfig:
     ip_instances: tuple[IpInstanceSpec, ...]
     architecture_blocks: tuple[ArchitectureBlockSpec, ...]
     required_responsibilities: RequiredResponsibilitiesSpec
+    device_part: str
 ```
 
 Provide `family_by_id()`, `instance_by_name()`, `block_by_name()`, and `required_families()` methods that raise `KeyError` for an unknown stable ID. `RequiredResponsibilitiesSpec` must reject blank or duplicate production values, blank or duplicate chain values, a chain value outside `production`, and a chain value with the `legacy_reference.` prefix. Check the reserved prefix before production-membership validation and include `legacy_reference` in that `ValueError`, so the type boundary reports the actual namespace violation. Enforce these constructor invariants:
@@ -368,13 +381,14 @@ For legacy blocks, require empty `responsibilities`, nonempty `reference_respons
 
 - [ ] **Step 4: Replace both configuration copies with schema v2**
 
-Use these exact top-level keys:
+Use these exact top-level keys (the two copies must remain byte-identical):
 
 ```json
 {
   "architecture_schema_version": 2,
   "architecture_config_version": 2,
   "vivado_version": "2025.2",
+  "device_part": "xczu27dr-fsve1156-2-i",
   "generation_mode": "vivado_ip_first",
   "topology_status": "unconnected_skeleton",
   "rfdc_integration": {},
@@ -388,7 +402,12 @@ Use these exact top-level keys:
 }
 ```
 
-Declare all 13 family IDs from `EXPECTED_FAMILIES`. RFDC uses exact pattern and exact VLNV `xilinx.com:ip:usp_rf_data_converter:2.6`; the other 12 use their existing catalog patterns. Declare exactly these two instances:
+Set `device_part` from the existing shared `ModelConfig.device_part`, not from
+a second board constant; reject blank values and reject either installed or
+source-tree architecture data when it differs from `ModelConfig`. Declare all
+13 family IDs from `EXPECTED_FAMILIES`. RFDC uses exact pattern and exact VLNV
+`xilinx.com:ip:usp_rf_data_converter:2.6`; the other 12 use their existing
+catalog patterns. Declare exactly these two instances:
 
 ```json
 [
@@ -454,7 +473,8 @@ $env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
 & 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest tests.ip.test_architecture_config tests.common.test_config -v
 ```
 
-Expected: PASS; `ModelConfig` tests remain unchanged.
+Expected: PASS; the default architecture and shared `ModelConfig` have the
+same `device_part`, and unrelated `ModelConfig` tests remain unchanged.
 
 - [ ] **Step 6: Commit Task 1**
 
@@ -738,7 +758,12 @@ def test_discovery_queries_every_required_family_without_creating_cells(self) ->
     for family in config.required_families():
         self.assertIn(f"{{{family.family_id}}}", tcl)
         self.assertIn(f"{{{family.catalog_pattern}}}", tcl)
+    self.assertIn(f"create_project -in_memory -part {{{config.device_part}}}", tcl)
+    self.assertIn("update_ip_catalog", tcl)
+    self.assertNotIn("create_project -force", tcl)
+    self.assertNotIn("create_bd_design", tcl)
     self.assertNotIn("create_bd_cell", tcl)
+    self.assertNotIn("validate_bd_design", tcl)
     self.assertIn("llength $argv", tcl)
     self.assertIn("catalog_evidence.tsv", tcl)
 
@@ -746,11 +771,26 @@ def test_discovery_queries_every_required_family_without_creating_cells(self) ->
 def test_realization_creates_only_materialized_instances(self) -> None:
     config = HardwareArchitectureConfig.load_default()
     tcl = emit_architecture_realization_tcl(config)
+    self.assertIn(f"create_project -in_memory -part {{{config.device_part}}}", tcl)
+    self.assertNotIn("xczu27dr-fsve1156-2-i", tcl.replace(config.device_part, ""))
     self.assertIn("create_bd_cell", tcl)
     self.assertIn("{rfdc_0}", tcl)
     self.assertNotIn("monitor_fir_dec2_0", tcl)
     self.assertNotIn("axis_data_fifo", tcl)
     self.assertNotIn("validate_bd_design", tcl)
+
+
+def test_both_tcl_emitters_take_the_part_from_config(self) -> None:
+    config = HardwareArchitectureConfig.load_default()
+    for emitter in (
+        emit_catalog_discovery_tcl,
+        emit_architecture_realization_tcl,
+    ):
+        tcl = emitter(config)
+        self.assertIn(
+            f"create_project -in_memory -part {{{config.device_part}}}",
+            tcl,
+        )
 
 
 def test_request_hash_order_and_tcl_provenance_are_deterministic(self) -> None:
@@ -781,7 +821,15 @@ Expected: failures because only `emit_ip_skeleton_tcl()` and `create_ip_architec
 
 - [ ] **Step 3: Implement discovery Tcl for the full required family set**
 
-Remove `INITIAL_SKELETON_IP`. `emit_catalog_discovery_tcl()` must derive its catalog array from `config.required_families()`, require exactly three Tcl arguments, query all family patterns with `get_ipdefs`, preserve exact RFDC 2.6, and write strict evidence rows. It must contain no `create_project`, `create_bd_design`, or `create_bd_cell` command.
+Remove `INITIAL_SKELETON_IP`. `emit_catalog_discovery_tcl()` must derive its
+catalog array from `config.required_families()`, require exactly three Tcl
+arguments, and first run exactly one
+`create_project -in_memory -part {<config.device_part>}` followed by
+`update_ip_catalog`. This sole project is catalog-initialization context: it
+must never write a project to disk, create a BD, create a cell, connect an
+interface, or invoke `validate_bd_design`. Then query all family patterns with
+`get_ipdefs`, preserve exact RFDC 2.6, and write strict evidence rows. It must
+contain no `create_bd_design` or `create_bd_cell` command.
 
 Use this evidence row grammar:
 
@@ -807,21 +855,32 @@ trailing newline, never zero or two.
 
 - [ ] **Step 4: Implement realization Tcl over concrete instances**
 
-`emit_architecture_realization_tcl()` must create the in-memory ZU27DR project and unconnected BD, iterate `config.ip_instances`, skip planned and retired instances, and emit stable cell names only for materialized instances. In the initial config it creates exactly `rfdc_0`. Emit `IP_ARCHITECTURE_STATUS=UNCONNECTED_SKELETON`; do not call `validate_bd_design`.
+`emit_architecture_realization_tcl()` must create its in-memory project with
+`config.device_part` (never a hard-coded ZU27DR part), create its unconnected
+BD, iterate `config.ip_instances`, skip planned and retired instances, and emit
+stable cell names only for materialized instances. In the initial config it
+creates exactly `rfdc_0`. Emit `IP_ARCHITECTURE_STATUS=UNCONNECTED_SKELETON`;
+do not call `validate_bd_design`.
 
 - [ ] **Step 5: Implement the acyclic request-generation order**
 
 In `generate_ip_architecture()`:
 
-1. hash installed `ip_architecture.json` bytes;
+1. load architecture data only after the `device_part == ModelConfig.device_part`
+   cross-authority check, then hash installed `ip_architecture.json` bytes;
 2. emit and write `discover_ip_catalog.tcl`;
 3. hash the exact discovery Tcl bytes;
 4. emit and write `realize_ip_architecture.tcl` and record its independent hash;
 5. serialize canonical `catalog_request.json` with sorted keys, indentation, UTF-8, and one trailing newline;
 6. hash exact request bytes;
-7. write architecture metadata containing all three provenance fields.
+7. write architecture metadata containing all three provenance fields and
+   explain that `architecture_config_sha256` binds `device_part` transitively.
 
-Do not include any hash in the discovery Tcl itself.
+Do not include any hash in the discovery Tcl itself. Do not add a duplicate
+`device_part` field to the request, evidence, candidate lock, or production
+lock: their existing `architecture_config_sha256` binds the exact JSON bytes
+that contain the part. Changing `device_part` therefore requires regenerated
+Tcl, request, evidence, candidate lock, and production-lock validation.
 
 - [ ] **Step 6: Run dual-Tcl tests and commit Task 3**
 
@@ -854,6 +913,12 @@ git commit -m "feat: split IP discovery and realization Tcl"
 **Interfaces:**
 - Consumes: exact request hashes and complete required family set from Task 3.
 - Produces: `CatalogResolutionStatus`, `CatalogEvidence`, `parse_catalog_evidence(text: str) -> CatalogEvidence`, `validate_catalog_evidence(config: HardwareArchitectureConfig, request_bytes: bytes, discovery_tcl_bytes: bytes, evidence: CatalogEvidence) -> ValidatedCatalogEvidence`, and `build_candidate_lock(config: HardwareArchitectureConfig, evidence: ValidatedCatalogEvidence) -> dict[str, object]`.
+
+`CatalogEvidence`, the request, candidate lock, and production lock do not add
+a second `device_part` member. Their `architecture_config_sha256` is the exact
+bytes binding to the architecture JSON's required `device_part`; metadata and
+the published contract must state this so the target is not hidden by the
+hash-only representation.
 
 - [ ] **Step 1: Write failing complete-set and stale-binding tests**
 
@@ -1416,7 +1481,7 @@ $request = Get-Content -LiteralPath 'D:\AWAY\RFSOC\model\build\metadata\catalog_
 & 'D:\app\AMD\2025.2\Vivado\bin\vivado.bat' -mode batch -source 'D:\AWAY\RFSOC\model\build\vivado\discover_ip_catalog.tcl' -notrace -tclargs $request.architecture_config_sha256 $request.generated_tcl_sha256 $request.catalog_request_sha256
 ```
 
-Expected: exit code 0 and `build/metadata/catalog_evidence.tsv` contains one metadata section plus exactly 13 unique `ip` rows. If the sandbox blocks Vivado user-app storage, rerun the identical command with user approval rather than changing Tcl or evidence paths.
+Expected: exit code 0 and `build/metadata/catalog_evidence.tsv` contains one metadata section plus exactly 13 unique `ip` rows. The discovery log must show the one in-memory project for `xczu27dr-fsve1156-2-i` and catalog update, but no saved project, BD, cell, connection, or validation command. This project context is required because a no-project Vivado 2025.2 process returned no RFDC IP defs and `update_ip_catalog` reported `No open project`; with the in-memory fixed-part project, RFDC 2.6 became visible. If the sandbox blocks Vivado user-app storage, rerun the identical command with user approval rather than changing Tcl or evidence paths.
 
 - [ ] **Step 4: Ingest evidence and verify candidate lock provenance**
 
@@ -1454,7 +1519,7 @@ $env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
 & 'D:\app\AMD\2025.2\Vivado\bin\vivado.bat' -mode batch -source 'D:\AWAY\RFSOC\model\build\vivado\realize_ip_architecture.tcl' -notrace
 ```
 
-Expected: production lock validates; realization creates only `rfdc_0`, reports `UNCONNECTED_SKELETON`, and does not call `validate_bd_design`. `production_integration_ready` remains false because parameters, connections, RFDC proof, custom production sources, and fractional-delay architecture are not accepted.
+Expected: production lock validates; realization uses `config.device_part`, creates only `rfdc_0`, reports `UNCONNECTED_SKELETON`, and does not call `validate_bd_design`. `production_integration_ready` remains false because parameters, connections, RFDC proof, custom production sources, and fractional-delay architecture are not accepted.
 
 - [ ] **Step 7: Add default-lock regression and commit Task 7**
 
@@ -1551,8 +1616,11 @@ Create `docs/verification/amd-ip-normalization-acceptance.md` containing:
 - branch and commit under test;
 - Vivado full version;
 - architecture config, discovery Tcl, request, evidence, lock, and realization Tcl hashes;
+- `device_part` value and proof that both Tcl scripts derive it from the
+  cross-authority-checked architecture config;
 - exact resolved VLNV table for all 13 required families;
-- proof that discovery created no cells;
+- proof that discovery created only its fixed-part in-memory catalog project,
+  then no BD, cells, or connections;
 - proof that realization created only `rfdc_0`;
 - the three derived result values;
 - Python test command and exact result;
@@ -1585,12 +1653,12 @@ git commit -m "docs: accept normalized AMD IP architecture"
 
 | Approved design requirement | Implemented and verified by |
 |---|---|
-| Schema-v2 family, instance, block, RFDC, and machine-traceable responsibility domains | Tasks 1–2 |
+| Schema-v2 device part, family, instance, block, RFDC, and machine-traceable responsibility domains | Tasks 1–2 |
 | Formal `architecture_pending` kind and status invariants | Tasks 1–2 |
 | Production versus legacy responsibility scope isolation, including distinct pending 2SPC ingress and egress blocks | Tasks 1–2 and 6 |
 | Frozen continuous dual-polar reflection chain: type-boundary legacy-prefix rejection, registry exact ordering, and one non-legacy owner per item | Tasks 1–2 |
 | Exact ownership completeness and independent readiness predicate | Task 2 |
-| Catalog discovery versus instance realization separation | Task 3 |
+| Cross-authority `device_part`, catalog-context discovery, and instance realization separation | Tasks 1, 3, and 7 |
 | Acyclic config, discovery Tcl, request, evidence, candidate chain | Tasks 3–4 |
 | Discovery-only `generated_tcl_sha256` provenance | Tasks 3–5 |
 | Complete required-family evidence and stale-evidence rejection | Task 4 |
@@ -1604,6 +1672,7 @@ git commit -m "docs: accept normalized AMD IP architecture"
 ## Final Verification Checklist
 
 - [ ] `config/ip_architecture.json` and installed package copy are byte-identical.
+- [ ] `HardwareArchitectureConfig.device_part` is nonblank, equals shared `ModelConfig.device_part`, and both Tcl scripts use it without a hard-coded target.
 - [ ] `config/ip_lock.json` and installed package copy are byte-identical.
 - [ ] `required_responsibilities` has only `production` and `continuous_dual_polar_reflection` members; no top-level schema domain was added.
 - [ ] Every required production responsibility has exactly one non-legacy owner.
@@ -1613,12 +1682,13 @@ git commit -m "docs: accept normalized AMD IP architecture"
 - [ ] Legacy reference responsibilities use only the reserved namespace and do not enter production maps.
 - [ ] `rx_group_ingress_2spc` and `tx_iq_axis_boundary_2spc` own only legacy references; separate pending production blocks own the continuous 2SPC ingress and egress responsibilities without instance refs.
 - [ ] PDW and monitor responsibilities remain outside the continuous reflection traceability chain.
-- [ ] Discovery Tcl contains no BD-cell creation.
+- [ ] Discovery Tcl creates exactly one fixed-part in-memory project for catalog initialization and contains no disk-project, BD, cell, connection, or validation operation.
 - [ ] Realization Tcl creates only materialized instances.
 - [ ] Discovery evidence resolves exactly all required families.
 - [ ] Catalog evidence uses the fixed six-row metadata order, numeric `<pid>-<milliseconds>` run ID, metadata-before-IP phase, and exactly one trailing newline.
 - [ ] Old or mismatched evidence reports stale and cannot produce a current candidate lock.
 - [ ] Production lock family set is exact, uses RFDC 2.6, and binds discovery Tcl only.
+- [ ] Request, evidence, candidate lock, and production lock explain that `architecture_config_sha256` binds `device_part`; they do not carry a divergent duplicate field.
 - [ ] Legacy Verilog appears only under `build/reference_rtl/`.
 - [ ] `responsibility_complete=true` can coexist truthfully with `production_integration_ready=false`.
 - [ ] Full Python suite passes.
