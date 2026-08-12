@@ -134,6 +134,39 @@ def rewrite_journal(journal_path: Path, mutate) -> None:
 
 
 class ProductionLockTest(unittest.TestCase):
+    def test_promoted_default_lock_is_current_and_byte_identical(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        root_bytes = (root / "config/ip_lock.json").read_bytes()
+        package_bytes = (
+            root / "src/rfsoc_pulse_model/config/ip_lock.json"
+        ).read_bytes()
+        self.assertEqual(root_bytes, package_bytes)
+
+        config = HardwareArchitectureConfig.load_default()
+        config_bytes = (
+            root / "src/rfsoc_pulse_model/config/ip_architecture.json"
+        ).read_bytes()
+        discovery_bytes = emit_catalog_discovery_tcl(config).encode("utf-8")
+        request_bytes = canonical_json_bytes(
+            build_catalog_request(
+                config,
+                architecture_config_sha256=hashlib.sha256(config_bytes).hexdigest(),
+                generated_tcl_sha256=hashlib.sha256(discovery_bytes).hexdigest(),
+            )
+        )
+        validation = validate_production_lock(
+            config,
+            request_bytes,
+            discovery_bytes,
+            json.loads(root_bytes),
+        )
+        self.assertTrue(validation.valid)
+        self.assertEqual(
+            set(json.loads(root_bytes)["families"]),
+            {family.family_id for family in config.required_families()},
+        )
+        self.assertNotIn("realization_tcl_sha256", json.loads(root_bytes))
+
     def test_lock_family_set_must_equal_required_family_set(self) -> None:
         fixture = valid_lock_fixture()
         self.assertTrue(validate_production_lock(**fixture).valid)

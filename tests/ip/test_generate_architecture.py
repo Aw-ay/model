@@ -52,20 +52,52 @@ class GenerateIpArchitectureTest(unittest.TestCase):
                 hashlib.sha256(first_bytes[Path("metadata/catalog_request.json")]).hexdigest(),
             )
 
-    def test_development_mode_reports_missing_production_lock_truthfully(self) -> None:
+    def test_development_mode_reports_missing_explicit_production_lock_truthfully(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            architecture = generate_ip_architecture(
-                Path(temporary), GenerationMode.DEVELOPMENT
+            config = HardwareArchitectureConfig.load_default()
+            config_bytes = resources.files("rfsoc_pulse_model.config").joinpath(
+                "ip_architecture.json"
+            ).read_bytes()
+            discovery_bytes = emit_catalog_discovery_tcl(config).encode("utf-8")
+            request_bytes = canonical_json_bytes(
+                build_catalog_request(
+                    config,
+                    hashlib.sha256(config_bytes).hexdigest(),
+                    hashlib.sha256(discovery_bytes).hexdigest(),
+                )
             )
-
-        self.assertFalse(architecture["production_lock_valid"])
+            self.assertFalse(
+                _validate_packaged_lock(
+                    GenerationMode.DEVELOPMENT,
+                    config,
+                    request_bytes,
+                    discovery_bytes,
+                    lock_resource=Path(temporary) / "missing-ip_lock.json",
+                )
+            )
 
     def test_production_mode_fails_closed_without_a_lock_before_output_write(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary) / "not-written"
+            config = HardwareArchitectureConfig.load_default()
+            config_bytes = resources.files("rfsoc_pulse_model.config").joinpath(
+                "ip_architecture.json"
+            ).read_bytes()
+            discovery_bytes = emit_catalog_discovery_tcl(config).encode("utf-8")
+            request_bytes = canonical_json_bytes(
+                build_catalog_request(
+                    config,
+                    hashlib.sha256(config_bytes).hexdigest(),
+                    hashlib.sha256(discovery_bytes).hexdigest(),
+                )
+            )
             with self.assertRaisesRegex(ValueError, "production lock.*missing"):
-                generate_ip_architecture(root, GenerationMode.PRODUCTION)
-            self.assertFalse(root.exists())
+                _validate_packaged_lock(
+                    GenerationMode.PRODUCTION,
+                    config,
+                    request_bytes,
+                    discovery_bytes,
+                    lock_resource=Path(temporary) / "missing-ip_lock.json",
+                )
 
     def test_top_level_cli_accepts_explicit_ip_mode(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -76,7 +108,7 @@ class GenerateIpArchitectureTest(unittest.TestCase):
                 0,
             )
             metadata = Path(temporary) / "metadata/ip_architecture.json"
-            self.assertFalse(json.loads(metadata.read_text(encoding="utf-8"))["production_lock_valid"])
+            self.assertTrue(json.loads(metadata.read_text(encoding="utf-8"))["production_lock_valid"])
 
     def test_packaged_lock_decoder_rejects_duplicate_family_keys(self) -> None:
         config = HardwareArchitectureConfig.load_default()

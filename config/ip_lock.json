@@ -1,0 +1,22 @@
+{
+  "architecture_config_sha256": "2cad67a144b60411c0d7b39a845c7616ff2537b052e07dd9d4523589f1271647",
+  "catalog_request_sha256": "9dbb0ae0de091a461ae88cef055d999b4fa1452788c9ae9e594d0807a0cda552",
+  "families": {
+    "axi_dma": "xilinx.com:ip:axi_dma:7.1",
+    "axis_broadcaster": "xilinx.com:ip:axis_broadcaster:1.1",
+    "axis_clock_converter": "xilinx.com:ip:axis_clock_converter:1.1",
+    "axis_combiner": "xilinx.com:ip:axis_combiner:1.1",
+    "axis_data_fifo": "xilinx.com:ip:axis_data_fifo:2.0",
+    "axis_dwidth_converter": "xilinx.com:ip:axis_dwidth_converter:1.1",
+    "axis_register_slice": "xilinx.com:ip:axis_register_slice:1.1",
+    "axis_switch": "xilinx.com:ip:axis_switch:1.1",
+    "complex_multiplier": "xilinx.com:ip:cmpy:6.0",
+    "cordic": "xilinx.com:ip:cordic:6.0",
+    "dds_compiler": "xilinx.com:ip:dds_compiler:6.0",
+    "fir_compiler": "xilinx.com:ip:fir_compiler:7.2",
+    "rfdc": "xilinx.com:ip:usp_rf_data_converter:2.6"
+  },
+  "generated_tcl_sha256": "13ac8327c36879910a44b2eb924d2f0ce0f7fdb85ad7f6dae125a06ffabdaee8",
+  "lock_schema_version": 1,
+  "vivado_version": "2025.2"
+}

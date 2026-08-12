@@ -76,6 +76,13 @@ class HardwareArchitectureConfigTest(unittest.TestCase):
             (root / "src/rfsoc_pulse_model/config/ip_architecture.json").read_bytes(),
         )
 
+    def test_promoted_default_lock_copies_are_byte_identical(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        self.assertEqual(
+            (root / "config/ip_lock.json").read_bytes(),
+            (root / "src/rfsoc_pulse_model/config/ip_lock.json").read_bytes(),
+        )
+
     def test_architecture_device_part_rejects_blank_or_model_config_mismatch(self) -> None:
         blank = self.root_payload()
         blank["device_part"] = " "
