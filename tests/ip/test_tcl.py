@@ -67,6 +67,25 @@ class IpArchitectureTclTest(unittest.TestCase):
         self.assertNotIn("axis_data_fifo", tcl)
         self.assertNotIn("validate_bd_design", tcl)
 
+    def test_realization_reuses_only_an_existing_project_with_the_exact_part(self) -> None:
+        config = HardwareArchitectureConfig.load_default()
+        tcl = emit_architecture_realization_tcl(config)
+
+        project_guard = "if {[llength [get_projects -quiet]] == 0} {"
+        part_read = "set current_part [get_property PART [current_project]]"
+        mismatch_guard = f"if {{$current_part ne {{{config.device_part}}}}} {{"
+        mismatch_error = (
+            f"existing project PART mismatch: expected {config.device_part}, "
+            "got $current_part"
+        )
+        self.assertEqual(tcl.count(project_guard), 1)
+        self.assertEqual(tcl.count(part_read), 1)
+        self.assertEqual(tcl.count(mismatch_guard), 1)
+        self.assertIn(mismatch_error, tcl)
+        self.assertLess(tcl.index(part_read), tcl.index("create_bd_design"))
+        self.assertLess(tcl.index(mismatch_guard), tcl.index("create_bd_design"))
+        self.assertLess(tcl.index(mismatch_guard), tcl.index("create_bd_cell"))
+
     def test_part_is_derived_from_cross_checked_config_and_changes_provenance(self) -> None:
         default_config = HardwareArchitectureConfig.load_default()
         alternate_part = "xczu28dr-ffvg1517-2-e"
