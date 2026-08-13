@@ -404,6 +404,15 @@ class HardwareArchitectureConfig:
             raise ValueError("rfdc_integration instance_ref must reference rfdc")
         if rfdc_instance.lifecycle is IpInstanceLifecycle.RETIRED:
             raise ValueError("rfdc_integration instance_ref cannot be retired")
+        block_names = {block.block_name for block in self.architecture_blocks}
+        missing_protected_owners = (
+            set(_CONNECTED_AMD_OWNER_INSTANCE_CONTRACT) - block_names
+        )
+        if missing_protected_owners:
+            raise ValueError(
+                "connected shell protected AMD owner names missing: "
+                f"{sorted(missing_protected_owners)}"
+            )
         for block in self.architecture_blocks:
             expected_owner = _CONNECTED_AMD_OWNER_INSTANCE_CONTRACT.get(
                 block.block_name

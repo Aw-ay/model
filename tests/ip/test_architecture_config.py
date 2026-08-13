@@ -277,6 +277,40 @@ class HardwareArchitectureConfigTest(unittest.TestCase):
                                     ),
                                 )
 
+    def test_connected_shell_requires_each_protected_amd_owner_name(self) -> None:
+        """Renaming or removing a protected owner cannot bypass its IP contract."""
+        config = HardwareArchitectureConfig.load_default()
+        protected_owner_names = ("rfdc_frontend", "monitor_branch")
+
+        for block_name in protected_owner_names:
+            with self.subTest(block_name=block_name, mutation="remove"):
+                with self.assertRaisesRegex(ValueError, "protected AMD owner"):
+                    dataclasses.replace(
+                        config,
+                        architecture_blocks=tuple(
+                            block
+                            for block in config.architecture_blocks
+                            if block.block_name != block_name
+                        ),
+                    )
+
+            with self.subTest(block_name=block_name, mutation="rename_custom_rtl"):
+                with self.assertRaisesRegex(ValueError, "protected AMD owner"):
+                    dataclasses.replace(
+                        config,
+                        architecture_blocks=tuple(
+                            dataclasses.replace(
+                                block,
+                                block_name=f"spoofed_{block_name}",
+                                implementation_kind=ImplementationKind.CUSTOM_RTL,
+                                source="rtl/owner_bypass.v",
+                            )
+                            if block.block_name == block_name
+                            else block
+                            for block in config.architecture_blocks
+                        ),
+                    )
+
     def test_connected_shell_rejects_extra_planned_shell_instances_and_rfdc_authority_drift(self) -> None:
         config = HardwareArchitectureConfig.load_default()
         shell_templates = {
