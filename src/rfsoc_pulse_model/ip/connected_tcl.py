@@ -39,6 +39,9 @@ class ConnectedTclArtifacts:
     verification_tcl: bytes
     rfdc_properties: tuple[tuple[str, str], ...]
     rfdc_interfaces: tuple[RfdcProbeInterface, ...]
+    ps_properties: tuple[tuple[str, str], ...]
+    external_rf_interfaces: tuple[RfdcProbeInterface, ...]
+    mts_properties: tuple[tuple[str, str], ...]
 
     @property
     def request_sha256(self) -> str: return _sha(self.request_bytes)
@@ -58,6 +61,33 @@ def _external_rf_interfaces(items: tuple[RfdcProbeInterface, ...]) -> tuple[Rfdc
     if {item.name for item in selected} != expected:
         raise ValueError("Task-4 RF reference/SYSREF/analogue inventory is incomplete")
     return selected
+
+
+def _apply_required_mts(
+    request: ConnectedShellRequest, properties: tuple[tuple[str, str], ...],
+) -> tuple[tuple[tuple[str, str], ...], tuple[tuple[str, str], ...]]:
+    """Promote only Task-4-discovered per-tile MTS properties required by request.
+
+    The probe establishes the property spelling; the connected request establishes
+    the required converter/tile sets.  We deliberately do not invent a global
+    ``mADC_*`` setting, nor treat a launcher supplied boolean as MTS evidence.
+    """
+    configured = dict(properties)
+    if len(configured) != len(properties):
+        raise ValueError("RFDC properties must be unique")
+    expected: list[tuple[str, str]] = []
+    for group in request.mts_groups:
+        prefix = "ADC" if group.converter == "adc" else "DAC"
+        for tile in group.tiles:
+            name = f"{prefix}{tile}_Multi_Tile_Sync"
+            # Per-tile MTS is a production realization setting, absent from
+            # the RFDC-only candidate set because that probe intentionally
+            # leaves MTS unverified.  The connected request supplies the
+            # exact tile set; Task 6 will still fail closed if Vivado does not
+            # expose/read back this precise CONFIG property.
+            configured[name] = "true"
+            expected.append((name, "true"))
+    return tuple(sorted(configured.items())), tuple(sorted(expected))
 
 
 def emit_connected_tcl(
@@ -85,6 +115,7 @@ def emit_connected_tcl(
     for name, value in rfdc_properties:
         if not isinstance(name, str) or not _RF_PROPERTY.fullmatch(name): raise ValueError("RFDC property is unsafe")
         _value(value, "RFDC property value")
+    effective_rfdc_properties, mts_properties = _apply_required_mts(request, rfdc_properties)
     external_rf = _external_rf_interfaces(rfdc_interfaces)
     ps = next(name for name, vlnv in cells.items() if vlnv == platform.ps_vlnv)
     smart = next(name for name, vlnv in cells.items() if ":smartconnect:" in vlnv)
@@ -107,7 +138,7 @@ def emit_connected_tcl(
     lines += ["set_property -dict [list"]
     lines += [f"  {{{name}}} {{{value}}}" for name, value in sorted(platform.properties.items())]
     lines += [f"] [get_bd_cells {{{ps}}}]", "set_property -dict [list"]
-    lines += [f"  {{CONFIG.{name}}} {{{value}}}" for name, value in rfdc_properties]
+    lines += [f"  {{CONFIG.{name}}} {{{value}}}" for name, value in effective_rfdc_properties]
     lines += [f"] [get_bd_cells {{{rfdc}}}]", f"set_property -dict [list {{CONFIG.C_OPERATION}} {{not}} {{CONFIG.C_SIZE}} {{1}}] [get_bd_cells {{{inverter}}}]"]
     # Named nets make readback compare names, not Vivado-created aliases.
     lines += [
@@ -127,11 +158,11 @@ def emit_connected_tcl(
     for interface in external_rf: lines.append(f"make_bd_intf_pins_external [get_bd_intf_pins {{{rfdc}/{interface.name}}}]")
     lines += [f"assign_bd_address [get_bd_addr_segs {{{rfdc}/s_axi/Reg}}]", "validate_bd_design", "save_bd_design", ""]
     realization = "\n".join(lines).encode("utf-8")
-    verification = _emit_verification(request, rfdc, rfdc_properties, external_rf, _sha(realization))
-    return ConnectedTclArtifacts(canonical_connected_json_bytes(request), realization, verification, rfdc_properties, rfdc_interfaces)
+    verification = _emit_verification(request, rfdc, effective_rfdc_properties, tuple(sorted(platform.properties.items())), external_rf, mts_properties, _sha(realization))
+    return ConnectedTclArtifacts(canonical_connected_json_bytes(request), realization, verification, effective_rfdc_properties, rfdc_interfaces, tuple(sorted(platform.properties.items())), external_rf, mts_properties)
 
 
-def _emit_verification(request: ConnectedShellRequest, rfdc: str, properties: tuple[tuple[str, str], ...], external_rf: tuple[RfdcProbeInterface, ...], realization_sha: str) -> bytes:
+def _emit_verification(request: ConnectedShellRequest, rfdc: str, properties: tuple[tuple[str, str], ...], ps_properties: tuple[tuple[str, str], ...], external_rf: tuple[RfdcProbeInterface, ...], mts_properties: tuple[tuple[str, str], ...], realization_sha: str) -> bytes:
     lines = [
         "# Generated readback protocol; runner alone publishes lifecycle state.",
         "foreach key {CONNECTED_READBACK_TSV CONNECTED_REPORT_DIR CONNECTED_VERIFICATION_TCL_SHA256} { if {![info exists ::env($key)]} { error \"$key is required\" } }",
@@ -145,9 +176,20 @@ def _emit_verification(request: ConnectedShellRequest, rfdc: str, properties: tu
         "report_cdc -file [file join $::env(CONNECTED_REPORT_DIR) {cdc.rpt}]", "report_clock_interaction -file [file join $::env(CONNECTED_REPORT_DIR) {clock_interaction.rpt}]", "report_timing_summary -file [file join $::env(CONNECTED_REPORT_DIR) {timing_summary.rpt}]", "report_utilization -file [file join $::env(CONNECTED_REPORT_DIR) {utilization.rpt}]",
     ]
     for cell in request.cells: lines.append(f"connected_emit CELL {cell.name} [get_property VLNV [get_bd_cells {{{cell.name}}}]]")
+    ps = next(cell.name for cell in request.cells if cell.vlnv == "xilinx.com:ip:zynq_ultra_ps_e:3.5")
+    inverter = next(cell.name for cell in request.cells if ":util_vector_logic:" in cell.vlnv)
+    concat = next(cell.name for cell in request.cells if ":xlconcat:" in cell.vlnv)
+    for name, _ in ps_properties: lines.append(f"connected_emit PS_CONFIG {name} [get_property {name} [get_bd_cells {{{ps}}}]]")
     for name, _ in properties: lines.append(f"connected_emit CONFIG {name} [get_property CONFIG.{name} [get_bd_cells {{{rfdc}}}]]")
+    for name, _ in mts_properties: lines.append(f"connected_emit MTS {name} [get_property CONFIG.{name} [get_bd_cells {{{rfdc}}}]]")
     for item in request.interfaces: lines.append(f"connected_emit DATA {item.name} [get_property MODE [get_bd_intf_pins {{{rfdc}/{item.name}}}]] [get_property VLNV [get_bd_intf_pins {{{rfdc}/{item.name}}}]] [get_property CONFIG.TDATA_NUM_BYTES [get_bd_intf_pins {{{rfdc}/{item.name}}}]]")
     for item in external_rf: lines.append(f"connected_emit RF {item.name} [get_property MODE [get_bd_intf_pins {{{rfdc}/{item.name}}}]] [get_property VLNV [get_bd_intf_pins {{{rfdc}/{item.name}}}]]")
+    lines.append(f"connected_emit INVERTER C_OPERATION [get_property CONFIG.C_OPERATION [get_bd_cells {{{inverter}}}]] C_SIZE [get_property CONFIG.C_SIZE [get_bd_cells {{{inverter}}}]]")
+    lines.append(f"connected_emit CONCAT NUM_PORTS [get_property CONFIG.NUM_PORTS [get_bd_cells {{{concat}}}]]")
+    # actual generated external names are checked as an exact inventory by their
+    # authoritative internal source pins.
+    for item in request.interfaces: lines.append(f"connected_emit PORT {item.name} [get_property NAME [get_bd_intf_ports -of_objects [get_bd_intf_pins {{{rfdc}/{item.name}}}]]]")
+    for item in external_rf: lines.append(f"connected_emit PORT {item.name} [get_property NAME [get_bd_intf_ports -of_objects [get_bd_intf_pins {{{rfdc}/{item.name}}}]]]")
     for clock in request.clocks:
         for member in clock.members: lines.append(f"connected_emit CLOCK {clock.domain} {member} [get_property NAME [get_bd_nets -of_objects [get_bd_pins {{{member}}}]]]")
     for reset in request.resets:
@@ -156,6 +198,6 @@ def _emit_verification(request: ConnectedShellRequest, rfdc: str, properties: tu
         lines.append(f"connected_emit LOCK {reset.domain} {reset.dcm_locked_pin} [get_property NAME [get_bd_nets -of_objects [get_bd_pins {{{reset.dcm_locked_members[-1]}}}]]]")
     lines += [
         "connected_emit ADDRESS rfdc_0/s_axi/Reg [get_bd_addr_segs rfdc_0/s_axi/Reg]", "connected_emit IRQ rfdc_0/irq irq_concat_0/In0 irq_concat_0/dout zynq_ultra_ps_e_0/pl_ps_irq0",
-        "connected_emit BOOL validate_bd_design_passed true", "connected_emit BOOL synthesis_completed true", "connected_emit BOOL cdc_safe true", "connected_emit BOOL clock_safety_verified true", "connected_emit BOOL mts_configuration_verified true", "connected_emit BOOL mts_runtime_verified false", "connected_emit END", "close $connected_out", "",
+        "connected_emit BOOL validate_bd_design_passed true", "connected_emit BOOL synthesis_completed true", "connected_emit BOOL mts_runtime_verified false", "connected_emit END", "close $connected_out", "",
     ]
     return "\n".join(lines).encode("utf-8")

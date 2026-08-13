@@ -65,6 +65,12 @@ class ConnectedTclTest(unittest.TestCase):
         self.assertIn("generate_target all", verification)
         self.assertIn("open_run synth_1", verification)
         self.assertNotIn("connected_rfdc_shell_state", verification)
+        self.assertNotIn("BOOL cdc_safe true", verification)
+        self.assertNotIn("BOOL clock_safety_verified true", verification)
+        self.assertNotIn("BOOL mts_configuration_verified true", verification)
+        for name, value in first.mts_properties:
+            self.assertEqual(value, "true")
+            self.assertIn(f"connected_emit MTS {name} [get_property CONFIG.{name}", verification)
 
     def test_emitter_rejects_tcl_metacharacters_in_authority_values(self) -> None:
         """Removing Tcl-token validation would make generated commands injectable."""

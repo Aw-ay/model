@@ -46,6 +46,7 @@ _STATE_KEYS = frozenset({
 })
 _REPORT_NAMES = ("cdc", "clock_interaction", "timing_summary", "utilization")
 _SHA256_LENGTH = 64
+_MAX_REPORT_BYTES = 1_000_000
 
 
 def _sha256(data: bytes) -> str:
@@ -94,6 +95,10 @@ class ConnectedShellAttempt:
             "CONNECTED_READBACK_TSV": str(self.readback_path),
             "CONNECTED_REPORT_DIR": str(next(iter(self.report_paths.values())).parent),
             "CONNECTED_VERIFICATION_TCL_SHA256": verification_tcl_sha256,
+            # Keep source paths out of Tcl brace words.  A legal Windows path
+            # component can contain `}`, which would otherwise terminate one.
+            "CONNECTED_REALIZATION_TCL": str(self.realization_tcl_path),
+            "CONNECTED_VERIFICATION_TCL": str(self.verification_tcl_path),
         }
 
 
@@ -275,8 +280,8 @@ class ConnectedShellRunner:
         _atomic_write(attempt.verification_tcl_path, artifacts.verification_tcl)
         _atomic_write(
             attempt.launch_tcl_path,
-            ("source {" + str(attempt.realization_tcl_path).replace("\\", "/") + "}\n"
-             "source {" + str(attempt.verification_tcl_path).replace("\\", "/") + "}\n").encode("utf-8"),
+            b"source $::env(CONNECTED_REALIZATION_TCL)\n"
+            b"source $::env(CONNECTED_VERIFICATION_TCL)\n",
         )
         return attempt
 
@@ -321,11 +326,16 @@ def build_candidate_evidence(
     if meta != expected_meta: raise ValueError("readback META provenance mismatch")
     if dict(raw["CELL"]) != {cell.name: cell.vlnv for cell in request.cells}: raise ValueError("readback cell/VLNV mismatch")
     if dict(raw["CONFIG"]) != dict(artifacts.rfdc_properties): raise ValueError("readback RFDC CONFIG mismatch")
+    if dict(raw["PS_CONFIG"]) != dict(artifacts.ps_properties): raise ValueError("readback PS property mismatch")
+    if raw["INVERTER"] != [("C_OPERATION", "not", "C_SIZE", "1")]: raise ValueError("readback reset inverter mismatch")
+    if raw["CONCAT"] != [("NUM_PORTS", "1")]: raise ValueError("readback IRQ concat mismatch")
     data_expected = {item.name: ("Master" if item.direction == "master" else "Slave", "xilinx.com:interface:axis_rtl:1.0", str(item.width_bits // 8)) for item in request.interfaces}
     if dict(raw["DATA"]) != data_expected: raise ValueError("readback AXIS interface mismatch")
     rf_expected = {item.name: (item.mode, item.vlnv) for item in artifacts.rfdc_interfaces if item.name not in {"s_axi", *data_expected}}
     rf_expected = {name: value for name, value in rf_expected.items() if name in {"adc0_clk", "adc1_clk", "adc2_clk", "adc3_clk", "dac0_clk", "dac1_clk", "sysref_in"} or name.startswith(("vin", "vout"))}
     if dict(raw["RF"]) != rf_expected: raise ValueError("readback RF external interface mismatch")
+    expected_ports = {name for name in data_expected} | set(rf_expected)
+    if dict(raw["PORT"]) != {name: name for name in expected_ports}: raise ValueError("readback external interface port inventory mismatch")
     expected_clock = {(clock.domain, member): clock.net for clock in request.clocks for member in clock.members}
     if dict(raw["CLOCK"]) != expected_clock: raise ValueError("readback clock-net membership mismatch")
     expected_reset = {(reset.domain, member): reset.reset_net for reset in request.resets for member in reset.members}
@@ -335,8 +345,11 @@ def build_candidate_evidence(
     address = raw["ADDRESS"]
     if not isinstance(address, list) or len(address) != 1 or len(address[0]) != 2 or address[0][0] != "rfdc_0/s_axi/Reg" or not address[0][1] or raw["IRQ"] != [("rfdc_0/irq", "irq_concat_0/In0", "irq_concat_0/dout", "zynq_ultra_ps_e_0/pl_ps_irq0")]: raise ValueError("readback address/IRQ mismatch")
     booleans = raw["BOOL"]
-    required_booleans = {"validate_bd_design_passed", "synthesis_completed", "cdc_safe", "clock_safety_verified", "mts_configuration_verified", "mts_runtime_verified"}
+    required_booleans = {"validate_bd_design_passed", "synthesis_completed", "mts_runtime_verified"}
     if set(booleans) != required_booleans: raise ValueError("readback boolean set mismatch")
+    expected_mts = dict(artifacts.mts_properties)
+    if dict(raw["MTS"]) != expected_mts: raise ValueError("readback MTS configuration mismatch")
+    report_safety = _validate_report_safety(attempt)
     reports = tuple(sorted((name, _sha256(_read_regular_file(path))) for name, path in attempt.report_paths.items()))
     return ConnectedShellEvidence(
         1, artifacts.request_sha256, request.model_config_sha256, request.architecture_config_sha256,
@@ -345,9 +358,10 @@ def build_candidate_evidence(
         request.vivado_version, request.device_part, request.cells, request.interfaces,
         request.clocks, request.resets, request.address_path, request.irq_path,
         request.rfdc_semantics, request.mts_groups,
-        booleans["mts_configuration_verified"], booleans["mts_runtime_verified"],
+        # This truth is derived only after exact RFDC CONFIG readback above.
+        True, booleans["mts_runtime_verified"],
         booleans["validate_bd_design_passed"], booleans["synthesis_completed"],
-        booleans["cdc_safe"], booleans["clock_safety_verified"], reports,
+        report_safety["cdc_safe"], report_safety["clock_safety_verified"], reports,
     )
 
 
@@ -355,7 +369,7 @@ def _parse_readback(raw: bytes) -> dict[str, object]:
     if not isinstance(raw, bytes) or not raw.endswith(b"\n"): raise ValueError("readback TSV must be LF-terminated bytes")
     try: lines = raw.decode("utf-8").splitlines()
     except UnicodeDecodeError as error: raise ValueError("readback TSV must be UTF-8") from error
-    values: dict[str, object] = {"META": {}, "CELL": [], "CONFIG": [], "DATA": [], "RF": [], "CLOCK": [], "RESET": [], "LOCK": [], "ADDRESS": [], "IRQ": [], "BOOL": {}}
+    values: dict[str, object] = {"META": {}, "CELL": [], "CONFIG": [], "PS_CONFIG": [], "DATA": [], "RF": [], "PORT": [], "CLOCK": [], "RESET": [], "LOCK": [], "ADDRESS": [], "IRQ": [], "BOOL": {}, "INVERTER": [], "CONCAT": [], "MTS": []}
     ended = False
     for line in lines:
         fields = line.split("\t")
@@ -369,7 +383,7 @@ def _parse_readback(raw: bytes) -> dict[str, object]:
             meta = values["META"]; assert isinstance(meta, dict)
             if fields[2] in meta: raise ValueError("duplicate readback META")
             meta[fields[2]] = fields[3]
-        elif kind in {"CELL", "CONFIG"} and len(fields) == 4:
+        elif kind in {"CELL", "CONFIG", "PS_CONFIG", "PORT", "MTS"} and len(fields) == 4:
             cast = values[kind]; assert isinstance(cast, list); cast.append((fields[2], fields[3]))
         elif kind == "DATA" and len(fields) == 6:
             cast = values[kind]; assert isinstance(cast, list); cast.append((fields[2], (fields[3], fields[4], fields[5])))
@@ -377,6 +391,10 @@ def _parse_readback(raw: bytes) -> dict[str, object]:
             cast = values[kind]; assert isinstance(cast, list); cast.append((fields[2], (fields[3], fields[4])))
         elif kind in {"CLOCK", "RESET", "LOCK"} and len(fields) == 5:
             cast = values[kind]; assert isinstance(cast, list); cast.append(((fields[2], fields[3]), fields[4]))
+        elif kind == "INVERTER" and len(fields) == 6:
+            cast = values[kind]; assert isinstance(cast, list); cast.append(tuple(fields[2:]))
+        elif kind == "CONCAT" and len(fields) == 4:
+            cast = values[kind]; assert isinstance(cast, list); cast.append(tuple(fields[2:]))
         elif kind in {"ADDRESS", "IRQ"} and len(fields) >= 3:
             cast = values[kind]; assert isinstance(cast, list); cast.append(tuple(fields[2:]))
         elif kind == "BOOL" and len(fields) == 4 and fields[3] in {"true", "false"}:
@@ -385,10 +403,35 @@ def _parse_readback(raw: bytes) -> dict[str, object]:
             booleans[fields[2]] = fields[3] == "true"
         else: raise ValueError("unknown or malformed connected readback record")
     if not ended: raise ValueError("readback END is missing")
-    for kind in ("CELL", "CONFIG", "DATA", "RF", "CLOCK", "RESET", "LOCK"):
+    for kind in ("CELL", "CONFIG", "PS_CONFIG", "DATA", "RF", "PORT", "CLOCK", "RESET", "LOCK", "MTS"):
         cast = values[kind]; assert isinstance(cast, list)
         if len(cast) != len(dict(cast)): raise ValueError(f"duplicate readback {kind}")
     return values
+
+
+def _validate_report_safety(attempt: ConnectedShellAttempt) -> dict[str, bool]:
+    """Bound report grammar: any warning/unsafe/unconstrained marker fails closed."""
+    reports = {
+        name: _read_attempt_report(attempt, path).decode("utf-8", "strict")
+        for name, path in attempt.report_paths.items()
+    }
+    cdc = reports["cdc"].upper()
+    clock = reports["clock_interaction"].upper()
+    timing = reports["timing_summary"].upper()
+    forbidden = ("CRITICAL WARNING", "ERROR", "UNSAFE", "UNCONSTRAINED")
+    if any(token in cdc for token in forbidden): raise ValueError("CDC report is unsafe")
+    if any(token in clock for token in forbidden) or any(token in timing for token in forbidden): raise ValueError("clock/timing report is unsafe or unconstrained")
+    if "CDC_SAFE" not in cdc or "CLOCK_SAFE" not in clock or "TIMING_CONSTRAINED" not in timing:
+        raise ValueError("reports lack bounded clean proof markers")
+    return {"cdc_safe": True, "clock_safety_verified": True}
+
+
+def _read_attempt_report(attempt: ConnectedShellAttempt, path: Path) -> bytes:
+    _assert_safe_directory_chain(attempt.root, path.parent)
+    payload = _read_regular_file(path)
+    if not payload or len(payload) > _MAX_REPORT_BYTES:
+        raise ValueError("report is empty or exceeds bounded parser limit")
+    return payload
 
 
 def _validated_report_hashes(attempt: ConnectedShellAttempt, evidence: ConnectedShellEvidence) -> tuple[tuple[str, str], ...]:
