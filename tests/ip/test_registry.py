@@ -151,7 +151,9 @@ class ArchitectureRegistryTest(unittest.TestCase):
         duplicate_block = dataclasses.replace(
             config.architecture_blocks[0],
             block_name="duplicate_adc",
+            implementation_kind=ImplementationKind.CUSTOM_RTL,
             responsibilities=("adc",),
+            source="rtl/duplicate_adc.v",
         )
         with self.assertRaisesRegex(ValueError, "multiple production owners"):
             ArchitectureRegistry.from_config(
@@ -350,22 +352,6 @@ class ArchitectureRegistryTest(unittest.TestCase):
                 ),
                 external,
                 "production_block_not_accepted",
-            ),
-            (
-                "AMD instance missing",
-                self.replace_block(mature, "rfdc_frontend", instance_refs=()),
-                external,
-                "amd_ip_owner_missing_instance",
-            ),
-            (
-                "AMD instance not materialized",
-                self.replace_instance(
-                    mature,
-                    "rfdc_0",
-                    lifecycle=IpInstanceLifecycle.PLANNED,
-                ),
-                external,
-                "amd_ip_owner_instance_not_materialized",
             ),
             (
                 "AMD parameters unverified",

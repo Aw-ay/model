@@ -19,14 +19,23 @@ _CONNECTED_PLATFORM_VLNVS = {
     "util_vector_logic": "xilinx.com:ip:util_vector_logic:2.0",
     "xlconcat": "xilinx.com:ip:xlconcat:2.1",
 }
-_CONNECTED_PLATFORM_INSTANCES = {
-    "zynq_ultra_ps_e_0": "zynq_ultra_ps_e",
-    "ctrl_smartconnect_0": "smartconnect",
-    "reset_inverter_0": "util_vector_logic",
-    "ctrl_reset_0": "proc_sys_reset",
-    "rx_reset_0": "proc_sys_reset",
-    "tx_reset_0": "proc_sys_reset",
-    "irq_concat_0": "xlconcat",
+_CONNECTED_MATERIALIZED_INSTANCE_CONTRACT = {
+    "rfdc_0": ("rfdc", "rfdc_frontend"),
+    "zynq_ultra_ps_e_0": ("zynq_ultra_ps_e", "ps_platform_control"),
+    "ctrl_smartconnect_0": ("smartconnect", "control_axi_interconnect"),
+    "reset_inverter_0": ("util_vector_logic", "control_reset_inverter"),
+    "ctrl_reset_0": ("proc_sys_reset", "control_reset_domain"),
+    "rx_reset_0": ("proc_sys_reset", "rx_reset_domain"),
+    "tx_reset_0": ("proc_sys_reset", "tx_reset_domain"),
+    "irq_concat_0": ("xlconcat", "rfdc_irq_concat"),
+}
+_CONNECTED_SHELL_FAMILIES = frozenset(
+    family_id
+    for family_id, _ in _CONNECTED_MATERIALIZED_INSTANCE_CONTRACT.values()
+)
+_CONNECTED_AMD_OWNER_INSTANCE_CONTRACT = {
+    "rfdc_frontend": ("rfdc", ("rfdc_0",)),
+    "monitor_branch": ("fir_compiler", ("monitor_fir_dec2_0",)),
 }
 _CONNECTED_REQUIRED_FAMILY_IDS = frozenset(
     {
@@ -361,26 +370,67 @@ class HardwareArchitectureConfig:
         for instance in self.ip_instances:
             if instance.family_ref not in family_ids:
                 raise ValueError(f"unknown family_ref: {instance.family_ref}")
+        shell_instances = tuple(
+            instance
+            for instance in self.ip_instances
+            if instance.family_ref in _CONNECTED_SHELL_FAMILIES
+            and instance.lifecycle is IpInstanceLifecycle.MATERIALIZED
+        )
+        shell_instance_names = {instance.instance_name for instance in shell_instances}
+        expected_shell_instance_names = set(_CONNECTED_MATERIALIZED_INSTANCE_CONTRACT)
+        if shell_instance_names != expected_shell_instance_names:
+            raise ValueError(
+                "connected shell materialized instance set mismatch: "
+                f"missing={sorted(expected_shell_instance_names - shell_instance_names)}, "
+                f"extra={sorted(shell_instance_names - expected_shell_instance_names)}"
+            )
+        for instance in shell_instances:
+            expected_family, expected_role = _CONNECTED_MATERIALIZED_INSTANCE_CONTRACT[
+                instance.instance_name
+            ]
+            if (
+                instance.family_ref != expected_family
+                or instance.logical_role != expected_role
+            ):
+                raise ValueError(
+                    "connected shell materialized instance contract mismatch: "
+                    f"{instance.instance_name}"
+                )
         instance_names = {instance.instance_name for instance in self.ip_instances}
         rfdc_instance = self.instance_by_name(self.rfdc_integration.instance_ref)
         if rfdc_instance.family_ref != "rfdc":
             raise ValueError("rfdc_integration instance_ref must reference rfdc")
         if rfdc_instance.lifecycle is IpInstanceLifecycle.RETIRED:
             raise ValueError("rfdc_integration instance_ref cannot be retired")
-        for instance_name, family_id in _CONNECTED_PLATFORM_INSTANCES.items():
-            instance = self.instance_by_name(instance_name)
-            if (
-                instance.family_ref != family_id
-                or instance.lifecycle is not IpInstanceLifecycle.MATERIALIZED
-            ):
-                raise ValueError(
-                    f"{instance_name} must be a materialized {family_id}"
-                )
         for block in self.architecture_blocks:
             unknown_refs = set(block.instance_refs) - instance_names
             if unknown_refs:
                 raise ValueError(
                     f"{block.block_name} has unknown instance_refs: {sorted(unknown_refs)}"
+                )
+            if block.implementation_kind is not ImplementationKind.AMD_IP:
+                continue
+            expected_owner = _CONNECTED_AMD_OWNER_INSTANCE_CONTRACT.get(
+                block.block_name
+            )
+            if expected_owner is None:
+                raise ValueError(
+                    f"connected shell AMD owner has no declared family contract: "
+                    f"{block.block_name}"
+                )
+            expected_family, expected_refs = expected_owner
+            if block.instance_refs != expected_refs:
+                raise ValueError(
+                    f"{block.block_name} AMD owner instance_refs must exactly match "
+                    f"{expected_refs}"
+                )
+            if any(
+                self.instance_by_name(instance_name).family_ref != expected_family
+                for instance_name in block.instance_refs
+            ):
+                raise ValueError(
+                    f"{block.block_name} AMD owner instances must use "
+                    f"family {expected_family}"
                 )
 
     def family_by_id(self, family_id: str) -> IpFamilySpec:

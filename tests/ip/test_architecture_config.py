@@ -104,6 +104,98 @@ class HardwareArchitectureConfigTest(unittest.TestCase):
         )
         self.assertFalse(config.block_by_name("rfdc_frontend").production_accepted)
 
+    def test_connected_shell_has_exact_eight_materialized_cell_contracts(self) -> None:
+        config = HardwareArchitectureConfig.load_default()
+        expected = {
+            "rfdc_0": ("rfdc", "rfdc_frontend"),
+            "zynq_ultra_ps_e_0": ("zynq_ultra_ps_e", "ps_platform_control"),
+            "ctrl_smartconnect_0": ("smartconnect", "control_axi_interconnect"),
+            "reset_inverter_0": ("util_vector_logic", "control_reset_inverter"),
+            "ctrl_reset_0": ("proc_sys_reset", "control_reset_domain"),
+            "rx_reset_0": ("proc_sys_reset", "rx_reset_domain"),
+            "tx_reset_0": ("proc_sys_reset", "tx_reset_domain"),
+            "irq_concat_0": ("xlconcat", "rfdc_irq_concat"),
+        }
+        self.assertEqual(
+            {
+                instance.instance_name: (instance.family_ref, instance.logical_role)
+                for instance in config.ip_instances
+                if instance.family_ref
+                in {
+                    "rfdc",
+                    "zynq_ultra_ps_e",
+                    "smartconnect",
+                    "proc_sys_reset",
+                    "util_vector_logic",
+                    "xlconcat",
+                }
+                and instance.lifecycle is IpInstanceLifecycle.MATERIALIZED
+            },
+            expected,
+        )
+
+    def test_connected_shell_rejects_materialized_cell_name_family_role_and_lifecycle_drift(self) -> None:
+        config = HardwareArchitectureConfig.load_default()
+
+        def replace_instance(instance_name: str, **changes: object) -> HardwareArchitectureConfig:
+            return dataclasses.replace(
+                config,
+                ip_instances=tuple(
+                    dataclasses.replace(instance, **changes)
+                    if instance.instance_name == instance_name
+                    else instance
+                    for instance in config.ip_instances
+                ),
+            )
+
+        with self.assertRaisesRegex(ValueError, "materialized instance set"):
+            dataclasses.replace(
+                config,
+                ip_instances=tuple(
+                    instance
+                    for instance in config.ip_instances
+                    if instance.instance_name != "rfdc_0"
+                ),
+            )
+        with self.assertRaisesRegex(ValueError, "materialized instance set"):
+            dataclasses.replace(
+                config,
+                ip_instances=(
+                    *config.ip_instances,
+                    dataclasses.replace(
+                        config.instance_by_name("rfdc_0"),
+                        instance_name="extra_rfdc_0",
+                    ),
+                ),
+            )
+        with self.assertRaisesRegex(ValueError, "materialized instance"):
+            replace_instance("rfdc_0", lifecycle=IpInstanceLifecycle.PLANNED)
+        with self.assertRaisesRegex(ValueError, "materialized instance contract"):
+            replace_instance("zynq_ultra_ps_e_0", logical_role="not_the_ps")
+        with self.assertRaisesRegex(ValueError, "materialized instance contract"):
+            replace_instance("ctrl_reset_0", family_ref="rfdc")
+
+    def test_connected_shell_rejects_amd_owner_reference_family_bypass(self) -> None:
+        config = HardwareArchitectureConfig.load_default()
+
+        def replace_block(block_name: str, **changes: object) -> HardwareArchitectureConfig:
+            return dataclasses.replace(
+                config,
+                architecture_blocks=tuple(
+                    dataclasses.replace(block, **changes)
+                    if block.block_name == block_name
+                    else block
+                    for block in config.architecture_blocks
+                ),
+            )
+
+        with self.assertRaisesRegex(ValueError, "rfdc_frontend.*AMD owner"):
+            replace_block("rfdc_frontend", instance_refs=("ctrl_reset_0",))
+        with self.assertRaisesRegex(ValueError, "rfdc_frontend.*AMD owner"):
+            replace_block("rfdc_frontend", instance_refs=())
+        with self.assertRaisesRegex(ValueError, "monitor_branch.*AMD owner"):
+            replace_block("monitor_branch", instance_refs=("rfdc_0",))
+
     def test_connected_authority_rejects_missing_or_extra_required_platform_families(self) -> None:
         missing = self.root_payload()
         missing["ip_families"] = [
