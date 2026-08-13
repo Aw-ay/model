@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 import unittest
@@ -29,7 +30,13 @@ class PsPlatformConfigTest(unittest.TestCase):
             config.source_bd_path,
             "save_v2.1/XCZU27_MEM_TEST_TOP/XCZU27_TOP.srcs/sources_1/bd/design_1/design_1.bd",
         )
+        self.assertEqual(config.source_bd_base, "repository_root")
         self.assertRegex(config.source_bd_sha256, r"^[0-9a-f]{64}$")
+        self.assertEqual(config.gem3_board_io.status, "pending")
+        self.assertTrue(config.gem3_board_io.blocking_reason)
+        self.assertFalse(config.gem3_realization_allowed)
+        with self.assertRaisesRegex(ValueError, "GEM3 board I/O is pending"):
+            config.require_gem3_board_io()
         self.assertTrue(config.properties)
 
     def test_root_schema_is_exact_and_properties_are_the_reviewed_allowlist(self) -> None:
@@ -41,9 +48,11 @@ class PsPlatformConfigTest(unittest.TestCase):
                 "device_part",
                 "ps_vlnv",
                 "control_clock_hz",
+                "source_bd_base",
                 "source_bd_path",
                 "source_bd_sha256",
                 "vivado_version",
+                "gem3_board_io",
                 "properties",
             },
         )
@@ -100,6 +109,15 @@ class PsPlatformConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "PS property"):
             PsPlatformConfig.from_mapping(non_string)
 
+    def test_from_mapping_rejects_non_string_property_keys_without_type_error(self) -> None:
+        invalid = self.root_payload()
+        invalid["properties"] = dict(invalid["properties"])
+        invalid["properties"][1] = "1"
+        invalid["properties"]["CONFIG.PSU__UNKNOWN"] = "1"
+
+        with self.assertRaisesRegex(ValueError, "PS property name must be a string"):
+            PsPlatformConfig.from_mapping(invalid)
+
     def test_from_json_text_rejects_duplicate_keys(self) -> None:
         with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
             PsPlatformConfig.from_json_text('{"platform_schema_version": 1, "platform_schema_version": 1}')
@@ -110,6 +128,37 @@ class PsPlatformConfigTest(unittest.TestCase):
             config.source_bd_sha256,
             "63dc103980f369d1ba7246652cd533382b9ab96bed9ccede4b2dd5536df8517a",
         )
+        repository_root = Path(__file__).resolve().parents[4]
+        source_bd = config.resolve_source_bd(repository_root)
+        self.assertEqual(
+            hashlib.sha256(source_bd.read_bytes()).hexdigest(), config.source_bd_sha256
+        )
+
+    def test_source_provenance_rejects_noncanonical_or_unsafe_locators(self) -> None:
+        for bad_path in (
+            "D:/AWAY/RFSOC/save_v2.1/design_1.bd",
+            "../save_v2.1/design_1.bd",
+            "save_v2.1\\design_1.bd",
+            "save_v2.1//design_1.bd",
+            "./save_v2.1/design_1.bd",
+        ):
+            with self.subTest(bad_path=bad_path):
+                payload = self.root_payload()
+                payload["source_bd_path"] = bad_path
+                with self.assertRaisesRegex(ValueError, "source_bd_path"):
+                    PsPlatformConfig.from_mapping(payload)
+
+    def test_source_provenance_rejects_unknown_base(self) -> None:
+        payload = self.root_payload()
+        payload["source_bd_base"] = "workspace"
+        with self.assertRaisesRegex(ValueError, "source_bd_base"):
+            PsPlatformConfig.from_mapping(payload)
+
+    def test_gem3_board_io_requires_a_pending_blocking_reason(self) -> None:
+        payload = self.root_payload()
+        payload["gem3_board_io"] = {"status": "pending", "blocking_reason": " "}
+        with self.assertRaisesRegex(ValueError, "blocking_reason"):
+            PsPlatformConfig.from_mapping(payload)
 
 
 if __name__ == "__main__":

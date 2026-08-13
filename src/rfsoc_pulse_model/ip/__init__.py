@@ -27,7 +27,7 @@ from .evidence import (
     parse_catalog_evidence,
     validate_catalog_evidence,
 )
-from .platform import PS_VLNV, PsPlatformConfig
+from .platform import Gem3BoardIoConfig, PS_VLNV, PsPlatformConfig
 if TYPE_CHECKING:
     from .lock import (
         GenerationMode,
@@ -42,6 +42,7 @@ __all__ = [
     "ArchitectureStatus",
     "ConnectionStatus",
     "GenerationMode",
+    "Gem3BoardIoConfig",
     "CatalogEvidence",
     "CatalogResolutionStatus",
     "HardwareArchitectureConfig",

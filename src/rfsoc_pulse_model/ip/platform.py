@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from importlib import resources
 import json
+from pathlib import Path
 import re
 from types import MappingProxyType
 
@@ -19,12 +20,27 @@ _ROOT_KEYS = frozenset(
         "device_part",
         "ps_vlnv",
         "control_clock_hz",
+        "source_bd_base",
         "source_bd_path",
         "source_bd_sha256",
         "vivado_version",
+        "gem3_board_io",
         "properties",
     }
 )
+
+
+@dataclass(frozen=True)
+class Gem3BoardIoConfig:
+    """Fail-closed ownership state for GEM3 MIO/MDIO board wiring."""
+
+    status: str
+    blocking_reason: str
+
+    def __post_init__(self) -> None:
+        if self.status != "pending":
+            raise ValueError("gem3_board_io.status must be pending")
+        _require_nonempty_str(self.blocking_reason, "gem3_board_io.blocking_reason")
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _REVIEWED_PROPERTY_KEYS = frozenset(
     {
@@ -129,9 +145,11 @@ class PsPlatformConfig:
     device_part: str
     ps_vlnv: str
     control_clock_hz: int
+    source_bd_base: str
     source_bd_path: str
     source_bd_sha256: str
     vivado_version: str
+    gem3_board_io: Gem3BoardIoConfig
     properties: Mapping[str, str]
 
     REVIEWED_PROPERTY_KEYS = _REVIEWED_PROPERTY_KEYS
@@ -151,23 +169,28 @@ class PsPlatformConfig:
             raise ValueError("control_clock_hz must be an integer")
         if self.control_clock_hz != 100_000_000:
             raise ValueError("control_clock_hz must be 100000000")
-        _require_nonempty_str(self.source_bd_path, "source_bd_path")
+        if self.source_bd_base != "repository_root":
+            raise ValueError("source_bd_base must be repository_root")
+        _require_repository_root_relative_path(self.source_bd_path)
         _require_nonempty_str(self.source_bd_sha256, "source_bd_sha256")
         if not _SHA256_RE.fullmatch(self.source_bd_sha256):
             raise ValueError("source_bd_sha256 must be lowercase SHA-256")
         if self.vivado_version != "2025.2":
             raise ValueError("vivado_version must be 2025.2")
+        if not isinstance(self.gem3_board_io, Gem3BoardIoConfig):
+            raise ValueError("gem3_board_io must be a Gem3BoardIoConfig")
         if not isinstance(self.properties, Mapping):
             raise ValueError("properties must be a mapping")
         copied = dict(self.properties)
+        for property_name in copied:
+            if not isinstance(property_name, str):
+                raise ValueError("PS property name must be a string")
         if set(copied) != _REVIEWED_PROPERTY_KEYS:
             unknown = set(copied) - _REVIEWED_PROPERTY_KEYS
             if unknown:
                 raise ValueError(f"unknown PS property: {sorted(unknown)}")
             raise ValueError("PS property keys must equal the reviewed allowlist")
         for property_name, value in copied.items():
-            if not isinstance(property_name, str):
-                raise ValueError("PS property name must be a string")
             _require_nonempty_str(value, "PS property value")
         object.__setattr__(self, "properties", MappingProxyType(copied))
 
@@ -189,11 +212,13 @@ class PsPlatformConfig:
             control_clock_hz=_as_int(
                 values["control_clock_hz"], "control_clock_hz"
             ),
+            source_bd_base=_as_str(values["source_bd_base"], "source_bd_base"),
             source_bd_path=_as_str(values["source_bd_path"], "source_bd_path"),
             source_bd_sha256=_as_str(
                 values["source_bd_sha256"], "source_bd_sha256"
             ),
             vivado_version=_as_str(values["vivado_version"], "vivado_version"),
+            gem3_board_io=_gem3_board_io(values["gem3_board_io"]),
             properties=properties,
         )
 
@@ -214,6 +239,26 @@ class PsPlatformConfig:
         )
         return cls.from_json_text(resource.read_text(encoding="utf-8"))
 
+    @property
+    def gem3_realization_allowed(self) -> bool:
+        """Whether this authority permits a GEM3 hardware realization."""
+
+        return False
+
+    def require_gem3_board_io(self) -> None:
+        """Fail closed until a separately reviewed GEM3 pin authority exists."""
+
+        raise ValueError(
+            "GEM3 board I/O is pending: " + self.gem3_board_io.blocking_reason
+        )
+
+    def resolve_source_bd(self, repository_root: Path) -> Path:
+        """Resolve provenance only when an explicit repository root is supplied."""
+
+        if not isinstance(repository_root, Path):
+            raise ValueError("repository_root must be a pathlib.Path")
+        return repository_root / Path(*self.source_bd_path.split("/"))
+
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
     result: dict[str, object] = {}
@@ -222,6 +267,19 @@ def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]
             raise ValueError(f"duplicate JSON key: {key}")
         result[key] = value
     return result
+
+
+def _gem3_board_io(value: object) -> Gem3BoardIoConfig:
+    if not isinstance(value, Mapping):
+        raise ValueError("gem3_board_io must be a mapping")
+    if set(value) != {"status", "blocking_reason"}:
+        raise ValueError("gem3_board_io has unknown or missing keys")
+    return Gem3BoardIoConfig(
+        status=_as_str(value["status"], "gem3_board_io.status"),
+        blocking_reason=_as_str(
+            value["blocking_reason"], "gem3_board_io.blocking_reason"
+        ),
+    )
 
 
 def _as_str(value: object, field_name: str) -> str:
@@ -239,3 +297,13 @@ def _as_int(value: object, field_name: str) -> int:
 def _require_nonempty_str(value: object, field_name: str) -> None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field_name} must be nonempty")
+
+
+def _require_repository_root_relative_path(value: object) -> None:
+    _require_nonempty_str(value, "source_bd_path")
+    assert isinstance(value, str)
+    if "\\" in value or value.startswith("/") or value.startswith("./"):
+        raise ValueError("source_bd_path must be a canonical repository-root-relative POSIX path")
+    parts = value.split("/")
+    if any(part in {"", ".", ".."} or ":" in part for part in parts):
+        raise ValueError("source_bd_path must be a canonical repository-root-relative POSIX path")
