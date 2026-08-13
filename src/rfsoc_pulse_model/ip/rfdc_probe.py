@@ -28,6 +28,55 @@ _EVIDENCE_KEYS = frozenset({
 })
 
 
+def _expected_interfaces() -> tuple[tuple[str, str, str, int], ...]:
+    values: list[tuple[str, str, str, int]] = []
+    for tile in range(4):
+        values.append((f"adc{tile}_clk", "Slave", "xilinx.com:interface:diff_clock_rtl:1.0", 0))
+    for tile in range(2):
+        values.append((f"dac{tile}_clk", "Slave", "xilinx.com:interface:diff_clock_rtl:1.0", 0))
+    for tile in range(4):
+        for slice_index in range(4):
+            values.append((f"m{tile}{slice_index}_axis", "Master", "xilinx.com:interface:axis_rtl:1.0", 32))
+    for tile in range(2):
+        for slice_index in range(4):
+            values.append((f"s{tile}{slice_index}_axis", "Slave", "xilinx.com:interface:axis_rtl:1.0", 64))
+    values.extend((
+        ("s_axi", "Slave", "xilinx.com:interface:aximm_rtl:1.0", 0),
+        ("sysref_in", "Slave", "xilinx.com:display_usp_rf_data_converter:diff_pins_rtl:1.0", 0),
+    ))
+    for tile in range(4):
+        for suffix in ("01", "23"):
+            values.append((f"vin{tile}_{suffix}", "Slave", "xilinx.com:interface:diff_analog_io_rtl:1.0", 0))
+    for tile in range(2):
+        for slice_index in range(4):
+            values.append((f"vout{tile}{slice_index}", "Master", "xilinx.com:interface:diff_analog_io_rtl:1.0", 0))
+    return tuple(sorted(values))
+
+
+def _expected_scalar_pins() -> tuple[tuple[str, str, int], ...]:
+    values: dict[str, tuple[str, int]] = {"irq": ("O", 1)}
+    for tile in range(4):
+        values.update({f"adc{tile}_clk_n": ("I", 1), f"adc{tile}_clk_p": ("I", 1), f"clk_adc{tile}": ("O", 1), f"m{tile}_axis_aclk": ("I", 1), f"m{tile}_axis_aresetn": ("I", 1)})
+        for slice_index in range(4):
+            prefix = f"m{tile}{slice_index}_axis"
+            values.update({f"{prefix}_tdata": ("O", 32), f"{prefix}_tready": ("I", 1), f"{prefix}_tvalid": ("O", 1)})
+    for tile in range(2):
+        values.update({f"dac{tile}_clk_n": ("I", 1), f"dac{tile}_clk_p": ("I", 1), f"clk_dac{tile}": ("O", 1), f"s{tile}_axis_aclk": ("I", 1), f"s{tile}_axis_aresetn": ("I", 1)})
+        for slice_index in range(4):
+            prefix = f"s{tile}{slice_index}_axis"
+            values.update({f"{prefix}_tdata": ("I", 64), f"{prefix}_tready": ("O", 1), f"{prefix}_tvalid": ("I", 1)})
+    values.update({
+        "s_axi_aclk": ("I", 1), "s_axi_aresetn": ("I", 1), "s_axi_araddr": ("I", 18), "s_axi_arready": ("O", 1), "s_axi_arvalid": ("I", 1), "s_axi_awaddr": ("I", 18), "s_axi_awready": ("O", 1), "s_axi_awvalid": ("I", 1), "s_axi_bready": ("I", 1), "s_axi_bresp": ("O", 2), "s_axi_bvalid": ("O", 1), "s_axi_rdata": ("O", 32), "s_axi_rready": ("I", 1), "s_axi_rresp": ("O", 2), "s_axi_rvalid": ("O", 1), "s_axi_wdata": ("I", 32), "s_axi_wready": ("O", 1), "s_axi_wstrb": ("I", 4), "s_axi_wvalid": ("I", 1), "sysref_in_n": ("I", 1), "sysref_in_p": ("I", 1),
+    })
+    for tile in range(4):
+        for suffix in ("01", "23"):
+            values[f"vin{tile}_{suffix}_n"] = ("I", 1); values[f"vin{tile}_{suffix}_p"] = ("I", 1)
+    for tile in range(2):
+        for slice_index in range(4):
+            values[f"vout{tile}{slice_index}_n"] = ("O", 1); values[f"vout{tile}{slice_index}_p"] = ("O", 1)
+    return tuple(sorted((name, direction, width) for name, (direction, width) in values.items()))
+
+
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -285,12 +334,45 @@ def _result_from_raw(raw_output: bytes, probe_tcl: bytes, model: ModelConfig, ar
     if values["DEVICE_PART"] != model.device_part or model.device_part != architecture.device_part: raise ValueError("wrong device part in RFDC probe")
     cells = tuple(values["cells"])
     if cells != (("rfdc_0", RFDC_PROBE_VLNV),): raise ValueError("RFDC probe must contain exactly one RFDC 2.6 cell")
+    if values["validation_errors"]:
+        raise ValueError("RFDC-only probe validation must have no errors")
     try:
         interfaces = tuple(RfdcProbeInterface(item[0], item[1], item[2], int(item[3]), int(item[4]), item[5], item[6]) for item in values["interfaces"])
         pins = tuple(RfdcProbeScalarPin(item[0], item[1], int(item[2]), int(item[3]), item[4]) for item in values["scalar_pins"])
     except ValueError as error:
         raise ValueError("invalid numeric RFDC probe record") from error
-    return RfdcProbeResult(RfdcProbeProvenance(_VIVADO_VERSION, _sha256(probe_tcl), _sha256(raw_output), _integer(run_id, "run_id", 1)), model.device_part, RFDC_PROBE_VLNV, cells, tuple(values["applied_config"]), interfaces, pins, tuple(values["validation_errors"]), False, False, False, False)
+    observed_interfaces = tuple(sorted((item.name, item.mode, item.vlnv, item.width_bits) for item in interfaces))
+    if observed_interfaces != _expected_interfaces():
+        raise ValueError("RFDC probe interface inventory mismatch")
+    observed_pins = tuple(sorted((item.name, item.direction, item.width_bits) for item in pins))
+    if observed_pins != _expected_scalar_pins():
+        raise ValueError("RFDC probe scalar pin inventory mismatch")
+    applied_config = tuple(values["applied_config"])
+    _validate_applied_config(applied_config, model, architecture)
+    return RfdcProbeResult(RfdcProbeProvenance(_VIVADO_VERSION, _sha256(probe_tcl), _sha256(raw_output), _integer(run_id, "run_id", 1)), model.device_part, RFDC_PROBE_VLNV, cells, applied_config, interfaces, pins, (), False, False, False, False)
+
+
+def _validate_applied_config(applied_config: tuple[tuple[str, str], ...], model: ModelConfig, architecture: HardwareArchitectureConfig) -> None:
+    """Bind measured writable CONFIG values to caller-owned RFDC semantics."""
+    config = dict(applied_config)
+    if len(config) != len(applied_config):
+        raise ValueError("duplicate RFDC CONFIG property")
+    expected: dict[str, str] = {}
+    for tile in range(4):
+        expected.update({f"ADC{tile}_Enable": "1", f"ADC{tile}_PLL_Enable": "true", f"ADC{tile}_Sampling_Rate": f"{model.adc_sample_rate_hz / 1_000_000_000:.3f}", f"ADC{tile}_Fabric_Freq": f"{model.rx_fabric_clock_hz / 1_000_000:.3f}"})
+    for tile in range(2):
+        expected.update({f"DAC{tile}_Enable": "1", f"DAC{tile}_PLL_Enable": "true", f"DAC{tile}_Sampling_Rate": f"{model.dac_sample_rate_hz / 1_000_000_000:.3f}", f"DAC{tile}_Fabric_Freq": f"{model.rx_fabric_clock_hz / 1_000_000:.3f}"})
+    for tile in range(4):
+        for slice_index in range(4):
+            suffix = f"{tile}{slice_index}"
+            expected.update({f"ADC_Slice{suffix}_Enable": "true", f"ADC_Decimation_Mode{suffix}": str(model.rfdc_decimation), f"ADC_Data_Width{suffix}": "2", f"ADC_Mixer_Type{suffix}": "2", f"ADC_Mixer_Mode{suffix}": "0", f"ADC_NCO_Freq{suffix}": f"{model.center_frequency_hz / 1_000_000_000:.3f}"})
+    for tile in range(2):
+        for slice_index in range(4):
+            suffix = f"{tile}{slice_index}"
+            expected.update({f"DAC_Slice{suffix}_Enable": "true", f"DAC_Interpolation_Mode{suffix}": str(model.rfdc_interpolation), f"DAC_Data_Width{suffix}": "4", f"DAC_Mixer_Type{suffix}": "2", f"DAC_Mixer_Mode{suffix}": "0", f"DAC_NCO_Freq{suffix}": f"{architecture.rfdc_integration.dac_nco_frequency_hz / 1_000_000_000:.3f}"})
+    mismatches = sorted(name for name, value in expected.items() if config.get(name) != value)
+    if mismatches:
+        raise ValueError("RFDC applied CONFIG semantic mismatch: " + ",".join(mismatches))
 
 
 def _result_mapping(result: RfdcProbeResult) -> dict[str, object]:
