@@ -46,6 +46,16 @@ from .connected import (
     parse_connected_request,
     validate_connected_evidence,
 )
+from .rfdc_probe import (
+    RFDC_PROBE_VLNV,
+    RfdcProbeInterface,
+    RfdcProbeResult,
+    RfdcProbeScalarPin,
+    build_rfdc_probe_evidence,
+    canonical_rfdc_probe_json_bytes,
+    emit_rfdc_probe_tcl,
+    parse_rfdc_probe_evidence,
+)
 if TYPE_CHECKING:
     from .lock import (
         GenerationMode,
@@ -85,6 +95,10 @@ __all__ = [
     "RequiredResponsibilitiesSpec",
     "RfdcIntegrationMetadata",
     "RfdcProbeProvenance",
+    "RfdcProbeInterface",
+    "RfdcProbeResult",
+    "RfdcProbeScalarPin",
+    "RFDC_PROBE_VLNV",
     "RfdcSemantics",
     "ResetNet",
     "MtsGroup",
@@ -92,11 +106,15 @@ __all__ = [
     "build_candidate_lock",
     "build_catalog_request",
     "build_connected_request",
+    "build_rfdc_probe_evidence",
     "canonical_connected_json_bytes",
     "canonical_json_bytes",
+    "canonical_rfdc_probe_json_bytes",
+    "emit_rfdc_probe_tcl",
     "parse_catalog_evidence",
     "parse_connected_evidence",
     "parse_connected_request",
+    "parse_rfdc_probe_evidence",
     "promote_candidate_lock",
     "validate_catalog_evidence",
     "validate_connected_evidence",
