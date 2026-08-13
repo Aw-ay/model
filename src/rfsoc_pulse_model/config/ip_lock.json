@@ -1,6 +1,6 @@
 {
-  "architecture_config_sha256": "2cad67a144b60411c0d7b39a845c7616ff2537b052e07dd9d4523589f1271647",
-  "catalog_request_sha256": "9dbb0ae0de091a461ae88cef055d999b4fa1452788c9ae9e594d0807a0cda552",
+  "architecture_config_sha256": "36034e9c7b64061cdd449fb43030aea96368c95d6e88c8c6a0a9154da9e0bd96",
+  "catalog_request_sha256": "9d261fdc175dac770670c31c26de2e2cf108e834218909c1864e23cd85fb8f8d",
   "families": {
     "axi_dma": "xilinx.com:ip:axi_dma:7.1",
     "axis_broadcaster": "xilinx.com:ip:axis_broadcaster:1.1",
@@ -14,9 +14,14 @@
     "cordic": "xilinx.com:ip:cordic:6.0",
     "dds_compiler": "xilinx.com:ip:dds_compiler:6.0",
     "fir_compiler": "xilinx.com:ip:fir_compiler:7.2",
-    "rfdc": "xilinx.com:ip:usp_rf_data_converter:2.6"
+    "proc_sys_reset": "xilinx.com:ip:proc_sys_reset:5.0",
+    "rfdc": "xilinx.com:ip:usp_rf_data_converter:2.6",
+    "smartconnect": "xilinx.com:ip:smartconnect:1.0",
+    "util_vector_logic": "xilinx.com:ip:util_vector_logic:2.0",
+    "xlconcat": "xilinx.com:ip:xlconcat:2.1",
+    "zynq_ultra_ps_e": "xilinx.com:ip:zynq_ultra_ps_e:3.5"
   },
-  "generated_tcl_sha256": "13ac8327c36879910a44b2eb924d2f0ce0f7fdb85ad7f6dae125a06ffabdaee8",
+  "generated_tcl_sha256": "c2e76a4bf643425bfda9c98fc39adb02e7eb57592e1e780ad178876a0ff524b1",
   "lock_schema_version": 1,
   "vivado_version": "2025.2"
 }

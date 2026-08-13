@@ -5,6 +5,34 @@ from rfsoc_pulse_model.ip.types import HardwareArchitectureConfig, RFDC_2_6_VLNV
 
 
 class ResolvedIpCatalogTest(unittest.TestCase):
+    def test_connected_platform_identities_are_exact(self) -> None:
+        config = HardwareArchitectureConfig.load_default()
+        resolved = {
+            family.family_id: (
+                family.vlnv
+                if family.vlnv is not None
+                else family.catalog_pattern[:-1] + "1.0"
+            )
+            for family in config.required_families()
+        }
+        self.assertEqual(
+            {key: resolved[key] for key in (
+                "zynq_ultra_ps_e",
+                "smartconnect",
+                "proc_sys_reset",
+                "util_vector_logic",
+                "xlconcat",
+            )},
+            {
+                "zynq_ultra_ps_e": "xilinx.com:ip:zynq_ultra_ps_e:3.5",
+                "smartconnect": "xilinx.com:ip:smartconnect:1.0",
+                "proc_sys_reset": "xilinx.com:ip:proc_sys_reset:5.0",
+                "util_vector_logic": "xilinx.com:ip:util_vector_logic:2.0",
+                "xlconcat": "xilinx.com:ip:xlconcat:2.1",
+            },
+        )
+        validate_resolved_catalog(config, resolved)
+
     def test_catalog_requires_exact_complete_required_family_set(self) -> None:
         config = HardwareArchitectureConfig.load_default()
         resolved = {

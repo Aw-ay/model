@@ -210,6 +210,24 @@ class ArchitectureRegistryTest(unittest.TestCase):
         self.assertFalse(readiness.production_integration_ready)
         self.assertIn("architecture_pending", readiness.blocking_reasons)
 
+    def test_connected_shell_keeps_rfdc_and_all_pending_production_owners_unaccepted(self) -> None:
+        config = HardwareArchitectureConfig.load_default()
+        registry = ArchitectureRegistry.from_config(config)
+        self.assertFalse(config.block_by_name("rfdc_frontend").production_accepted)
+        self.assertTrue(
+            all(
+                not block.production_accepted
+                for block in registry.production_blocks()
+                if block.implementation_kind is ImplementationKind.ARCHITECTURE_PENDING
+            )
+        )
+        readiness = registry.evaluate_readiness(
+            catalog_resolution_complete=True,
+            production_lock_valid=True,
+            production_sources_contain_reference=False,
+        )
+        self.assertFalse(readiness.production_integration_ready)
+
     def test_each_external_readiness_gate_has_a_stable_blocking_reason(self) -> None:
         registry = ArchitectureRegistry.default()
         cases = (

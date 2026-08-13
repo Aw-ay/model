@@ -1,10 +1,10 @@
 {
   "architecture_schema_version": 2,
-  "architecture_config_version": 2,
+  "architecture_config_version": 3,
   "vivado_version": "2025.2",
   "device_part": "xczu27dr-fsve1156-2-i",
   "generation_mode": "vivado_ip_first",
-  "topology_status": "unconnected_skeleton",
+  "topology_status": "connected_rfdc_shell",
   "rfdc_integration": {
     "instance_ref": "rfdc_0",
     "configuration_authority": "vivado_block_design",
@@ -16,6 +16,11 @@
   },
   "ip_families": [
     {"family_id": "rfdc", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:usp_rf_data_converter:2.6", "required": true, "vlnv": "xilinx.com:ip:usp_rf_data_converter:2.6"},
+    {"family_id": "zynq_ultra_ps_e", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:zynq_ultra_ps_e:3.5", "required": true, "vlnv": "xilinx.com:ip:zynq_ultra_ps_e:3.5"},
+    {"family_id": "smartconnect", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:smartconnect:1.0", "required": true, "vlnv": "xilinx.com:ip:smartconnect:1.0"},
+    {"family_id": "proc_sys_reset", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:proc_sys_reset:5.0", "required": true, "vlnv": "xilinx.com:ip:proc_sys_reset:5.0"},
+    {"family_id": "util_vector_logic", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:util_vector_logic:2.0", "required": true, "vlnv": "xilinx.com:ip:util_vector_logic:2.0"},
+    {"family_id": "xlconcat", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:xlconcat:2.1", "required": true, "vlnv": "xilinx.com:ip:xlconcat:2.1"},
     {"family_id": "axis_register_slice", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:axis_register_slice:*", "required": true, "vlnv": null},
     {"family_id": "axis_data_fifo", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:axis_data_fifo:*", "required": true, "vlnv": null},
     {"family_id": "axis_clock_converter", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:axis_clock_converter:*", "required": true, "vlnv": null},
@@ -31,6 +36,13 @@
   ],
   "ip_instances": [
     {"instance_name": "rfdc_0", "family_ref": "rfdc", "logical_role": "rfdc_frontend", "lifecycle": "materialized", "parameter_status": "unspecified", "connection_status": "unconnected"},
+    {"instance_name": "zynq_ultra_ps_e_0", "family_ref": "zynq_ultra_ps_e", "logical_role": "ps_platform_control", "lifecycle": "materialized", "parameter_status": "unspecified", "connection_status": "unconnected"},
+    {"instance_name": "ctrl_smartconnect_0", "family_ref": "smartconnect", "logical_role": "control_axi_interconnect", "lifecycle": "materialized", "parameter_status": "unspecified", "connection_status": "unconnected"},
+    {"instance_name": "reset_inverter_0", "family_ref": "util_vector_logic", "logical_role": "control_reset_inverter", "lifecycle": "materialized", "parameter_status": "unspecified", "connection_status": "unconnected"},
+    {"instance_name": "ctrl_reset_0", "family_ref": "proc_sys_reset", "logical_role": "control_reset_domain", "lifecycle": "materialized", "parameter_status": "unspecified", "connection_status": "unconnected"},
+    {"instance_name": "rx_reset_0", "family_ref": "proc_sys_reset", "logical_role": "rx_reset_domain", "lifecycle": "materialized", "parameter_status": "unspecified", "connection_status": "unconnected"},
+    {"instance_name": "tx_reset_0", "family_ref": "proc_sys_reset", "logical_role": "tx_reset_domain", "lifecycle": "materialized", "parameter_status": "unspecified", "connection_status": "unconnected"},
+    {"instance_name": "irq_concat_0", "family_ref": "xlconcat", "logical_role": "rfdc_irq_concat", "lifecycle": "materialized", "parameter_status": "unspecified", "connection_status": "unconnected"},
     {"instance_name": "monitor_fir_dec2_0", "family_ref": "fir_compiler", "logical_role": "monitor_decimator", "lifecycle": "planned", "parameter_status": "drafted", "connection_status": "unconnected"}
   ],
   "architecture_blocks": [

@@ -28,6 +28,21 @@ EXPECTED_FAMILIES = {
     "complex_multiplier",
     "cordic",
     "axi_dma",
+    "zynq_ultra_ps_e",
+    "smartconnect",
+    "proc_sys_reset",
+    "util_vector_logic",
+    "xlconcat",
+}
+
+EXPECTED_CONNECTED_PLATFORM_INSTANCES = {
+    "zynq_ultra_ps_e_0",
+    "ctrl_smartconnect_0",
+    "reset_inverter_0",
+    "ctrl_reset_0",
+    "rx_reset_0",
+    "tx_reset_0",
+    "irq_concat_0",
 }
 
 
@@ -42,6 +57,8 @@ class HardwareArchitectureConfigTest(unittest.TestCase):
     def test_default_uses_schema_v2_and_separates_family_instance_block(self) -> None:
         config = HardwareArchitectureConfig.load_default()
         self.assertEqual(config.architecture_schema_version, 2)
+        self.assertEqual(config.architecture_config_version, 3)
+        self.assertEqual(config.topology_status, "connected_rfdc_shell")
         self.assertEqual(config.device_part, ModelConfig.load_default().device_part)
         self.assertEqual(config.device_part, "xczu27dr-fsve1156-2-i")
         self.assertEqual(
@@ -49,10 +66,66 @@ class HardwareArchitectureConfigTest(unittest.TestCase):
         )
         self.assertEqual(
             {instance.instance_name for instance in config.ip_instances},
-            {"rfdc_0", "monitor_fir_dec2_0"},
+            {
+                "rfdc_0",
+                "monitor_fir_dec2_0",
+                *EXPECTED_CONNECTED_PLATFORM_INSTANCES,
+            },
         )
         self.assertEqual(config.rfdc_integration.instance_ref, "rfdc_0")
         self.assertEqual(config.instance_by_name("rfdc_0").family_ref, "rfdc")
+
+    def test_connected_platform_families_and_instances_are_exact_and_unaccepted(self) -> None:
+        config = HardwareArchitectureConfig.load_default()
+        expected_vlnvs = {
+            "zynq_ultra_ps_e": "xilinx.com:ip:zynq_ultra_ps_e:3.5",
+            "smartconnect": "xilinx.com:ip:smartconnect:1.0",
+            "proc_sys_reset": "xilinx.com:ip:proc_sys_reset:5.0",
+            "util_vector_logic": "xilinx.com:ip:util_vector_logic:2.0",
+            "xlconcat": "xilinx.com:ip:xlconcat:2.1",
+        }
+        self.assertEqual(
+            {
+                family_id: config.family_by_id(family_id).vlnv
+                for family_id in expected_vlnvs
+            },
+            expected_vlnvs,
+        )
+        self.assertTrue(
+            all(config.family_by_id(family_id).required for family_id in expected_vlnvs)
+        )
+        self.assertEqual(
+            {
+                instance.instance_name
+                for instance in config.ip_instances
+                if instance.instance_name in EXPECTED_CONNECTED_PLATFORM_INSTANCES
+            },
+            EXPECTED_CONNECTED_PLATFORM_INSTANCES,
+        )
+        self.assertFalse(config.block_by_name("rfdc_frontend").production_accepted)
+
+    def test_connected_authority_rejects_missing_or_extra_required_platform_families(self) -> None:
+        missing = self.root_payload()
+        missing["ip_families"] = [
+            family
+            for family in missing["ip_families"]
+            if family["family_id"] != "xlconcat"
+        ]
+        with self.assertRaisesRegex(ValueError, "required family set"):
+            HardwareArchitectureConfig.from_mapping(missing)
+
+        extra = self.root_payload()
+        extra["ip_families"].append(
+            {
+                "family_id": "undeclared_platform_ip",
+                "implementation_kind": "amd_ip",
+                "catalog_pattern": "xilinx.com:ip:xlconstant:1.1",
+                "required": True,
+                "vlnv": "xilinx.com:ip:xlconstant:1.1",
+            }
+        )
+        with self.assertRaisesRegex(ValueError, "required family set"):
+            HardwareArchitectureConfig.from_mapping(extra)
 
     def test_default_locks_exact_rfdc_2_6_black_box(self) -> None:
         config = HardwareArchitectureConfig.load_default()

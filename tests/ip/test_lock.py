@@ -167,6 +167,26 @@ class ProductionLockTest(unittest.TestCase):
         )
         self.assertNotIn("realization_tcl_sha256", json.loads(root_bytes))
 
+    def test_promoted_lock_contains_every_connected_platform_family(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        families = json.loads((root / "config/ip_lock.json").read_text(encoding="utf-8"))["families"]
+        self.assertEqual(
+            {family_id: families[family_id] for family_id in (
+                "zynq_ultra_ps_e",
+                "smartconnect",
+                "proc_sys_reset",
+                "util_vector_logic",
+                "xlconcat",
+            )},
+            {
+                "zynq_ultra_ps_e": "xilinx.com:ip:zynq_ultra_ps_e:3.5",
+                "smartconnect": "xilinx.com:ip:smartconnect:1.0",
+                "proc_sys_reset": "xilinx.com:ip:proc_sys_reset:5.0",
+                "util_vector_logic": "xilinx.com:ip:util_vector_logic:2.0",
+                "xlconcat": "xilinx.com:ip:xlconcat:2.1",
+            },
+        )
+
     def test_lock_family_set_must_equal_required_family_set(self) -> None:
         fixture = valid_lock_fixture()
         self.assertTrue(validate_production_lock(**fixture).valid)

@@ -12,6 +12,44 @@ from rfsoc_pulse_model.common.config import ModelConfig
 
 
 RFDC_2_6_VLNV = "xilinx.com:ip:usp_rf_data_converter:2.6"
+_CONNECTED_PLATFORM_VLNVS = {
+    "zynq_ultra_ps_e": "xilinx.com:ip:zynq_ultra_ps_e:3.5",
+    "smartconnect": "xilinx.com:ip:smartconnect:1.0",
+    "proc_sys_reset": "xilinx.com:ip:proc_sys_reset:5.0",
+    "util_vector_logic": "xilinx.com:ip:util_vector_logic:2.0",
+    "xlconcat": "xilinx.com:ip:xlconcat:2.1",
+}
+_CONNECTED_PLATFORM_INSTANCES = {
+    "zynq_ultra_ps_e_0": "zynq_ultra_ps_e",
+    "ctrl_smartconnect_0": "smartconnect",
+    "reset_inverter_0": "util_vector_logic",
+    "ctrl_reset_0": "proc_sys_reset",
+    "rx_reset_0": "proc_sys_reset",
+    "tx_reset_0": "proc_sys_reset",
+    "irq_concat_0": "xlconcat",
+}
+_CONNECTED_REQUIRED_FAMILY_IDS = frozenset(
+    {
+        "rfdc",
+        "zynq_ultra_ps_e",
+        "smartconnect",
+        "proc_sys_reset",
+        "util_vector_logic",
+        "xlconcat",
+        "axis_register_slice",
+        "axis_data_fifo",
+        "axis_clock_converter",
+        "axis_dwidth_converter",
+        "axis_combiner",
+        "axis_broadcaster",
+        "axis_switch",
+        "fir_compiler",
+        "dds_compiler",
+        "complex_multiplier",
+        "cordic",
+        "axi_dma",
+    }
+)
 _LEGACY_REFERENCE_PREFIX = "legacy_reference."
 _RFDC_OWNED_FUNCTIONS = frozenset(
     {"adc", "dac", "ddc", "duc", "decimation", "interpolation", "mixer", "nco"}
@@ -254,8 +292,8 @@ class HardwareArchitectureConfig:
     def __post_init__(self) -> None:
         if self.architecture_schema_version != 2:
             raise ValueError("architecture_schema_version must be 2")
-        if self.architecture_config_version != 2:
-            raise ValueError("architecture_config_version must be 2")
+        if self.architecture_config_version != 3:
+            raise ValueError("architecture_config_version must be 3")
         if self.vivado_version != "2025.2":
             raise ValueError("vivado_version must be 2025.2")
         _require_nonempty(self.device_part, "device_part")
@@ -263,8 +301,8 @@ class HardwareArchitectureConfig:
             raise ValueError("device_part must equal ModelConfig.device_part")
         if self.generation_mode != "vivado_ip_first":
             raise ValueError("generation_mode must be vivado_ip_first")
-        if self.topology_status != "unconnected_skeleton":
-            raise ValueError("topology_status must be unconnected_skeleton")
+        if self.topology_status != "connected_rfdc_shell":
+            raise ValueError("topology_status must be connected_rfdc_shell")
         if not isinstance(self.rfdc_integration, RfdcIntegrationMetadata):
             raise ValueError("rfdc_integration must be RfdcIntegrationMetadata")
         if not isinstance(self.required_responsibilities, RequiredResponsibilitiesSpec):
@@ -288,6 +326,13 @@ class HardwareArchitectureConfig:
             self.architecture_blocks, "block_name", "architecture block names"
         )
 
+        required_family_ids = {family.family_id for family in self.required_families()}
+        if required_family_ids != _CONNECTED_REQUIRED_FAMILY_IDS:
+            raise ValueError(
+                "required family set must exactly match connected RFDC shell: "
+                f"missing={sorted(_CONNECTED_REQUIRED_FAMILY_IDS - required_family_ids)}, "
+                f"extra={sorted(required_family_ids - _CONNECTED_REQUIRED_FAMILY_IDS)}"
+            )
         rfdc_family = self.family_by_id("rfdc")
         if (
             rfdc_family.implementation_kind is not ImplementationKind.AMD_IP
@@ -297,6 +342,17 @@ class HardwareArchitectureConfig:
             raise ValueError(f"RFDC must use exact VLNV {RFDC_2_6_VLNV}")
         if not rfdc_family.required:
             raise ValueError("RFDC family must be required")
+        for family_id, expected_vlnv in _CONNECTED_PLATFORM_VLNVS.items():
+            family = self.family_by_id(family_id)
+            if (
+                not family.required
+                or family.implementation_kind is not ImplementationKind.AMD_IP
+                or family.catalog_pattern != expected_vlnv
+                or family.vlnv != expected_vlnv
+            ):
+                raise ValueError(
+                    f"{family_id} must use exact required VLNV {expected_vlnv}"
+                )
         for family in self.required_families():
             if family.implementation_kind is not ImplementationKind.AMD_IP:
                 raise ValueError("required IP families must use amd_ip")
@@ -311,6 +367,15 @@ class HardwareArchitectureConfig:
             raise ValueError("rfdc_integration instance_ref must reference rfdc")
         if rfdc_instance.lifecycle is IpInstanceLifecycle.RETIRED:
             raise ValueError("rfdc_integration instance_ref cannot be retired")
+        for instance_name, family_id in _CONNECTED_PLATFORM_INSTANCES.items():
+            instance = self.instance_by_name(instance_name)
+            if (
+                instance.family_ref != family_id
+                or instance.lifecycle is not IpInstanceLifecycle.MATERIALIZED
+            ):
+                raise ValueError(
+                    f"{instance_name} must be a materialized {family_id}"
+                )
         for block in self.architecture_blocks:
             unknown_refs = set(block.instance_refs) - instance_names
             if unknown_refs:
