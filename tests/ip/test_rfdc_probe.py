@@ -73,9 +73,10 @@ class RfdcProbeContractTests(unittest.TestCase):
         self.assertIn("CONFIG.DAC_Data_Type00 {0}", first)
         self.assertIn("CONFIG.DAC_Mixer_Type00 {2}", first)
         self.assertIn("get_msg_config -severity WARNING -count", first)
-        self.assertIn("CURRENT_RUN_COUNT", first)
+        self.assertIn("rfdc_probe_emit MESSAGE_COUNT $severity $delta", first)
+        self.assertNotIn("CURRENT_RUN_COUNT", first)
         self.assertNotIn("report_messages", first)
-        self.assertLess(first.index("set rfdc_probe_message_base(WARNING)"), first.index("set_property -dict"))
+        self.assertLess(first.index("set rfdc_probe_message_base(WARNING)"), first.index("create_project rfdc_probe"))
         self.assertNotIn("zynq_ultra_ps_e", first)
         self.assertNotIn("smartconnect", first)
 
@@ -98,7 +99,7 @@ class RfdcProbeContractTests(unittest.TestCase):
         self.assertEqual(result.provenance.raw_output_sha256, _sha(raw))
         self.assertEqual(result.provenance.run_id, 7)
         self.assertEqual(result.cells, (("rfdc_0", "xilinx.com:ip:usp_rf_data_converter:2.6"),))
-        self.assertEqual(result.messages, (("INFO", "PROBE_START", "clean"),))
+        self.assertEqual(result.messages, (("WARNING", 0), ("CRITICAL_WARNING", 0), ("ERROR", 0)))
         self.assertFalse(result.common_rx_clock_legality_verified)
         self.assertFalse(result.mts_runtime_verified)
         self.assertEqual(encoded, canonical_rfdc_probe_json_bytes(result))
@@ -193,7 +194,7 @@ class RfdcProbeContractTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 build_rfdc_probe_evidence(raw.replace(old, new, 1), tcl, model, architecture, run_id=2)
 
-    def test_message_records_reject_warning_critical_and_error(self) -> None:
+    def test_message_counts_require_exact_clean_three_severity_set(self) -> None:
         from rfsoc_pulse_model.ip.rfdc_probe import (
             build_rfdc_probe_evidence,
             emit_rfdc_probe_tcl,
@@ -203,15 +204,19 @@ class RfdcProbeContractTests(unittest.TestCase):
         architecture = HardwareArchitectureConfig.load_default()
         tcl = emit_rfdc_probe_tcl(model, architecture).encode("utf-8")
         raw = self._measured_raw_fixture()
-        for severity in (b"WARNING", b"CRITICAL_WARNING", b"ERROR"):
-            corrupted = raw.replace(
-                b"RFDC_PROBE\tEND",
-                b"RFDC_PROBE\tMESSAGE\t" + severity + b"\tIP_Flow_19_3374\tdiagnostic\nRFDC_PROBE\tEND",
-            )
-            with self.subTest(severity=severity), self.assertRaises(ValueError):
+        cases = {
+            "missing_one": raw.replace(b"RFDC_PROBE\tMESSAGE_COUNT\tERROR\t0\n", b""),
+            "missing_all": b"\n".join(line for line in raw.splitlines() if b"MESSAGE_COUNT" not in line) + b"\n",
+            "nonzero": raw.replace(b"RFDC_PROBE\tMESSAGE_COUNT\tWARNING\t0", b"RFDC_PROBE\tMESSAGE_COUNT\tWARNING\t1"),
+            "duplicate": raw.replace(b"RFDC_PROBE\tEND", b"RFDC_PROBE\tMESSAGE_COUNT\tWARNING\t0\nRFDC_PROBE\tEND"),
+            "unknown": raw.replace(b"RFDC_PROBE\tMESSAGE_COUNT\tERROR\t0", b"RFDC_PROBE\tMESSAGE_COUNT\tINFO\t0"),
+            "malformed": raw.replace(b"RFDC_PROBE\tMESSAGE_COUNT\tERROR\t0", b"RFDC_PROBE\tMESSAGE_COUNT\tERROR\t-1"),
+        }
+        for name, corrupted in cases.items():
+            with self.subTest(name=name), self.assertRaises(ValueError):
                 build_rfdc_probe_evidence(corrupted, tcl, model, architecture, run_id=2)
 
-    def test_message_records_reject_duplicate_unsafe_and_noncanonical_shapes(self) -> None:
+    def test_message_count_records_reject_legacy_unsafe_and_noncanonical_shapes(self) -> None:
         from rfsoc_pulse_model.ip.rfdc_probe import (
             build_rfdc_probe_evidence,
             emit_rfdc_probe_tcl,
@@ -222,9 +227,9 @@ class RfdcProbeContractTests(unittest.TestCase):
         tcl = emit_rfdc_probe_tcl(model, architecture).encode("utf-8")
         raw = self._measured_raw_fixture()
         cases = (
-            raw.replace(b"RFDC_PROBE\tEND", b"RFDC_PROBE\tMESSAGE\tINFO\tID\tfirst\nRFDC_PROBE\tMESSAGE\tINFO\tID\tsecond\nRFDC_PROBE\tEND"),
-            raw.replace(b"RFDC_PROBE\tEND", b"RFDC_PROBE\tMESSAGE\tINFO\tID\tunsafe;message\nRFDC_PROBE\tEND"),
-            raw.replace(b"RFDC_PROBE\tEND", b"RFDC_PROBE\tMESSAGE\tINFO\tID\nRFDC_PROBE\tEND"),
+            raw.replace(b"RFDC_PROBE\tEND", b"RFDC_PROBE\tMESSAGE\tINFO\tID\tlegacy\nRFDC_PROBE\tEND"),
+            raw.replace(b"RFDC_PROBE\tMESSAGE_COUNT\tWARNING\t0", b"RFDC_PROBE\tMESSAGE_COUNT\tWARNING\tunsafe;count"),
+            raw.replace(b"RFDC_PROBE\tMESSAGE_COUNT\tERROR\t0", b"RFDC_PROBE\tMESSAGE_COUNT\tERROR"),
         )
         for corrupted in cases:
             with self.subTest(corrupted=corrupted[-80:]), self.assertRaises(ValueError):
@@ -242,7 +247,7 @@ class RfdcProbeContractTests(unittest.TestCase):
         tcl = emit_rfdc_probe_tcl(model, architecture).encode("utf-8")
         encoded = build_rfdc_probe_evidence(self._measured_raw_fixture(), tcl, model, architecture, run_id=2)
         for name, old, new in (
-            ("warning", b'[["INFO","PROBE_START","clean"]]', b'[["WARNING","PROBE_START","clean"]]'),
+            ("warning", b'[["WARNING",0]', b'[["WARNING",1]'),
             ("data_type", b'"ADC_Data_Type00","1"', b'"ADC_Data_Type00","0"'),
         ):
             with self.subTest(name=name), self.assertRaises(ValueError):
@@ -256,7 +261,9 @@ class RfdcProbeContractTests(unittest.TestCase):
             "RFDC_PROBE\tVIVADO_VERSION\t2025.2",
             "RFDC_PROBE\tDEVICE_PART\txczu27dr-fsve1156-2-i",
             "RFDC_PROBE\tCELL\trfdc_0\txilinx.com:ip:usp_rf_data_converter:2.6",
-            "RFDC_PROBE\tMESSAGE\tINFO\tPROBE_START\tclean",
+            "RFDC_PROBE\tMESSAGE_COUNT\tWARNING\t0",
+            "RFDC_PROBE\tMESSAGE_COUNT\tCRITICAL_WARNING\t0",
+            "RFDC_PROBE\tMESSAGE_COUNT\tERROR\t0",
         ]
         for tile in range(4):
             records.extend((

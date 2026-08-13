@@ -19,6 +19,7 @@ _VIVADO_VERSION = "2025.2"
 _SAFE_TCL_TOKEN = re.compile(r"[A-Za-z0-9_.:+/-]+\Z")
 _SAFE_RAW_FIELD = re.compile(r"[^;`$\[\]\\\r\n\t]+\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_MESSAGE_SEVERITIES = ("WARNING", "CRITICAL_WARNING", "ERROR")
 _EVIDENCE_KEYS = frozenset({
     "probe_schema_version", "vivado_version", "device_part", "rfdc_vlnv",
     "cells", "applied_config", "interfaces", "scalar_pins", "messages", "validation_errors",
@@ -118,6 +119,22 @@ def _pairs(value: object, field: str) -> tuple[tuple[str, str], ...]:
     return tuple(sorted(result))
 
 
+def _message_counts(value: object) -> tuple[tuple[str, int], ...]:
+    if not isinstance(value, tuple) or any(
+        not isinstance(item, tuple) or len(item) != 2
+        or item[0] not in _MESSAGE_SEVERITIES
+        or not isinstance(item[1], int) or isinstance(item[1], bool) or item[1] < 0
+        for item in value
+    ):
+        raise ValueError("messages must be immutable severity/count tuples")
+    result = tuple(sorted(value, key=lambda item: _MESSAGE_SEVERITIES.index(item[0])))
+    if {severity for severity, _ in result} != set(_MESSAGE_SEVERITIES) or len(result) != len(_MESSAGE_SEVERITIES):
+        raise ValueError("messages must contain exactly one count for each severe Vivado severity")
+    if any(count != 0 for _, count in result):
+        raise ValueError("RFDC probe diagnostic severity is not clean")
+    return result
+
+
 @dataclass(frozen=True)
 class RfdcProbeInterface:
     name: str
@@ -161,7 +178,7 @@ class RfdcProbeResult:
     applied_config: tuple[tuple[str, str], ...]
     interfaces: tuple[RfdcProbeInterface, ...]
     scalar_pins: tuple[RfdcProbeScalarPin, ...]
-    messages: tuple[tuple[str, str, str], ...]
+    messages: tuple[tuple[str, int], ...]
     validation_errors: tuple[str, ...]
     common_rx_clock_legality_verified: bool
     common_tx_clock_legality_verified: bool
@@ -186,17 +203,7 @@ class RfdcProbeResult:
             raise ValueError("scalar_pins must be immutable RfdcProbeScalarPin values")
         if len({item.name for item in self.scalar_pins}) != len(self.scalar_pins):
             raise ValueError("scalar_pins must not contain duplicate names")
-        if not isinstance(self.messages, tuple) or any(
-            not isinstance(item, tuple) or len(item) != 3
-            or any(not isinstance(part, str) or not part for part in item)
-            for item in self.messages
-        ):
-            raise ValueError("messages must be immutable severity/id/text tuples")
-        if len({(severity, identifier) for severity, identifier, _ in self.messages}) != len(self.messages):
-            raise ValueError("messages must not contain duplicates")
-        if any(severity in {"WARNING", "CRITICAL_WARNING", "ERROR"}
-               for severity, _, _ in self.messages):
-            raise ValueError("RFDC probe diagnostic severity is not clean")
+        object.__setattr__(self, "messages", _message_counts(self.messages))
         if not isinstance(self.validation_errors, tuple) or any(not isinstance(item, str) for item in self.validation_errors):
             raise ValueError("validation_errors must be an immutable string tuple")
         for field in ("common_rx_clock_legality_verified", "common_tx_clock_legality_verified", "mts_configuration_verified", "mts_runtime_verified"):
@@ -251,12 +258,12 @@ def emit_rfdc_probe_tcl(model: ModelConfig, architecture: HardwareArchitectureCo
     properties = "\n".join(f"    CONFIG.{name} {{{value}}} \\" for name, value in candidates)
     return f'''# Generated RFDC-only diagnostic probe. Do not edit.
 set probe_part {{{model.device_part}}}
-create_project rfdc_probe ./rfdc_probe_project -part $probe_part -force
-create_bd_design rfdc_probe
-set rfdc_0 [create_bd_cell -type ip -vlnv {RFDC_PROBE_VLNV} rfdc_0]
 set rfdc_probe_message_base(WARNING) [get_msg_config -severity WARNING -count]
 set rfdc_probe_message_base(CRITICAL_WARNING) [get_msg_config -severity {{CRITICAL WARNING}} -count]
 set rfdc_probe_message_base(ERROR) [get_msg_config -severity ERROR -count]
+create_project rfdc_probe ./rfdc_probe_project -part $probe_part -force
+create_bd_design rfdc_probe
+set rfdc_0 [create_bd_cell -type ip -vlnv {RFDC_PROBE_VLNV} rfdc_0]
 set_property -dict [list \\
 {properties}
 ] $rfdc_0
@@ -294,7 +301,7 @@ foreach {{severity vivado_severity}} {{WARNING WARNING CRITICAL_WARNING {{CRITIC
     set total [get_msg_config -severity $vivado_severity -count]
     set delta [expr {{$total - $rfdc_probe_message_base($severity)}}]
     if {{$delta < 0}} {{ error "RFDC probe message count regressed" }}
-    if {{$delta > 0}} {{ rfdc_probe_emit MESSAGE $severity CURRENT_RUN_COUNT $delta }}
+    rfdc_probe_emit MESSAGE_COUNT $severity $delta
 }}
 rfdc_probe_emit END
 close_project
@@ -342,14 +349,13 @@ def _decode_raw(raw_output: bytes) -> dict[str, Any]:
                 fields[2], fields[3], fields[4] or "0", fields[5] or "0",
                 fields[6] or "unknown",
             ))
-        elif kind == "MESSAGE" and len(fields) == 5:
-            severity, identifier, text = fields[2:]
-            if severity not in {"INFO", "WARNING", "CRITICAL_WARNING", "ERROR"}:
-                raise ValueError("invalid RFDC probe MESSAGE severity")
-            message = (severity, identifier, text)
-            if any((prior[0], prior[1]) == (severity, identifier) for prior in values["messages"]):
-                raise ValueError("duplicate MESSAGE")
-            values["messages"].append(message)
+        elif kind == "MESSAGE_COUNT" and len(fields) == 4:
+            severity, count = fields[2:]
+            if severity not in _MESSAGE_SEVERITIES or not count.isascii() or not count.isdecimal():
+                raise ValueError("invalid RFDC probe MESSAGE_COUNT")
+            if any(prior[0] == severity for prior in values["messages"]):
+                raise ValueError("duplicate MESSAGE_COUNT")
+            values["messages"].append((severity, int(count)))
         elif kind == "VALIDATE" and len(fields) == 3: values["validation_errors"].append(fields[2])
         else: raise ValueError("invalid RFDC probe record")
     if not ended or "VIVADO_VERSION" not in values or "DEVICE_PART" not in values or not values["applied_config"]:
@@ -365,9 +371,7 @@ def _result_from_raw(raw_output: bytes, probe_tcl: bytes, model: ModelConfig, ar
     if cells != (("rfdc_0", RFDC_PROBE_VLNV),): raise ValueError("RFDC probe must contain exactly one RFDC 2.6 cell")
     if values["validation_errors"]:
         raise ValueError("RFDC-only probe validation must have no errors")
-    if any(severity in {"WARNING", "CRITICAL_WARNING", "ERROR"}
-           for severity, _, _ in values["messages"]):
-        raise ValueError("RFDC probe diagnostic severity is not clean")
+    messages = _message_counts(tuple(values["messages"]))
     try:
         interfaces = tuple(RfdcProbeInterface(item[0], item[1], item[2], int(item[3]), int(item[4]), item[5], item[6]) for item in values["interfaces"])
         pins = tuple(RfdcProbeScalarPin(item[0], item[1], int(item[2]), int(item[3]), item[4]) for item in values["scalar_pins"])
@@ -381,7 +385,7 @@ def _result_from_raw(raw_output: bytes, probe_tcl: bytes, model: ModelConfig, ar
         raise ValueError("RFDC probe scalar pin inventory mismatch")
     applied_config = tuple(values["applied_config"])
     _validate_applied_config(applied_config, model, architecture)
-    return RfdcProbeResult(RfdcProbeProvenance(_VIVADO_VERSION, _sha256(probe_tcl), _sha256(raw_output), _integer(run_id, "run_id", 1)), model.device_part, RFDC_PROBE_VLNV, cells, applied_config, interfaces, pins, tuple(values["messages"]), (), False, False, False, False)
+    return RfdcProbeResult(RfdcProbeProvenance(_VIVADO_VERSION, _sha256(probe_tcl), _sha256(raw_output), _integer(run_id, "run_id", 1)), model.device_part, RFDC_PROBE_VLNV, cells, applied_config, interfaces, pins, messages, (), False, False, False, False)
 
 
 def _validate_applied_config(applied_config: tuple[tuple[str, str], ...], model: ModelConfig, architecture: HardwareArchitectureConfig) -> None:
@@ -433,9 +437,10 @@ def parse_rfdc_probe_evidence(evidence_bytes: bytes, probe_tcl: bytes, model: Mo
     if any(not isinstance(item, dict) for item in interfaces_raw + pins_raw): raise ValueError("RFDC probe interface entries must be objects")
     messages = values["messages"]
     if not isinstance(messages, list) or any(
-        not isinstance(item, list) or len(item) != 3 or any(not isinstance(part, str) for part in item)
+        not isinstance(item, list) or len(item) != 2
+        or not isinstance(item[0], str) or not isinstance(item[1], int) or isinstance(item[1], bool)
         for item in messages
-    ): raise ValueError("messages must be triple arrays")
+    ): raise ValueError("messages must be severity/count arrays")
     validation = values["validation_errors"]
     if not isinstance(validation, list) or any(not isinstance(item, str) for item in validation): raise ValueError("validation_errors must be string array")
     result = RfdcProbeResult(RfdcProbeProvenance(_text(values["vivado_version"], "vivado_version"), _sha(values["probe_tcl_sha256"], "probe_tcl_sha256"), _sha(values["raw_output_sha256"], "raw_output_sha256"), _integer(values["run_id"], "run_id", 1)), _text(values["device_part"], "device_part"), _text(values["rfdc_vlnv"], "rfdc_vlnv"), _pairs(values["cells"], "cells"), _pairs(values["applied_config"], "applied_config"), tuple(RfdcProbeInterface(**item) for item in interfaces_raw), tuple(RfdcProbeScalarPin(**item) for item in pins_raw), tuple(tuple(item) for item in messages), tuple(validation), _bool(values["common_rx_clock_legality_verified"], "common_rx_clock_legality_verified"), _bool(values["common_tx_clock_legality_verified"], "common_tx_clock_legality_verified"), _bool(values["mts_configuration_verified"], "mts_configuration_verified"), _bool(values["mts_runtime_verified"], "mts_runtime_verified"))
