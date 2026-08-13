@@ -59,6 +59,10 @@ AXI SmartConnect, Processor System Reset, SHA-256, Git checkpoints.
   manifest, BD, wrapper, or generated RTL.
 - A partial/interrupted Vivado evidence file is invalid and cannot make shell
   readiness true.
+- Every real connected attempt first invalidates canonical success with an
+  atomically published, run-ID-bound `in_progress` marker under a
+  repository-scoped advisory lock. Only an all-green attempt may atomically
+  publish `success`; a failed retry can never reuse an older success.
 - `production_integration_ready` remains false throughout this plan.
 - Do not claim post-route timing, bitstream, MTS runtime, DMA/Ethernet, board
   loopback or analogue mapping closure.
@@ -160,7 +164,70 @@ git commit -m "feat: freeze ZU27DR PS platform authority"
 
 ---
 
-### Task 2: Define canonical connected request and evidence
+### Task 2: Advance the connected authority and refresh the exact IP lock
+
+**Files:**
+
+- Modify: `config/ip_architecture.json`
+- Modify: `src/rfsoc_pulse_model/config/ip_architecture.json`
+- Modify: `src/rfsoc_pulse_model/ip/types.py`
+- Modify: `src/rfsoc_pulse_model/ip/registry.py`
+- Modify: `tests/ip/test_architecture_config.py`
+- Modify: `tests/ip/test_catalog.py`
+- Modify: `tests/ip/test_registry.py`
+- Modify: `tests/ip/test_lock.py`
+- Tool-promote: `config/ip_lock.json`
+- Tool-promote: `src/rfsoc_pulse_model/config/ip_lock.json`
+
+**Produces:** architecture config revision for `connected_rfdc_shell`, exact
+expanded family and materialized platform declarations, current Vivado catalog
+evidence, and byte-identical explicitly promoted production locks. No connected
+request or Tcl may be accepted before this task completes.
+
+- [ ] **Step 1: Write RED schema, ownership and lock tests**
+
+Assert schema v2 remains, config revision advances, topology is exactly
+`connected_rfdc_shell`, the five platform families and seven platform
+instances are declared, the exact complete family set is enforced, RFDC and
+platform owners remain unaccepted, pending algorithm owners remain unchanged,
+and production readiness remains false.
+
+- [ ] **Step 2: Prove RED and implement config/type changes**
+
+Update both architecture JSON copies byte-identically. Do not fabricate a new
+lock. Development mode must report stale/invalid lock truthfully; production
+mode must fail closed until promotion.
+
+- [ ] **Step 3: Generate discovery inputs in development mode**
+
+Use a clean build output. Record the architecture, discovery Tcl and catalog
+request hashes. Confirm discovery contains the exact required family set and
+contains no BD/cell/connection commands.
+
+- [ ] **Step 4: Run real Vivado 2025.2 discovery**
+
+Run the generated discovery Tcl with its three provenance hashes. Require exit
+zero, canonical complete evidence, exact RFDC 2.6 and exact platform-family
+identities. Remove any partial evidence before the next attempt.
+
+- [ ] **Step 5: Generate candidate and explicitly promote**
+
+Use only the project lock CLI. Verify candidate family set, candidate hash,
+root/package lock byte equality, discovery-only provenance, and production
+generation success.
+
+- [ ] **Step 6: Focused regression, commit and independent review**
+
+```powershell
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest discover -s tests/ip -v
+git diff --check
+git add config/ip_architecture.json src/rfsoc_pulse_model/config/ip_architecture.json src/rfsoc_pulse_model/ip/types.py src/rfsoc_pulse_model/ip/registry.py tests/ip/test_architecture_config.py tests/ip/test_catalog.py tests/ip/test_registry.py tests/ip/test_lock.py config/ip_lock.json src/rfsoc_pulse_model/config/ip_lock.json
+git commit -m "build: lock connected RFDC platform IP"
+```
+
+---
+
+### Task 3: Define canonical connected request and evidence
 
 **Files:**
 
@@ -185,6 +252,14 @@ extra cells/interfaces, wrong I/Q identity, width drift, clock-net split,
 cross-domain reset reuse, invalid address paths, `validate_bd_design=false`,
 synthesis failure, unsafe CDC, runtime MTS overclaim, duplicate keys, unknown
 keys and noncanonical bytes.
+
+The schema includes exact `ctrl_clock_locked`, `rx_clock_locked` and
+`tx_clock_locked` memberships for the three `proc_sys_reset/dcm_locked` pins.
+The runner uses a repo-scoped advisory lock, atomically publishes an
+`in_progress` marker before launching Vivado, writes attempt-local reports, and
+publishes `success` only after all hashes and gates pass. Cover success followed
+by a failed retry with unchanged sources, interruption before publish, stale
+report reuse and concurrent runners.
 
 - [ ] **Step 2: Prove RED**
 
@@ -214,7 +289,7 @@ git commit -m "feat: define connected RFDC shell evidence"
 
 ---
 
-### Task 3: Probe the RFDC 2.6 parameter and port contract
+### Task 4: Probe the RFDC 2.6 parameter and port contract
 
 **Files:**
 
@@ -225,7 +300,7 @@ git commit -m "feat: define connected RFDC shell evidence"
 - Generated locally: `build/metadata/rfdc_probe_evidence.json`
 
 **Produces:** a deterministic RFDC-only probe, actual Vivado 2025.2 property
-and pin readback, and an evidence-backed property/port spelling used by Task 4.
+and pin readback, and an evidence-backed property/port spelling used by Task 5.
 
 - [ ] **Step 1: Write RED probe tests**
 
@@ -270,7 +345,7 @@ git commit -m "test: probe RFDC 2.6 connected contract"
 
 ---
 
-### Task 4: Generate connected realization and verification Tcl
+### Task 5: Generate connected realization and verification Tcl
 
 **Files:**
 
@@ -282,7 +357,7 @@ git commit -m "test: probe RFDC 2.6 connected contract"
 
 **Produces:** `realize_connected_rfdc_shell.tcl`,
 `verify_connected_rfdc_shell.tcl`, canonical connected request metadata, and
-separate realization/verification provenance hashes based on Task 3 readback.
+separate realization/verification provenance hashes based on Task 4 readback.
 
 - [ ] **Step 1: Write RED Tcl tests**
 
@@ -294,6 +369,12 @@ interfaces, address assignment, validation/save order, and absence of
 detector/DMA/GEM data cells, legacy RTL, hidden automation and acceptance
 claims. Compare internal RFDC pin identities; externalized auto names are only
 evidence fields.
+
+Assert explicit exported `ctrl_clock_locked`, `rx_clock_locked` and
+`tx_clock_locked` pins and their one-to-one connections to the three
+`proc_sys_reset/dcm_locked` inputs. Assert the generated runner invalidates any
+old success before invoking Vivado and atomically publishes only attempt-local
+success.
 
 Negative tests cover wrong existing project part, wrong current BD, unsafe Tcl
 word quoting, unknown platform property, unresolved required VLNV, duplicate
@@ -323,74 +404,6 @@ compare every controlled file recursively. Run all `tests.ip` tests.
 git add src/rfsoc_pulse_model/ip/connected_tcl.py src/rfsoc_pulse_model/ip/generate.py src/rfsoc_pulse_model/ip/__init__.py tests/ip/test_connected_tcl.py tests/ip/test_generate_architecture.py
 git commit -m "feat: generate connected RFDC shell Tcl"
 ```
-
----
-
-### Task 5: Materialize platform instances and refresh the exact IP lock
-
-**Files:**
-
-- Modify: `config/ip_architecture.json`
-- Modify: `src/rfsoc_pulse_model/config/ip_architecture.json`
-- Modify: `src/rfsoc_pulse_model/ip/types.py`
-- Modify: `src/rfsoc_pulse_model/ip/registry.py`
-- Modify: `tests/ip/test_architecture_config.py`
-- Modify: `tests/ip/test_catalog.py`
-- Modify: `tests/ip/test_registry.py`
-- Modify: `tests/ip/test_lock.py`
-- Tool-promote: `config/ip_lock.json`
-- Tool-promote: `src/rfsoc_pulse_model/config/ip_lock.json`
-
-**Produces:** architecture config revision for `connected_rfdc_shell`, exact
-expanded family and materialized cell declarations, current Vivado catalog
-evidence, and byte-identical explicitly promoted production locks.
-
-- [ ] **Step 1: Write RED schema, ownership and lock tests**
-
-Assert schema v2 remains, config revision advances, topology is exactly
-`connected_rfdc_shell`, the five platform families and seven platform
-instances are declared, the exact complete family set is enforced, RFDC and
-platform owners remain unaccepted, pending algorithm owners remain unchanged,
-and production readiness remains false.
-
-- [ ] **Step 2: Prove RED and implement config/type changes**
-
-Update both architecture JSON copies byte-identically. Do not fabricate a new
-lock. Development mode must report stale/invalid lock truthfully; production
-mode must fail closed until promotion.
-
-- [ ] **Step 3: Generate discovery inputs in development mode**
-
-Use a clean build output. Record the architecture, discovery Tcl and catalog
-request hashes. Confirm discovery contains the exact required family set and
-contains no BD/cell/connection commands.
-
-- [ ] **Step 4: Run real Vivado 2025.2 discovery**
-
-```powershell
-& 'D:\app\AMD\2025.2\Vivado\bin\vivado.bat' -mode batch -source '<generated discover_ip_catalog.tcl>' -tclargs '<architecture sha>' '<discovery sha>' '<request sha>'
-```
-
-Require exit zero, canonical complete evidence, exact RFDC 2.6 and exact
-platform-family identities. Any partial evidence is stale and removed before
-the next attempt.
-
-- [ ] **Step 5: Generate candidate and explicitly promote**
-
-Use only the project lock CLI. Verify candidate family set, candidate hash,
-root/package lock byte equality, discovery-only provenance, and production
-generation success.
-
-- [ ] **Step 6: Full focused regression and commit**
-
-```powershell
-& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest discover -s tests/ip -v
-git diff --check
-git add config/ip_architecture.json src/rfsoc_pulse_model/config/ip_architecture.json src/rfsoc_pulse_model/ip/types.py src/rfsoc_pulse_model/ip/registry.py tests/ip/test_architecture_config.py tests/ip/test_catalog.py tests/ip/test_registry.py tests/ip/test_lock.py config/ip_lock.json src/rfsoc_pulse_model/config/ip_lock.json
-git commit -m "build: lock connected RFDC platform IP"
-```
-
-- [ ] **Step 7: Independently review lock and exact-set semantics**
 
 ---
 
@@ -428,9 +441,13 @@ attempts on the same blocking condition, stop with all logs preserved.
 
 - [ ] **Step 4: Execute verification and synthesis**
 
-Require exact readback, `validate_bd_design`, wrapper generation and synthesis.
-Run `report_cdc`, clock interaction and unconstrained-clock checks. No broad
-false-path or asynchronous-clock-group waiver may hide an unsafe crossing.
+Require exact readback and `validate_bd_design`. Run `generate_target all`,
+`make_wrapper -top`, `add_files -norecurse`, set the generated wrapper as top,
+`launch_runs synth_1 -jobs 1`, `wait_on_run synth_1`, and require
+`STATUS == {synth_design Complete!}`. Emit utilization and timing-summary
+reports, then run `report_cdc`, clock interaction and unconstrained-clock
+checks. No broad false-path or asynchronous-clock-group waiver may hide an
+unsafe crossing.
 
 - [ ] **Step 5: Parse evidence and prove shell readiness**
 

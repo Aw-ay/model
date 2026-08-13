@@ -174,6 +174,16 @@ PS `pl_resetn0` is explicitly inverted by `reset_inverter_0`. Each
 releases its own outputs in its local clock domain. A reset synchronized in
 one domain is never reused in another domain.
 
+`dcm_locked` is not left implicit. The shell exports three explicit active-high
+qualification inputs, `ctrl_clock_locked`, `rx_clock_locked`, and
+`tx_clock_locked`, and connects one to each corresponding
+`proc_sys_reset/dcm_locked`. In the first structural checkpoint they are board
+wrapper inputs whose asserted meaning is "this domain's source clock is stable
+and permitted to release reset". They must be tied only by a later wrapper or
+platform source with equivalent semantics; BD automation and an undeclared
+constant cell may not supply them. The exact pins and net memberships are part
+of the connected request and Vivado evidence.
+
 RX and TX are separate clock domains in this checkpoint. No reflection data
 path crosses between them yet.
 
@@ -249,6 +259,20 @@ MTS configuration/runtime flags, validation result, generated report hashes,
 and stable failure reasons. Duplicate JSON keys, unknown fields, noncanonical
 encoding, stale hashes, partial evidence, and non-exact sets are rejected.
 
+Evidence publication is transactional and attempt-bound. Before each real
+realization/verification attempt, the runner acquires the repository-scoped
+connected-evidence advisory lock and atomically replaces any canonical success
+artifact with a canonical `in_progress` marker carrying a new numeric run ID.
+All reports and candidate evidence are written in a unique attempt directory.
+Only after every required step succeeds is a canonical success object written
+and atomically published. A failed/interrupted attempt leaves `in_progress` or
+`failed`, never an earlier success. The parser rejects non-success state,
+run-ID/report mismatches, and report bytes from another attempt.
+
+RFDC probe output is not acceptance evidence, but its Vivado version, probe
+Tcl SHA-256, raw-output SHA-256 and run ID are recorded in the connected request
+and final acceptance so every frozen property spelling remains traceable.
+
 ## 11. Readiness semantics
 
 The connected checkpoint introduces an independent result:
@@ -287,7 +311,11 @@ The checkpoint requires all of the following:
 5. connected Tcl execution in a clean project;
 6. exact RFDC, port, clock, reset, address, and MTS configuration readback;
 7. `validate_bd_design` success;
-8. wrapper/OOC synthesis success;
+8. synthesis of the generated `connected_rfdc_shell_wrapper` top after
+   `generate_target all`, `make_wrapper -top`, `add_files -norecurse`, and
+   `launch_runs synth_1 -jobs 1`, with `wait_on_run synth_1`,
+   `get_property STATUS == {synth_design Complete!}`, and a generated
+   utilization/timing-summary report;
 9. `report_cdc` with no unhandled critical or unsafe crossing;
 10. clock-interaction and unconstrained-clock review;
 11. a new acceptance artifact that states every unverified boundary.
