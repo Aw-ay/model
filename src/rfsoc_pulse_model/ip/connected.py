@@ -16,6 +16,8 @@ from typing import Any
 
 from rfsoc_pulse_model.common.config import ModelConfig
 
+from .catalog import validate_resolved_catalog
+from .evidence import build_catalog_request, canonical_json_bytes
 from .platform import PsPlatformConfig
 from .types import HardwareArchitectureConfig
 
@@ -99,11 +101,13 @@ class ConnectedAuthorityBytes:
     architecture_config_bytes: bytes
     ps_platform_config_bytes: bytes
     production_lock_bytes: bytes
+    discovery_tcl_bytes: bytes
+    catalog_request_bytes: bytes
 
     def __post_init__(self) -> None:
         for field in (
             "model_config_bytes", "architecture_config_bytes", "ps_platform_config_bytes",
-            "production_lock_bytes",
+            "production_lock_bytes", "discovery_tcl_bytes", "catalog_request_bytes",
         ):
             if not isinstance(getattr(self, field), bytes):
                 raise ValueError(f"{field} must be immutable bytes")
@@ -352,77 +356,96 @@ def _typed_tuple(value: object, item_type: type[Any], field: str) -> None:
         raise ValueError(f"{field} must be a tuple of {item_type.__name__}")
 
 
-def _expected_cells() -> tuple[ConnectedCell, ...]:
+def _instance_name(architecture: HardwareArchitectureConfig, role: str) -> str:
+    matches = [item.instance_name for item in architecture.ip_instances if item.logical_role == role]
+    if len(matches) != 1:
+        raise ValueError(f"architecture must declare exactly one {role} instance")
+    return matches[0]
+
+
+def _expected_cells(architecture: HardwareArchitectureConfig) -> tuple[ConnectedCell, ...]:
+    roles = {
+        "rfdc_frontend", "ps_platform_control", "control_axi_interconnect",
+        "control_reset_inverter", "control_reset_domain", "rx_reset_domain",
+        "tx_reset_domain", "rfdc_irq_concat",
+    }
     return tuple(sorted((
-        ConnectedCell("rfdc_0", "xilinx.com:ip:usp_rf_data_converter:2.6"),
-        ConnectedCell("zynq_ultra_ps_e_0", "xilinx.com:ip:zynq_ultra_ps_e:3.5"),
-        ConnectedCell("ctrl_smartconnect_0", "xilinx.com:ip:smartconnect:1.0"),
-        ConnectedCell("reset_inverter_0", "xilinx.com:ip:util_vector_logic:2.0"),
-        ConnectedCell("ctrl_reset_0", "xilinx.com:ip:proc_sys_reset:5.0"),
-        ConnectedCell("rx_reset_0", "xilinx.com:ip:proc_sys_reset:5.0"),
-        ConnectedCell("tx_reset_0", "xilinx.com:ip:proc_sys_reset:5.0"),
-        ConnectedCell("irq_concat_0", "xilinx.com:ip:xlconcat:2.1"),
+        ConnectedCell(instance.instance_name, architecture.family_by_id(instance.family_ref).vlnv or "")
+        for instance in architecture.ip_instances
+        if instance.logical_role in roles
     ), key=lambda item: item.name))
 
 
-def _expected_interfaces() -> tuple[AxisInterface, ...]:
-    adc_i_names = ("m00_axis", "m02_axis", "m10_axis", "m12_axis", "m20_axis", "m22_axis", "m30_axis", "m32_axis")
-    adc_q_names = ("m01_axis", "m03_axis", "m11_axis", "m13_axis", "m21_axis", "m23_axis", "m31_axis", "m33_axis")
-    adc_routes = ((0, 0), (0, 2), (1, 0), (1, 2), (2, 0), (2, 2), (3, 0), (3, 2))
+def _expected_interfaces(model: ModelConfig) -> tuple[AxisInterface, ...]:
+    axis = model.rfdc_axis
     items: list[AxisInterface] = []
-    for channel, (i_name, q_name) in enumerate(zip(adc_i_names, adc_q_names, strict=True)):
-        tile, slice_number = adc_routes[channel]
+    for channel, (i_name, q_name) in enumerate(zip(axis.adc_i_axis_names, axis.adc_q_axis_names, strict=True)):
+        route = model.adc_channel_map[channel]
         items.extend((
-            AxisInterface(i_name, "master", "adc_component", channel, tile,
-                          slice_number, "I", 32,
+            AxisInterface(i_name, "master", "adc_component", channel, route.rfdc_tile,
+                          route.rfdc_slice, "I", axis.adc_component_stream_width_bits,
                           "rx_axis_clk", "rx_peripheral_aresetn"),
-            AxisInterface(q_name, "master", "adc_component", channel, tile,
-                          slice_number, "Q", 32,
+            AxisInterface(q_name, "master", "adc_component", channel, route.rfdc_tile,
+                          route.rfdc_slice, "Q", axis.adc_component_stream_width_bits,
                           "rx_axis_clk", "rx_peripheral_aresetn"),
         ))
-    for channel, name in enumerate(("s00_axis", "s01_axis", "s02_axis", "s03_axis", "s10_axis", "s11_axis", "s12_axis", "s13_axis")):
-        items.append(AxisInterface(name, "slave", "dac_complex", channel, channel // 4,
-                                   channel % 4, "IQ", 64,
+    for channel, name in enumerate(axis.dac_axis_names):
+        route = model.dac_channel_map[channel]
+        items.append(AxisInterface(name, "slave", "dac_complex", channel, route.rfdc_tile,
+                                   route.rfdc_slice, "IQ", axis.dac_axis_width_bits,
                                    "tx_axis_clk", "tx_peripheral_aresetn"))
     return tuple(sorted(items, key=lambda item: item.name))
 
 
-def _expected_clocks() -> tuple[ClockNet, ...]:
+def _expected_clocks(platform: PsPlatformConfig, model: ModelConfig, architecture: HardwareArchitectureConfig) -> tuple[ClockNet, ...]:
+    ps = _instance_name(architecture, "ps_platform_control")
+    smartconnect = _instance_name(architecture, "control_axi_interconnect")
+    rfdc = architecture.rfdc_integration.instance_ref
+    ctrl_reset = _instance_name(architecture, "control_reset_domain")
+    rx_reset = _instance_name(architecture, "rx_reset_domain")
+    tx_reset = _instance_name(architecture, "tx_reset_domain")
     return (
-        ClockNet("ctrl", "ctrl_axis_clk", 100_000_000, (
-            "zynq_ultra_ps_e_0/pl_clk0", "ctrl_smartconnect_0/aclk", "rfdc_0/s_axi_aclk",
-            "ctrl_reset_0/slowest_sync_clk")),
-        ClockNet("rx", "rx_axis_clk", 250_000_000, (
-            "rfdc_0/clk_adc0", "rfdc_0/m0_axis_aclk", "rfdc_0/m1_axis_aclk",
-            "rfdc_0/m2_axis_aclk", "rfdc_0/m3_axis_aclk", "rx_reset_0/slowest_sync_clk")),
-        ClockNet("tx", "tx_axis_clk", 250_000_000, (
-            "rfdc_0/clk_dac0", "rfdc_0/s0_axis_aclk", "rfdc_0/s1_axis_aclk",
-            "tx_reset_0/slowest_sync_clk")),
+        ClockNet("ctrl", "ctrl_axis_clk", platform.control_clock_hz, (
+            f"{ps}/pl_clk0", f"{smartconnect}/aclk", f"{rfdc}/s_axi_aclk",
+            f"{ctrl_reset}/slowest_sync_clk")),
+        ClockNet("rx", "rx_axis_clk", model.rx_fabric_clock_hz, (
+            f"{rfdc}/clk_adc0", f"{rfdc}/m0_axis_aclk", f"{rfdc}/m1_axis_aclk",
+            f"{rfdc}/m2_axis_aclk", f"{rfdc}/m3_axis_aclk", f"{rx_reset}/slowest_sync_clk")),
+        ClockNet("tx", "tx_axis_clk", model.rx_fabric_clock_hz, (
+            f"{rfdc}/clk_dac0", f"{rfdc}/s0_axis_aclk", f"{rfdc}/s1_axis_aclk",
+            f"{tx_reset}/slowest_sync_clk")),
     )
 
 
-def _expected_resets() -> tuple[ResetNet, ...]:
+def _expected_resets(architecture: HardwareArchitectureConfig) -> tuple[ResetNet, ...]:
+    rfdc = architecture.rfdc_integration.instance_ref
+    ctrl_reset = _instance_name(architecture, "control_reset_domain")
+    rx_reset = _instance_name(architecture, "rx_reset_domain")
+    tx_reset = _instance_name(architecture, "tx_reset_domain")
     return (
         ResetNet("ctrl", "ctrl_peripheral_aresetn", "ctrl_axis_clk", "ctrl_clock_locked",
-                 ("ctrl_clock_locked", "ctrl_reset_0/dcm_locked"),
-                 ("ctrl_smartconnect_0/aresetn", "rfdc_0/s_axi_aresetn")),
+                 ("ctrl_clock_locked", f"{ctrl_reset}/dcm_locked"),
+                 (f"{_instance_name(architecture, 'control_axi_interconnect')}/aresetn", f"{rfdc}/s_axi_aresetn")),
         ResetNet("rx", "rx_peripheral_aresetn", "rx_axis_clk", "rx_clock_locked",
-                 ("rx_clock_locked", "rx_reset_0/dcm_locked"),
-                 ("rfdc_0/m0_axis_aresetn", "rfdc_0/m1_axis_aresetn",
-                  "rfdc_0/m2_axis_aresetn", "rfdc_0/m3_axis_aresetn")),
+                 ("rx_clock_locked", f"{rx_reset}/dcm_locked"),
+                 (f"{rfdc}/m0_axis_aresetn", f"{rfdc}/m1_axis_aresetn",
+                  f"{rfdc}/m2_axis_aresetn", f"{rfdc}/m3_axis_aresetn")),
         ResetNet("tx", "tx_peripheral_aresetn", "tx_axis_clk", "tx_clock_locked",
-                 ("tx_clock_locked", "tx_reset_0/dcm_locked"),
-                 ("rfdc_0/s0_axis_aresetn", "rfdc_0/s1_axis_aresetn")),
+                 ("tx_clock_locked", f"{tx_reset}/dcm_locked"),
+                 (f"{rfdc}/s0_axis_aresetn", f"{rfdc}/s1_axis_aresetn")),
     )
 
 
-def _expected_semantics() -> RfdcSemantics:
+def _expected_semantics(model: ModelConfig, architecture: HardwareArchitectureConfig) -> RfdcSemantics:
     return RfdcSemantics(
-        adc_tiles=(0, 1, 2, 3), adc_slices=((0, 0), (0, 2), (1, 0), (1, 2), (2, 0), (2, 2), (3, 0), (3, 2)),
-        adc_sample_rate_hz=4_000_000_000, adc_decimation=8, dac_tiles=(0, 1),
-        dac_slices=((0, 0), (0, 1), (0, 2), (0, 3), (1, 0), (1, 1), (1, 2), (1, 3)),
-        dac_sample_rate_hz=4_000_000_000, dac_interpolation=8,
-        dac_nco_frequency_hz=2_800_000_000, dac_mixer_mode="iq_to_real",
+        adc_tiles=tuple(sorted({entry.rfdc_tile for entry in model.adc_channel_map})),
+        adc_slices=tuple((entry.rfdc_tile, entry.rfdc_slice) for entry in model.adc_channel_map),
+        adc_sample_rate_hz=model.adc_sample_rate_hz, adc_decimation=model.rfdc_decimation,
+        dac_tiles=tuple(sorted({entry.rfdc_tile for entry in model.dac_channel_map})),
+        dac_slices=tuple((entry.rfdc_tile, entry.rfdc_slice) for entry in model.dac_channel_map),
+        dac_sample_rate_hz=model.dac_sample_rate_hz, dac_interpolation=model.rfdc_interpolation,
+        dac_nco_frequency_hz=architecture.rfdc_integration.dac_nco_frequency_hz,
+        dac_mixer_mode=architecture.rfdc_integration.dac_mixer_mode,
     )
 
 
@@ -451,14 +474,22 @@ def build_connected_request(
         ps_platform_config_sha256=hashlib.sha256(authority_bytes.ps_platform_config_bytes).hexdigest(),
         production_lock_sha256=hashlib.sha256(authority_bytes.production_lock_bytes).hexdigest(),
         vivado_version=architecture.vivado_version, device_part=model.device_part,
-        probe_provenance=probe_provenance, cells=_expected_cells(),
-        interfaces=_expected_interfaces(), clocks=_expected_clocks(),
-        resets=_expected_resets(),
-        address_path=("zynq_ultra_ps_e_0/M_AXI_HPM0_FPD", "ctrl_smartconnect_0/S00_AXI",
-                      "ctrl_smartconnect_0/M00_AXI", "rfdc_0/s_axi"),
-        irq_path=("rfdc_0/irq", "irq_concat_0/In0", "irq_concat_0/dout", "zynq_ultra_ps_e_0/pl_ps_irq0"),
-        rfdc_semantics=_expected_semantics(),
-        mts_groups=(MtsGroup("adc", (0, 1, 2, 3)), MtsGroup("dac", (0, 1))),
+        probe_provenance=probe_provenance, cells=_expected_cells(architecture),
+        interfaces=_expected_interfaces(model), clocks=_expected_clocks(platform, model, architecture),
+        resets=_expected_resets(architecture),
+        address_path=(f"{_instance_name(architecture, 'ps_platform_control')}/M_AXI_HPM0_FPD",
+                      f"{_instance_name(architecture, 'control_axi_interconnect')}/S00_AXI",
+                      f"{_instance_name(architecture, 'control_axi_interconnect')}/M00_AXI",
+                      f"{architecture.rfdc_integration.instance_ref}/s_axi"),
+        irq_path=(f"{architecture.rfdc_integration.instance_ref}/irq",
+                  f"{_instance_name(architecture, 'rfdc_irq_concat')}/In0",
+                  f"{_instance_name(architecture, 'rfdc_irq_concat')}/dout",
+                  f"{_instance_name(architecture, 'ps_platform_control')}/pl_ps_irq0"),
+        rfdc_semantics=_expected_semantics(model, architecture),
+        mts_groups=(
+            MtsGroup("adc", tuple(sorted({entry.rfdc_tile for entry in model.adc_channel_map}))),
+            MtsGroup("dac", tuple(sorted({entry.rfdc_tile for entry in model.dac_channel_map}))),
+        ),
     )
 
 
@@ -511,6 +542,50 @@ def _bind_authority_bytes(
         raise ValueError("ps_platform_config_bytes do not bind to platform authority")
     if parsed_lock != production_lock or lock_payload != production_lock:
         raise ValueError("production_lock_bytes do not bind to production_lock")
+    _validate_bound_production_lock(architecture, authority_bytes, parsed_lock)
+
+
+def _validate_bound_production_lock(
+    architecture: HardwareArchitectureConfig, authority_bytes: ConnectedAuthorityBytes,
+    lock_payload: Mapping[str, object],
+) -> None:
+    """Pure production-lock predicate using only the six explicit byte inputs."""
+
+    required_keys = {
+        "lock_schema_version", "architecture_config_sha256", "generated_tcl_sha256",
+        "catalog_request_sha256", "vivado_version", "families",
+    }
+    if set(lock_payload) != required_keys:
+        raise ValueError("production_lock_bytes have unknown or missing keys")
+    if _integer(lock_payload["lock_schema_version"], "lock_schema_version", 1) != 1:
+        raise ValueError("production lock schema is unsupported")
+    architecture_hash = hashlib.sha256(authority_bytes.architecture_config_bytes).hexdigest()
+    discovery_hash = hashlib.sha256(authority_bytes.discovery_tcl_bytes).hexdigest()
+    if _sha256(lock_payload["architecture_config_sha256"], "architecture_config_sha256") != architecture_hash:
+        raise ValueError("production lock architecture_config_sha256 mismatch")
+    if _sha256(lock_payload["generated_tcl_sha256"], "generated_tcl_sha256") != discovery_hash:
+        raise ValueError("production lock generated_tcl_sha256 mismatch")
+    expected_catalog_request = canonical_json_bytes(build_catalog_request(
+        architecture, architecture_hash, discovery_hash
+    ))
+    if authority_bytes.catalog_request_bytes != expected_catalog_request:
+        raise ValueError("catalog_request_bytes do not match architecture/discovery inputs")
+    if _sha256(lock_payload["catalog_request_sha256"], "catalog_request_sha256") != hashlib.sha256(expected_catalog_request).hexdigest():
+        raise ValueError("production lock catalog_request_sha256 mismatch")
+    if lock_payload["vivado_version"] != architecture.vivado_version:
+        raise ValueError("production lock vivado_version mismatch")
+    families = lock_payload["families"]
+    if not isinstance(families, Mapping):
+        raise ValueError("production lock families must be an object")
+    parsed_families: dict[str, str] = {}
+    for family_id, vlnv in families.items():
+        parsed_families[_text(family_id, "production lock family id")] = _text(
+            vlnv, "production lock family VLNV"
+        )
+    try:
+        validate_resolved_catalog(architecture, parsed_families)
+    except ValueError as error:
+        raise ValueError(f"production lock family set is invalid: {error}") from error
 
 
 def _validate_request_shape(request: ConnectedShellRequest) -> None:
@@ -524,29 +599,6 @@ def _validate_request_shape(request: ConnectedShellRequest) -> None:
         raise ValueError("request must contain exact control/RX/TX resets")
     if len({item.reset_net for item in request.resets}) != 3:
         raise ValueError("request reset domains must be separate")
-    if request.device_part != "xczu27dr-fsve1156-2-i":
-        raise ValueError("request device part must match frozen connected shell")
-    if request.cells != _expected_cells():
-        raise ValueError("request cells must match frozen connected shell contract")
-    if request.interfaces != _expected_interfaces():
-        raise ValueError("request interfaces must match frozen connected shell contract")
-    if request.clocks != _expected_clocks():
-        raise ValueError("request clocks must match frozen connected shell contract")
-    if request.resets != _expected_resets():
-        raise ValueError("request resets must match frozen connected shell contract")
-    if request.address_path != (
-        "zynq_ultra_ps_e_0/M_AXI_HPM0_FPD", "ctrl_smartconnect_0/S00_AXI",
-        "ctrl_smartconnect_0/M00_AXI", "rfdc_0/s_axi",
-    ):
-        raise ValueError("request address path must match frozen connected shell contract")
-    if request.irq_path != (
-        "rfdc_0/irq", "irq_concat_0/In0", "irq_concat_0/dout", "zynq_ultra_ps_e_0/pl_ps_irq0",
-    ):
-        raise ValueError("request IRQ path must match frozen connected shell contract")
-    if request.rfdc_semantics != _expected_semantics():
-        raise ValueError("request RFDC semantics must match frozen connected shell contract")
-    if request.mts_groups != (MtsGroup("adc", (0, 1, 2, 3)), MtsGroup("dac", (0, 1))):
-        raise ValueError("request MTS groups must match frozen connected shell contract")
 
 
 def _normalise(value: object) -> object:
@@ -716,36 +768,46 @@ def parse_connected_evidence(raw_bytes: bytes) -> ConnectedShellEvidence:
     return evidence
 
 
-def validate_connected_evidence(request: ConnectedShellRequest, evidence: ConnectedShellEvidence) -> ConnectedShellReadiness:
+def validate_connected_evidence(
+    request: ConnectedShellRequest, evidence: ConnectedShellEvidence,
+    model: ModelConfig, architecture: HardwareArchitectureConfig, platform: PsPlatformConfig,
+    production_lock: Mapping[str, object], probe_provenance: RfdcProbeProvenance,
+    authority_bytes: ConnectedAuthorityBytes,
+) -> ConnectedShellReadiness:
     """Return deterministic structural readiness; never elevate global readiness."""
 
     if not isinstance(request, ConnectedShellRequest) or not isinstance(evidence, ConnectedShellEvidence):
         raise ValueError("request and evidence must use connected contract types")
+    expected_request = build_connected_request(
+        model, architecture, platform, production_lock, probe_provenance, authority_bytes
+    )
     reasons: list[str] = []
-    expected_request_sha = hashlib.sha256(canonical_connected_json_bytes(request)).hexdigest()
+    if request != expected_request:
+        reasons.append("request_contract_mismatch")
+    expected_request_sha = hashlib.sha256(canonical_connected_json_bytes(expected_request)).hexdigest()
     if evidence.connected_request_sha256 != expected_request_sha: reasons.append("request_hash_mismatch")
     for field in ("model_config_sha256", "architecture_config_sha256", "ps_platform_config_sha256", "production_lock_sha256"):
-        if getattr(evidence, field) != getattr(request, field): reasons.append(f"{field}_mismatch")
-    if evidence.device_part != request.device_part: reasons.append("part_mismatch")
-    if evidence.vivado_version != request.vivado_version: reasons.append("vivado_version_mismatch")
-    if evidence.cells != request.cells: reasons.append("cell_set_mismatch")
-    if {item.name for item in evidence.interfaces} != {item.name for item in request.interfaces}:
+        if getattr(evidence, field) != getattr(expected_request, field): reasons.append(f"{field}_mismatch")
+    if evidence.device_part != expected_request.device_part: reasons.append("part_mismatch")
+    if evidence.vivado_version != expected_request.vivado_version: reasons.append("vivado_version_mismatch")
+    if evidence.cells != expected_request.cells: reasons.append("cell_set_mismatch")
+    if {item.name for item in evidence.interfaces} != {item.name for item in expected_request.interfaces}:
         reasons.append("interface_set_mismatch")
     elif evidence.interfaces != request.interfaces:
         by_name = {item.name: item for item in evidence.interfaces}
-        expected = {item.name: item for item in request.interfaces}
+        expected = {item.name: item for item in expected_request.interfaces}
         if any(by_name[name].iq_component != expected[name].iq_component for name in expected): reasons.append("iq_identity_mismatch")
         elif any(by_name[name].width_bits != expected[name].width_bits for name in expected): reasons.append("interface_width_mismatch")
         else: reasons.append("interface_contract_mismatch")
-    if evidence.clocks != request.clocks: reasons.append("clock_membership_mismatch")
-    if evidence.resets != request.resets:
+    if evidence.clocks != expected_request.clocks: reasons.append("clock_membership_mismatch")
+    if evidence.resets != expected_request.resets:
         if len({item.reset_net for item in evidence.resets}) != len(evidence.resets): reasons.append("reset_domain_reuse")
-        elif any(item.dcm_locked_pin != next(expected.dcm_locked_pin for expected in request.resets if expected.domain == item.domain) or item.dcm_locked_members != next(expected.dcm_locked_members for expected in request.resets if expected.domain == item.domain) for item in evidence.resets if item.domain in {"ctrl", "rx", "tx"}): reasons.append("dcm_locked_membership_mismatch")
+        elif any(item.dcm_locked_pin != next(expected.dcm_locked_pin for expected in expected_request.resets if expected.domain == item.domain) or item.dcm_locked_members != next(expected.dcm_locked_members for expected in expected_request.resets if expected.domain == item.domain) for item in evidence.resets if item.domain in {"ctrl", "rx", "tx"}): reasons.append("dcm_locked_membership_mismatch")
         else: reasons.append("reset_membership_mismatch")
-    if evidence.address_path != request.address_path: reasons.append("address_path_mismatch")
-    if evidence.irq_path != request.irq_path: reasons.append("irq_path_mismatch")
-    if evidence.rfdc_semantics != request.rfdc_semantics: reasons.append("rfdc_semantics_mismatch")
-    if evidence.mts_groups != request.mts_groups: reasons.append("mts_group_mismatch")
+    if evidence.address_path != expected_request.address_path: reasons.append("address_path_mismatch")
+    if evidence.irq_path != expected_request.irq_path: reasons.append("irq_path_mismatch")
+    if evidence.rfdc_semantics != expected_request.rfdc_semantics: reasons.append("rfdc_semantics_mismatch")
+    if evidence.mts_groups != expected_request.mts_groups: reasons.append("mts_group_mismatch")
     if not evidence.mts_configuration_verified: reasons.append("mts_configuration_unverified")
     if evidence.mts_runtime_verified: reasons.append("mts_runtime_overclaim")
     if not evidence.validate_bd_design_passed: reasons.append("validate_bd_design_failed")

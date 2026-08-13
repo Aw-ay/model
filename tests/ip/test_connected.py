@@ -21,6 +21,7 @@ from rfsoc_pulse_model.ip.connected import (
 from rfsoc_pulse_model.ip.lock import decode_production_lock_json
 from rfsoc_pulse_model.ip.platform import PsPlatformConfig
 from rfsoc_pulse_model.ip.types import HardwareArchitectureConfig
+from rfsoc_pulse_model.ip.evidence import build_catalog_request, canonical_json_bytes
 
 
 def sha(text: str) -> str:
@@ -31,28 +32,48 @@ def authority_bytes(name: str) -> bytes:
     return resources.files("rfsoc_pulse_model.config").joinpath(name).read_bytes()
 
 
-def fixture() -> tuple[object, ConnectedShellEvidence]:
-    probe = RfdcProbeProvenance(
-        vivado_version="2025.2", probe_tcl_sha256=sha("probe Tcl"),
-        raw_output_sha256=sha("probe output"), run_id=42,
-    )
-    request = build_connected_request(
-        ModelConfig.load_default(), HardwareArchitectureConfig.load_default(),
-        PsPlatformConfig.load_default(),
-        decode_production_lock_json(authority_bytes("ip_lock.json"), "fixture lock"),
-        probe,
+def authority_fixture() -> tuple[object, object, object]:
+    model = ModelConfig.load_default()
+    architecture = HardwareArchitectureConfig.load_default()
+    platform = PsPlatformConfig.load_default()
+    model_bytes = authority_bytes("default.json")
+    architecture_bytes = authority_bytes("ip_architecture.json")
+    platform_bytes = authority_bytes("ps_platform.json")
+    discovery_bytes = b"catalog discovery contract\n"
+    catalog_request_bytes = canonical_json_bytes(build_catalog_request(
+        architecture, hashlib.sha256(architecture_bytes).hexdigest(),
+        hashlib.sha256(discovery_bytes).hexdigest(),
+    ))
+    lock = dict(decode_production_lock_json(authority_bytes("ip_lock.json"), "fixture lock"))
+    lock.update({
+        "architecture_config_sha256": hashlib.sha256(architecture_bytes).hexdigest(),
+        "generated_tcl_sha256": hashlib.sha256(discovery_bytes).hexdigest(),
+        "catalog_request_sha256": hashlib.sha256(catalog_request_bytes).hexdigest(),
+        "vivado_version": architecture.vivado_version,
+    })
+    lock_bytes = canonical_json_bytes(lock)
+    return (
+        (model, architecture, platform, lock),
         ConnectedAuthorityBytes(
-            authority_bytes("default.json"), authority_bytes("ip_architecture.json"),
-            authority_bytes("ps_platform.json"), authority_bytes("ip_lock.json"),
+            model_bytes, architecture_bytes, platform_bytes, lock_bytes,
+            discovery_bytes, catalog_request_bytes,
         ),
+        RfdcProbeProvenance("2025.2", sha("probe Tcl"), sha("probe output"), 42),
+    )
+
+
+def fixture() -> tuple[object, ConnectedShellEvidence, tuple[object, ...]]:
+    (model, architecture, platform, lock), bytes_bundle, probe = authority_fixture()
+    request = build_connected_request(
+        model, architecture, platform, lock, probe, bytes_bundle,
     )
     evidence = ConnectedShellEvidence(
         evidence_schema_version=1,
         connected_request_sha256=sha(canonical_connected_json_bytes(request).decode("utf-8")),
-        model_config_sha256=hashlib.sha256(authority_bytes("default.json")).hexdigest(),
-        architecture_config_sha256=hashlib.sha256(authority_bytes("ip_architecture.json")).hexdigest(),
-        ps_platform_config_sha256=hashlib.sha256(authority_bytes("ps_platform.json")).hexdigest(),
-        production_lock_sha256=hashlib.sha256(authority_bytes("ip_lock.json")).hexdigest(),
+        model_config_sha256=hashlib.sha256(bytes_bundle.model_config_bytes).hexdigest(),
+        architecture_config_sha256=hashlib.sha256(bytes_bundle.architecture_config_bytes).hexdigest(),
+        ps_platform_config_sha256=hashlib.sha256(bytes_bundle.ps_platform_config_bytes).hexdigest(),
+        production_lock_sha256=hashlib.sha256(bytes_bundle.production_lock_bytes).hexdigest(),
         realization_tcl_sha256=sha("realize"), verification_tcl_sha256=sha("verify"),
         vivado_version="2025.2", device_part="xczu27dr-fsve1156-2-i",
         cells=request.cells, interfaces=request.interfaces,
@@ -65,28 +86,22 @@ def fixture() -> tuple[object, ConnectedShellEvidence]:
         report_hashes=(("cdc", sha("cdc")), ("clock_interaction", sha("clock")),
                        ("timing_summary", sha("timing")), ("utilization", sha("util"))),
     )
-    return request, evidence
+    return request, evidence, (model, architecture, platform, lock, probe, bytes_bundle)
 
 
 class ConnectedShellContractTest(unittest.TestCase):
     def test_authority_bytes_are_explicit_bound_immutable_inputs(self) -> None:
-        bundle = ConnectedAuthorityBytes(
-            authority_bytes("default.json"), authority_bytes("ip_architecture.json"),
-            authority_bytes("ps_platform.json"), authority_bytes("ip_lock.json"),
-        )
+        (model, architecture, platform, lock), bundle, probe = authority_fixture()
         with self.assertRaises(dataclasses.FrozenInstanceError):
             bundle.model_config_bytes = b"forged"  # type: ignore[misc]
         with self.assertRaisesRegex(ValueError, "model_config_bytes"):
             build_connected_request(
-                ModelConfig.load_default(), HardwareArchitectureConfig.load_default(),
-                PsPlatformConfig.load_default(),
-                decode_production_lock_json(authority_bytes("ip_lock.json"), "fixture lock"),
-                RfdcProbeProvenance("2025.2", "0" * 64, "1" * 64, 1),
+                model, architecture, platform, lock, probe,
                 dataclasses.replace(bundle, model_config_bytes=b"{}\n"),
             )
 
-    def test_request_rejects_forged_topology_even_before_matching_evidence(self) -> None:
-        request, _ = fixture()
+    def test_rebound_forged_request_and_evidence_cannot_authorize_readiness(self) -> None:
+        request, evidence, context = fixture()
         forged_cell = dataclasses.replace(
             request.cells[0], name="forged_rfdc", vlnv="xilinx.com:ip:not_rfdc:9.9"
         )
@@ -98,19 +113,56 @@ class ConnectedShellContractTest(unittest.TestCase):
             ("width", {"interfaces": tuple(
                 dataclasses.replace(item, width_bits=64) if item.name == "m00_axis" else item
                 for item in request.interfaces)}),
-            ("clock", {"clocks": request.clocks[:-1]}),
-            ("reset", {"resets": request.resets[:-1]}),
+            ("clock", {"clocks": tuple(
+                dataclasses.replace(item, frequency_hz=1) if item.domain == "rx" else item
+                for item in request.clocks)}),
+            ("reset", {"resets": tuple(
+                dataclasses.replace(item, reset_net="forged_reset") if item.domain == "rx" else item
+                for item in request.resets)}),
             ("address", {"address_path": ("forged",)}),
             ("irq", {"irq_path": ("forged",)}),
             ("mts", {"mts_groups": (dataclasses.replace(request.mts_groups[0], tiles=(9,)), request.mts_groups[1])}),
             ("nco", {"rfdc_semantics": dataclasses.replace(request.rfdc_semantics, dac_nco_frequency_hz=1)}),
         )
         for name, changes in cases:
+            with self.subTest(name=name):
+                forged_request = dataclasses.replace(request, **changes)
+                forged_evidence = dataclasses.replace(
+                    evidence,
+                    connected_request_sha256=hashlib.sha256(
+                        canonical_connected_json_bytes(forged_request)
+                    ).hexdigest(),
+                    cells=forged_request.cells, interfaces=forged_request.interfaces,
+                    clocks=forged_request.clocks, resets=forged_request.resets,
+                    address_path=forged_request.address_path, irq_path=forged_request.irq_path,
+                    rfdc_semantics=forged_request.rfdc_semantics,
+                    mts_groups=forged_request.mts_groups,
+                )
+                result = validate_connected_evidence(forged_request, forged_evidence, *context)
+                self.assertFalse(result.rfdc_shell_structural_ready)
+                self.assertIn("request_contract_mismatch", result.blocking_reasons)
+
+    def test_invalid_production_lock_cannot_build_rebound_ready_request(self) -> None:
+        (model, architecture, platform, lock), bundle, probe = authority_fixture()
+        lock_faults = {
+            "empty": {},
+            "missing_family": {**lock, "families": {k: v for k, v in lock["families"].items() if k != "rfdc"}},
+            "wrong_family": {**lock, "families": {**lock["families"], "rfdc": "xilinx.com:ip:usp_rf_data_converter:2.5"}},
+            "wrong_architecture_hash": {**lock, "architecture_config_sha256": "0" * 64},
+            "wrong_discovery_hash": {**lock, "generated_tcl_sha256": "0" * 64},
+            "wrong_catalog_request_hash": {**lock, "catalog_request_sha256": "0" * 64},
+            "wrong_vivado": {**lock, "vivado_version": "2024.1"},
+        }
+        for name, broken_lock in lock_faults.items():
             with self.subTest(name=name), self.assertRaises(ValueError):
-                dataclasses.replace(request, **changes)
+                broken_bytes = canonical_json_bytes(broken_lock)
+                build_connected_request(
+                    model, architecture, platform, broken_lock, probe,
+                    dataclasses.replace(bundle, production_lock_bytes=broken_bytes),
+                )
 
     def test_connected_json_wire_bytes_are_compact_sorted_utf8_and_one_lf(self) -> None:
-        request, _ = fixture()
+        request, _, _ = fixture()
         encoded = canonical_connected_json_bytes(request)
         self.assertTrue(encoded.endswith(b"\n"))
         self.assertFalse(encoded.endswith(b"\n\n"))
@@ -122,12 +174,12 @@ class ConnectedShellContractTest(unittest.TestCase):
         )
 
     def test_true_ready_fixture_has_exact_24_interfaces_and_never_sets_production_ready(self) -> None:
-        request, evidence = fixture()
+        request, evidence, context = fixture()
         self.assertEqual(len(request.cells), 8)
         self.assertEqual(len(request.interfaces), 24)
         self.assertEqual(len([item for item in request.interfaces if item.direction == "master"]), 16)
         self.assertEqual(len([item for item in request.interfaces if item.direction == "slave"]), 8)
-        result = validate_connected_evidence(request, evidence)
+        result = validate_connected_evidence(request, evidence, *context)
         self.assertTrue(result.rfdc_shell_structural_ready)
         self.assertFalse(result.production_integration_ready)
         self.assertEqual(result.blocking_reasons, ())
@@ -142,9 +194,13 @@ class ConnectedShellContractTest(unittest.TestCase):
             probe.run_id = 2  # type: ignore[misc]
 
     def test_each_structural_gate_has_stable_reason(self) -> None:
-        request, evidence = fixture()
+        request, evidence, context = fixture()
         faults = {
             "request": dataclasses.replace(evidence, connected_request_sha256="0" * 64),
+            "model_config_sha256": dataclasses.replace(evidence, model_config_sha256="0" * 64),
+            "architecture_config_sha256": dataclasses.replace(evidence, architecture_config_sha256="0" * 64),
+            "ps_platform_config_sha256": dataclasses.replace(evidence, ps_platform_config_sha256="0" * 64),
+            "production_lock_sha256": dataclasses.replace(evidence, production_lock_sha256="0" * 64),
             "part": dataclasses.replace(evidence, device_part="wrong"),
             "vivado": dataclasses.replace(evidence, vivado_version="2024.1"),
             "cell": dataclasses.replace(evidence, cells=evidence.cells[:-1]),
@@ -168,15 +224,19 @@ class ConnectedShellContractTest(unittest.TestCase):
             "synthesis": dataclasses.replace(evidence, synthesis_completed=False),
             "cdc": dataclasses.replace(evidence, cdc_safe=False),
             "mts": dataclasses.replace(evidence, mts_runtime_verified=True),
+            "rfdc": dataclasses.replace(evidence, rfdc_semantics=dataclasses.replace(evidence.rfdc_semantics, dac_nco_frequency_hz=1)),
+            "mts_group": dataclasses.replace(evidence, mts_groups=(dataclasses.replace(evidence.mts_groups[0], tiles=(9,)), evidence.mts_groups[1])),
+            "mts_configuration": dataclasses.replace(evidence, mts_configuration_verified=False),
+            "clock_safety": dataclasses.replace(evidence, clock_safety_verified=False),
         }
         for name, corrupted in faults.items():
             with self.subTest(name=name):
-                result = validate_connected_evidence(request, corrupted)
+                result = validate_connected_evidence(request, corrupted, *context)
                 self.assertFalse(result.rfdc_shell_structural_ready)
                 self.assertIn(name if name != "validation" else "validate_bd_design", " ".join(result.blocking_reasons))
 
     def test_parser_rejects_noncanonical_duplicate_unknown_and_wrong_scalar_bytes(self) -> None:
-        _, evidence = fixture()
+        _, evidence, _ = fixture()
         encoded = canonical_connected_json_bytes(evidence)
         self.assertEqual(parse_connected_evidence(encoded), evidence)
         with self.assertRaisesRegex(ValueError, "canonical"):
