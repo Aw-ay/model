@@ -64,12 +64,18 @@ class RfdcProbeContractTests(unittest.TestCase):
         self.assertIn("CONFIG.ADC3_Enable", first)
         self.assertIn("CONFIG.ADC0_PLL_Enable {true}", first)
         self.assertIn("CONFIG.ADC_Data_Width00 {2}", first)
+        self.assertIn("CONFIG.ADC_Data_Type00 {1}", first)
         self.assertIn("CONFIG.ADC_Mixer_Type00 {2}", first)
         self.assertIn("CONFIG.DAC0_Enable", first)
         self.assertIn("CONFIG.DAC1_Enable", first)
         self.assertIn("CONFIG.DAC0_PLL_Enable {true}", first)
         self.assertIn("CONFIG.DAC_Data_Width00 {4}", first)
+        self.assertIn("CONFIG.DAC_Data_Type00 {0}", first)
         self.assertIn("CONFIG.DAC_Mixer_Type00 {2}", first)
+        self.assertIn("get_msg_config -severity WARNING -count", first)
+        self.assertIn("CURRENT_RUN_COUNT", first)
+        self.assertNotIn("report_messages", first)
+        self.assertLess(first.index("set rfdc_probe_message_base(WARNING)"), first.index("set_property -dict"))
         self.assertNotIn("zynq_ultra_ps_e", first)
         self.assertNotIn("smartconnect", first)
 
@@ -92,6 +98,7 @@ class RfdcProbeContractTests(unittest.TestCase):
         self.assertEqual(result.provenance.raw_output_sha256, _sha(raw))
         self.assertEqual(result.provenance.run_id, 7)
         self.assertEqual(result.cells, (("rfdc_0", "xilinx.com:ip:usp_rf_data_converter:2.6"),))
+        self.assertEqual(result.messages, (("INFO", "PROBE_START", "clean"),))
         self.assertFalse(result.common_rx_clock_legality_verified)
         self.assertFalse(result.mts_runtime_verified)
         self.assertEqual(encoded, canonical_rfdc_probe_json_bytes(result))
@@ -172,7 +179,9 @@ class RfdcProbeContractTests(unittest.TestCase):
         mutations = {
             "adc_nco": (b"ADC_NCO_Freq00\t2.800", b"ADC_NCO_Freq00\t1.000"),
             "adc_decimation": (b"ADC_Decimation_Mode00\t8", b"ADC_Decimation_Mode00\t4"),
+            "adc_data_type": (b"ADC_Data_Type00\t1", b"ADC_Data_Type00\t0"),
             "dac_mixer": (b"DAC_Mixer_Mode00\t0", b"DAC_Mixer_Mode00\t2"),
+            "dac_data_type": (b"DAC_Data_Type00\t0", b"DAC_Data_Type00\t1"),
             "dac_width": (b"DAC_Data_Width00\t4", b"DAC_Data_Width00\t2"),
             "fabric": (b"ADC0_Fabric_Freq\t250.000", b"ADC0_Fabric_Freq\t125.000"),
             "pll": (b"ADC0_PLL_Enable\ttrue", b"ADC0_PLL_Enable\tfalse"),
@@ -184,6 +193,61 @@ class RfdcProbeContractTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 build_rfdc_probe_evidence(raw.replace(old, new, 1), tcl, model, architecture, run_id=2)
 
+    def test_message_records_reject_warning_critical_and_error(self) -> None:
+        from rfsoc_pulse_model.ip.rfdc_probe import (
+            build_rfdc_probe_evidence,
+            emit_rfdc_probe_tcl,
+        )
+
+        model = ModelConfig.load_default()
+        architecture = HardwareArchitectureConfig.load_default()
+        tcl = emit_rfdc_probe_tcl(model, architecture).encode("utf-8")
+        raw = self._measured_raw_fixture()
+        for severity in (b"WARNING", b"CRITICAL_WARNING", b"ERROR"):
+            corrupted = raw.replace(
+                b"RFDC_PROBE\tEND",
+                b"RFDC_PROBE\tMESSAGE\t" + severity + b"\tIP_Flow_19_3374\tdiagnostic\nRFDC_PROBE\tEND",
+            )
+            with self.subTest(severity=severity), self.assertRaises(ValueError):
+                build_rfdc_probe_evidence(corrupted, tcl, model, architecture, run_id=2)
+
+    def test_message_records_reject_duplicate_unsafe_and_noncanonical_shapes(self) -> None:
+        from rfsoc_pulse_model.ip.rfdc_probe import (
+            build_rfdc_probe_evidence,
+            emit_rfdc_probe_tcl,
+        )
+
+        model = ModelConfig.load_default()
+        architecture = HardwareArchitectureConfig.load_default()
+        tcl = emit_rfdc_probe_tcl(model, architecture).encode("utf-8")
+        raw = self._measured_raw_fixture()
+        cases = (
+            raw.replace(b"RFDC_PROBE\tEND", b"RFDC_PROBE\tMESSAGE\tINFO\tID\tfirst\nRFDC_PROBE\tMESSAGE\tINFO\tID\tsecond\nRFDC_PROBE\tEND"),
+            raw.replace(b"RFDC_PROBE\tEND", b"RFDC_PROBE\tMESSAGE\tINFO\tID\tunsafe;message\nRFDC_PROBE\tEND"),
+            raw.replace(b"RFDC_PROBE\tEND", b"RFDC_PROBE\tMESSAGE\tINFO\tID\nRFDC_PROBE\tEND"),
+        )
+        for corrupted in cases:
+            with self.subTest(corrupted=corrupted[-80:]), self.assertRaises(ValueError):
+                build_rfdc_probe_evidence(corrupted, tcl, model, architecture, run_id=2)
+
+    def test_canonical_evidence_parser_rechecks_message_and_config_contracts(self) -> None:
+        from rfsoc_pulse_model.ip.rfdc_probe import (
+            build_rfdc_probe_evidence,
+            emit_rfdc_probe_tcl,
+            parse_rfdc_probe_evidence,
+        )
+
+        model = ModelConfig.load_default()
+        architecture = HardwareArchitectureConfig.load_default()
+        tcl = emit_rfdc_probe_tcl(model, architecture).encode("utf-8")
+        encoded = build_rfdc_probe_evidence(self._measured_raw_fixture(), tcl, model, architecture, run_id=2)
+        for name, old, new in (
+            ("warning", b'[["INFO","PROBE_START","clean"]]', b'[["WARNING","PROBE_START","clean"]]'),
+            ("data_type", b'"ADC_Data_Type00","1"', b'"ADC_Data_Type00","0"'),
+        ):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                parse_rfdc_probe_evidence(encoded.replace(old, new, 1), tcl, model, architecture)
+
     @staticmethod
     def _measured_raw_fixture() -> bytes:
         """Complete exact classification measured from Vivado 2025.2 run ID 2."""
@@ -192,6 +256,7 @@ class RfdcProbeContractTests(unittest.TestCase):
             "RFDC_PROBE\tVIVADO_VERSION\t2025.2",
             "RFDC_PROBE\tDEVICE_PART\txczu27dr-fsve1156-2-i",
             "RFDC_PROBE\tCELL\trfdc_0\txilinx.com:ip:usp_rf_data_converter:2.6",
+            "RFDC_PROBE\tMESSAGE\tINFO\tPROBE_START\tclean",
         ]
         for tile in range(4):
             records.extend((
@@ -212,6 +277,7 @@ class RfdcProbeContractTests(unittest.TestCase):
                 suffix = f"{tile}{slice_index}"
                 records.extend((
                     f"RFDC_PROBE\tCONFIG\tADC_Slice{suffix}_Enable\ttrue",
+                    f"RFDC_PROBE\tCONFIG\tADC_Data_Type{suffix}\t1",
                     f"RFDC_PROBE\tCONFIG\tADC_Decimation_Mode{suffix}\t8",
                     f"RFDC_PROBE\tCONFIG\tADC_Data_Width{suffix}\t2",
                     f"RFDC_PROBE\tCONFIG\tADC_Mixer_Type{suffix}\t2",
@@ -224,6 +290,7 @@ class RfdcProbeContractTests(unittest.TestCase):
                 suffix = f"{tile}{slice_index}"
                 records.extend((
                     f"RFDC_PROBE\tCONFIG\tDAC_Slice{suffix}_Enable\ttrue",
+                    f"RFDC_PROBE\tCONFIG\tDAC_Data_Type{suffix}\t0",
                     f"RFDC_PROBE\tCONFIG\tDAC_Interpolation_Mode{suffix}\t8",
                     f"RFDC_PROBE\tCONFIG\tDAC_Data_Width{suffix}\t4",
                     f"RFDC_PROBE\tCONFIG\tDAC_Mixer_Type{suffix}\t2",
