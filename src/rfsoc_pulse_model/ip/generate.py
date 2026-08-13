@@ -200,7 +200,9 @@ def generate_connected_rfdc_shell(
     request = build_connected_request(
         model, architecture, platform, production_lock, probe.provenance, authority_bytes
     )
-    artifacts = emit_connected_tcl(request, platform, probe.applied_config)
+    artifacts = emit_connected_tcl(
+        request, platform, probe.applied_config, probe.interfaces
+    )
     metadata_root = root / "metadata"
     vivado_root = root / "vivado"
     metadata_root.mkdir(parents=True, exist_ok=True)

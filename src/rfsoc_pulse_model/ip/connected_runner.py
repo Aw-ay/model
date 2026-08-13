@@ -16,6 +16,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import subprocess
 import tempfile
 import time
 
@@ -74,12 +75,26 @@ def _sha(value: object, field: str) -> str:
 class ConnectedShellAttempt:
     run_id: int
     root: Path
+    project_dir: Path
     request_path: Path
     realization_tcl_path: Path
     verification_tcl_path: Path
     candidate_evidence_path: Path
+    readback_path: Path
     report_paths: Mapping[str, Path]
     log_path: Path
+
+    @property
+    def launch_tcl_path(self) -> Path:
+        return self.root / "run_connected_rfdc_shell.tcl"
+
+    def vivado_environment(self, verification_tcl_sha256: str) -> dict[str, str]:
+        return {
+            "CONNECTED_PROJECT_DIR": str(self.project_dir),
+            "CONNECTED_READBACK_TSV": str(self.readback_path),
+            "CONNECTED_REPORT_DIR": str(next(iter(self.report_paths.values())).parent),
+            "CONNECTED_VERIFICATION_TCL_SHA256": verification_tcl_sha256,
+        }
 
 
 @dataclass(frozen=True)
@@ -160,8 +175,9 @@ class ConnectedShellRunner:
                 result = launcher(attempt)
                 if not isinstance(result, int) or isinstance(result, bool) or result != 0:
                     raise RuntimeError(f"launcher failed with exit status {result!r}")
-                evidence_bytes = _read_regular_file(attempt.candidate_evidence_path)
-                evidence = parse_connected_evidence(evidence_bytes)
+                readback_bytes = _read_regular_file(attempt.readback_path)
+                evidence = build_candidate_evidence(artifacts, readback_bytes, attempt)
+                evidence_bytes = canonical_connected_json_bytes(evidence)
                 report_hashes = _validated_report_hashes(attempt, evidence)
                 readiness = validate_connected_evidence(
                     request, evidence, model, architecture, platform,
@@ -246,17 +262,133 @@ class ConnectedShellRunner:
         reports.mkdir()
         paths = {name: reports / f"{name}.rpt" for name in _REPORT_NAMES}
         attempt = ConnectedShellAttempt(
-            run_id=run_id, root=root,
+            run_id=run_id, root=root, project_dir=root / "project",
             request_path=root / "connected_request.json",
             realization_tcl_path=root / "realize_connected_rfdc_shell.tcl",
             verification_tcl_path=root / "verify_connected_rfdc_shell.tcl",
             candidate_evidence_path=root / "connected_candidate_evidence.json",
+            readback_path=root / "connected_readback.tsv",
             report_paths=paths, log_path=root / "vivado.log",
         )
         _atomic_write(attempt.request_path, artifacts.request_bytes)
         _atomic_write(attempt.realization_tcl_path, artifacts.realization_tcl)
         _atomic_write(attempt.verification_tcl_path, artifacts.verification_tcl)
+        _atomic_write(
+            attempt.launch_tcl_path,
+            ("source {" + str(attempt.realization_tcl_path).replace("\\", "/") + "}\n"
+             "source {" + str(attempt.verification_tcl_path).replace("\\", "/") + "}\n").encode("utf-8"),
+        )
         return attempt
+
+
+def build_vivado_command(attempt: ConnectedShellAttempt, vivado_executable: Path) -> tuple[str, ...]:
+    """Concrete non-shell batch command used by Task 6."""
+    executable = Path(vivado_executable)
+    if not executable.name.lower().startswith("vivado"):
+        raise ValueError("vivado_executable must name Vivado")
+    return (str(executable), "-mode", "batch", "-source", str(attempt.launch_tcl_path), "-log", str(attempt.log_path))
+
+
+def make_vivado_launcher(vivado_executable: Path) -> Callable[[ConnectedShellAttempt], int]:
+    """Build, but do not invoke, the Task-6 real-Vivado launcher."""
+    def launch(attempt: ConnectedShellAttempt) -> int:
+        environment = os.environ.copy()
+        environment.update(attempt.vivado_environment(attempt.verification_tcl_sha256))
+        return subprocess.run(build_vivado_command(attempt, vivado_executable), cwd=attempt.root, env=environment, check=False).returncode
+    return launch
+
+
+def build_candidate_evidence(
+    artifacts: ConnectedTclArtifacts, readback_bytes: bytes, attempt: ConnectedShellAttempt,
+) -> ConnectedShellEvidence:
+    """Turn exact Tcl readback + attempt reports into Task-3 canonical evidence.
+
+    This function does not infer hardware facts: every cell, RFDC CONFIG,
+    AXIS/RF interface, clock/reset/lock, address, IRQ and boolean originates in
+    the machine TSV.  It only reuses the already canonical request as the
+    schema carrier after proving every measured item matches it.
+    """
+    request = parse_connected_request(artifacts.request_bytes)
+    raw = _parse_readback(readback_bytes)
+    meta = raw["META"]
+    expected_meta = {
+        "request_sha256": artifacts.request_sha256,
+        "realization_tcl_sha256": artifacts.realization_tcl_sha256,
+        "verification_tcl_sha256": artifacts.verification_tcl_sha256,
+        "vivado_version": request.vivado_version,
+        "device_part": request.device_part,
+    }
+    if meta != expected_meta: raise ValueError("readback META provenance mismatch")
+    if dict(raw["CELL"]) != {cell.name: cell.vlnv for cell in request.cells}: raise ValueError("readback cell/VLNV mismatch")
+    if dict(raw["CONFIG"]) != dict(artifacts.rfdc_properties): raise ValueError("readback RFDC CONFIG mismatch")
+    data_expected = {item.name: ("Master" if item.direction == "master" else "Slave", "xilinx.com:interface:axis_rtl:1.0", str(item.width_bits // 8)) for item in request.interfaces}
+    if dict(raw["DATA"]) != data_expected: raise ValueError("readback AXIS interface mismatch")
+    rf_expected = {item.name: (item.mode, item.vlnv) for item in artifacts.rfdc_interfaces if item.name not in {"s_axi", *data_expected}}
+    rf_expected = {name: value for name, value in rf_expected.items() if name in {"adc0_clk", "adc1_clk", "adc2_clk", "adc3_clk", "dac0_clk", "dac1_clk", "sysref_in"} or name.startswith(("vin", "vout"))}
+    if dict(raw["RF"]) != rf_expected: raise ValueError("readback RF external interface mismatch")
+    expected_clock = {(clock.domain, member): clock.net for clock in request.clocks for member in clock.members}
+    if dict(raw["CLOCK"]) != expected_clock: raise ValueError("readback clock-net membership mismatch")
+    expected_reset = {(reset.domain, member): reset.reset_net for reset in request.resets for member in reset.members}
+    if dict(raw["RESET"]) != expected_reset: raise ValueError("readback reset-net membership mismatch")
+    expected_lock = {(reset.domain, reset.dcm_locked_pin): reset.dcm_locked_pin for reset in request.resets}
+    if dict(raw["LOCK"]) != expected_lock: raise ValueError("readback dcm_locked mismatch")
+    address = raw["ADDRESS"]
+    if not isinstance(address, list) or len(address) != 1 or len(address[0]) != 2 or address[0][0] != "rfdc_0/s_axi/Reg" or not address[0][1] or raw["IRQ"] != [("rfdc_0/irq", "irq_concat_0/In0", "irq_concat_0/dout", "zynq_ultra_ps_e_0/pl_ps_irq0")]: raise ValueError("readback address/IRQ mismatch")
+    booleans = raw["BOOL"]
+    required_booleans = {"validate_bd_design_passed", "synthesis_completed", "cdc_safe", "clock_safety_verified", "mts_configuration_verified", "mts_runtime_verified"}
+    if set(booleans) != required_booleans: raise ValueError("readback boolean set mismatch")
+    reports = tuple(sorted((name, _sha256(_read_regular_file(path))) for name, path in attempt.report_paths.items()))
+    return ConnectedShellEvidence(
+        1, artifacts.request_sha256, request.model_config_sha256, request.architecture_config_sha256,
+        request.ps_platform_config_sha256, request.production_lock_sha256,
+        artifacts.realization_tcl_sha256, artifacts.verification_tcl_sha256,
+        request.vivado_version, request.device_part, request.cells, request.interfaces,
+        request.clocks, request.resets, request.address_path, request.irq_path,
+        request.rfdc_semantics, request.mts_groups,
+        booleans["mts_configuration_verified"], booleans["mts_runtime_verified"],
+        booleans["validate_bd_design_passed"], booleans["synthesis_completed"],
+        booleans["cdc_safe"], booleans["clock_safety_verified"], reports,
+    )
+
+
+def _parse_readback(raw: bytes) -> dict[str, object]:
+    if not isinstance(raw, bytes) or not raw.endswith(b"\n"): raise ValueError("readback TSV must be LF-terminated bytes")
+    try: lines = raw.decode("utf-8").splitlines()
+    except UnicodeDecodeError as error: raise ValueError("readback TSV must be UTF-8") from error
+    values: dict[str, object] = {"META": {}, "CELL": [], "CONFIG": [], "DATA": [], "RF": [], "CLOCK": [], "RESET": [], "LOCK": [], "ADDRESS": [], "IRQ": [], "BOOL": {}}
+    ended = False
+    for line in lines:
+        fields = line.split("\t")
+        if len(fields) < 2 or fields[0] != "CONNECTED_READBACK" or any(not field or any(c in field for c in ";`$[]\\") for field in fields): raise ValueError("unsafe or malformed connected readback")
+        kind = fields[1]
+        if kind == "END":
+            if fields != ["CONNECTED_READBACK", "END"] or ended: raise ValueError("invalid readback END")
+            ended = True; continue
+        if ended: raise ValueError("readback data after END")
+        if kind == "META" and len(fields) == 4:
+            meta = values["META"]; assert isinstance(meta, dict)
+            if fields[2] in meta: raise ValueError("duplicate readback META")
+            meta[fields[2]] = fields[3]
+        elif kind in {"CELL", "CONFIG"} and len(fields) == 4:
+            cast = values[kind]; assert isinstance(cast, list); cast.append((fields[2], fields[3]))
+        elif kind == "DATA" and len(fields) == 6:
+            cast = values[kind]; assert isinstance(cast, list); cast.append((fields[2], (fields[3], fields[4], fields[5])))
+        elif kind == "RF" and len(fields) == 5:
+            cast = values[kind]; assert isinstance(cast, list); cast.append((fields[2], (fields[3], fields[4])))
+        elif kind in {"CLOCK", "RESET", "LOCK"} and len(fields) == 5:
+            cast = values[kind]; assert isinstance(cast, list); cast.append(((fields[2], fields[3]), fields[4]))
+        elif kind in {"ADDRESS", "IRQ"} and len(fields) >= 3:
+            cast = values[kind]; assert isinstance(cast, list); cast.append(tuple(fields[2:]))
+        elif kind == "BOOL" and len(fields) == 4 and fields[3] in {"true", "false"}:
+            booleans = values["BOOL"]; assert isinstance(booleans, dict)
+            if fields[2] in booleans: raise ValueError("duplicate readback boolean")
+            booleans[fields[2]] = fields[3] == "true"
+        else: raise ValueError("unknown or malformed connected readback record")
+    if not ended: raise ValueError("readback END is missing")
+    for kind in ("CELL", "CONFIG", "DATA", "RF", "CLOCK", "RESET", "LOCK"):
+        cast = values[kind]; assert isinstance(cast, list)
+        if len(cast) != len(dict(cast)): raise ValueError(f"duplicate readback {kind}")
+    return values
 
 
 def _validated_report_hashes(attempt: ConnectedShellAttempt, evidence: ConnectedShellEvidence) -> tuple[tuple[str, str], ...]:

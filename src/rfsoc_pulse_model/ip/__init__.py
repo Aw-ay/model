@@ -57,7 +57,13 @@ from .rfdc_probe import (
     parse_rfdc_probe_evidence,
 )
 from .connected_tcl import ConnectedTclArtifacts, emit_connected_tcl
-from .connected_runner import ConnectedShellAttempt, ConnectedShellRunner
+from .connected_runner import (
+    ConnectedShellAttempt,
+    ConnectedShellRunner,
+    build_candidate_evidence,
+    build_vivado_command,
+    make_vivado_launcher,
+)
 if TYPE_CHECKING:
     from .lock import (
         GenerationMode,
@@ -81,6 +87,8 @@ __all__ = [
     "ConnectedShellAttempt",
     "ConnectedShellRunner",
     "ConnectedTclArtifacts",
+    "build_candidate_evidence",
+    "build_vivado_command",
     "GenerationMode",
     "Gem3BoardIoConfig",
     "CatalogEvidence",
@@ -117,6 +125,7 @@ __all__ = [
     "canonical_rfdc_probe_json_bytes",
     "emit_rfdc_probe_tcl",
     "emit_connected_tcl",
+    "make_vivado_launcher",
     "parse_catalog_evidence",
     "parse_connected_evidence",
     "parse_connected_request",

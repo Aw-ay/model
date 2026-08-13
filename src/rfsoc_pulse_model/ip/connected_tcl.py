@@ -1,9 +1,4 @@
-"""Deterministic Tcl emission for the connected RFDC shell.
-
-The emitter is deliberately a pure transformation.  It neither launches
-Vivado nor publishes acceptance state; ``connected_runner`` owns that
-transactional boundary.
-"""
+"""Pure, deterministic realization/readback Tcl for the connected RFDC shell."""
 
 from __future__ import annotations
 
@@ -13,188 +8,154 @@ import re
 
 from .connected import ConnectedShellRequest, canonical_connected_json_bytes
 from .platform import PsPlatformConfig
+from .rfdc_probe import RfdcProbeInterface
 
 
-_SAFE_TCL_TOKEN = re.compile(r"[A-Za-z0-9_.:+/-]+\Z")
-_SAFE_TCL_PROPERTY = re.compile(r"CONFIG\.[A-Za-z0-9_]+(?:__[A-Za-z0-9_]+)*\Z")
-_SAFE_RFDC_PROPERTY = re.compile(r"[A-Za-z0-9_]+\Z")
-_SAFE_TCL_VALUE = re.compile(r"[^{}\[\]$;\\\r\n]+\Z")
+_TOKEN = re.compile(r"[A-Za-z0-9_.:+/-]+\Z")
+_VALUE = re.compile(r"[^{}\[\]$;`\\\r\n]+\Z")
+_RF_PROPERTY = re.compile(r"[A-Za-z0-9_]+\Z")
 
 
-def _sha256(data: bytes) -> str:
+def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _safe(value: str, field: str, *, property_name: bool = False, literal_value: bool = False) -> str:
-    pattern = _SAFE_TCL_VALUE if literal_value else (_SAFE_TCL_PROPERTY if property_name else _SAFE_TCL_TOKEN)
-    if not isinstance(value, str) or not pattern.fullmatch(value):
+def _token(value: str, field: str) -> str:
+    if not isinstance(value, str) or not _TOKEN.fullmatch(value):
         raise ValueError(f"{field} is not a safe Tcl token")
     return value
 
 
-def _property_lines(properties: tuple[tuple[str, str], ...], cell: str) -> list[str]:
-    if not properties or len({name for name, _ in properties}) != len(properties):
-        raise ValueError("RFDC properties must be a nonempty unique tuple")
-    lines = ["set_property -dict [list"]
-    for name, value in properties:
-        if not isinstance(name, str) or not _SAFE_RFDC_PROPERTY.fullmatch(name):
-            raise ValueError("RFDC property is not a safe Tcl token")
-        lines.append(f"  {{CONFIG.{name}}} {{{_safe(value, 'RFDC property value', literal_value=True)}}}")
-    lines.append(f"] [get_bd_cells {{{_safe(cell, 'RFDC cell')}}}]")
-    return lines
+def _value(value: str, field: str) -> str:
+    if not isinstance(value, str) or not _VALUE.fullmatch(value):
+        raise ValueError(f"{field} is not safe for Tcl braces")
+    return value
 
 
 @dataclass(frozen=True)
 class ConnectedTclArtifacts:
-    """All deterministic, non-lifecycle bytes needed for one shell attempt."""
-
     request_bytes: bytes
     realization_tcl: bytes
     verification_tcl: bytes
+    rfdc_properties: tuple[tuple[str, str], ...]
+    rfdc_interfaces: tuple[RfdcProbeInterface, ...]
 
     @property
-    def request_sha256(self) -> str:
-        return _sha256(self.request_bytes)
-
+    def request_sha256(self) -> str: return _sha(self.request_bytes)
     @property
-    def realization_tcl_sha256(self) -> str:
-        return _sha256(self.realization_tcl)
-
+    def realization_tcl_sha256(self) -> str: return _sha(self.realization_tcl)
     @property
-    def verification_tcl_sha256(self) -> str:
-        return _sha256(self.verification_tcl)
+    def verification_tcl_sha256(self) -> str: return _sha(self.verification_tcl)
+
+
+def _external_rf_interfaces(items: tuple[RfdcProbeInterface, ...]) -> tuple[RfdcProbeInterface, ...]:
+    if not isinstance(items, tuple) or any(not isinstance(item, RfdcProbeInterface) for item in items):
+        raise ValueError("rfdc_interfaces must be Task-4 RfdcProbeInterface values")
+    expected = {"adc0_clk", "adc1_clk", "adc2_clk", "adc3_clk", "dac0_clk", "dac1_clk", "sysref_in"}
+    expected |= {f"vin{tile}_{suffix}" for tile in range(4) for suffix in ("01", "23")}
+    expected |= {f"vout{tile}{index}" for tile in range(2) for index in range(4)}
+    selected = tuple(sorted((item for item in items if item.name in expected), key=lambda item: item.name))
+    if {item.name for item in selected} != expected:
+        raise ValueError("Task-4 RF reference/SYSREF/analogue inventory is incomplete")
+    return selected
 
 
 def emit_connected_tcl(
     request: ConnectedShellRequest,
     platform: PsPlatformConfig,
     rfdc_properties: tuple[tuple[str, str], ...],
+    rfdc_interfaces: tuple[RfdcProbeInterface, ...],
 ) -> ConnectedTclArtifacts:
-    """Emit the exact shell realization and attempt-local verification Tcl.
+    """Emit disk-backed realization plus complete machine-readback protocol.
 
-    ``rfdc_properties`` must come from a parsed Task-4 probe result's exact
-    ``applied_config`` tuple.  The public API accepts the tuple instead of a
-    raw diagnostic file so this layer never parses TSV or recreates RFDC
-    configuration policy.
+    The verification Tcl emits only actual readback TSV and reports.  The
+    runner converts that protocol into Task-3 canonical evidence after hashing
+    reports, so Tcl never has to implement JSON or SHA-256.
     """
-
-    if not isinstance(request, ConnectedShellRequest):
-        raise ValueError("request must be a ConnectedShellRequest")
-    if not isinstance(platform, PsPlatformConfig):
-        raise ValueError("platform must be a PsPlatformConfig")
-    if request.device_part != platform.device_part:
-        raise ValueError("request/platform device part mismatch")
+    if not isinstance(request, ConnectedShellRequest) or not isinstance(platform, PsPlatformConfig):
+        raise ValueError("request and platform must be validated authority objects")
+    if request.device_part != platform.device_part: raise ValueError("request/platform device part mismatch")
     cells = {cell.name: cell.vlnv for cell in request.cells}
-    if len(cells) != 8:
-        raise ValueError("request must contain exactly eight unique cells")
+    if len(cells) != 8: raise ValueError("request must contain exactly eight cells")
     rfdc = next((name for name, vlnv in cells.items() if vlnv == "xilinx.com:ip:usp_rf_data_converter:2.6"), None)
-    if rfdc is None:
-        raise ValueError("request lacks exact RFDC 2.6 cell")
-    for cell_name, vlnv in cells.items():
-        _safe(cell_name, "cell name")
-        _safe(vlnv, "cell VLNV")
-    for interface in request.interfaces:
-        _safe(interface.name, "interface name")
-    for name, value in platform.properties.items():
-        _safe(name, "PS property", property_name=True)
-        _safe(value, "PS property value", literal_value=True)
-
+    if rfdc is None: raise ValueError("request lacks exact RFDC 2.6")
+    for name, vlnv in cells.items(): _token(name, "cell name"); _token(vlnv, "cell VLNV")
+    for name, value in platform.properties.items(): _token(name, "PS property"); _value(value, "PS property value")
+    if not rfdc_properties or len(set(rfdc_properties)) != len(rfdc_properties): raise ValueError("RFDC properties must be unique and nonempty")
+    for name, value in rfdc_properties:
+        if not isinstance(name, str) or not _RF_PROPERTY.fullmatch(name): raise ValueError("RFDC property is unsafe")
+        _value(value, "RFDC property value")
+    external_rf = _external_rf_interfaces(rfdc_interfaces)
     ps = next(name for name, vlnv in cells.items() if vlnv == platform.ps_vlnv)
-    smartconnect = next(name for name, vlnv in cells.items() if ":smartconnect:" in vlnv)
-    resets = {item.domain: item for item in request.resets}
-    reset_cells = {
-        domain: next(member.split("/")[0] for member in resets[domain].dcm_locked_members if "/" in member)
-        for domain in ("ctrl", "rx", "tx")
-    }
-    irq_concat = next(name for name, vlnv in cells.items() if ":xlconcat:" in vlnv)
+    smart = next(name for name, vlnv in cells.items() if ":smartconnect:" in vlnv)
     inverter = next(name for name, vlnv in cells.items() if ":util_vector_logic:" in vlnv)
-
+    irq = next(name for name, vlnv in cells.items() if ":xlconcat:" in vlnv)
+    resets = {reset.domain: reset for reset in request.resets}
+    reset_cells = {domain: next(member.split("/")[0] for member in resets[domain].dcm_locked_members if "/" in member) for domain in ("ctrl", "rx", "tx")}
     lines = [
-        "# Generated file. Modify the Python model, not this Tcl.",
+        "# Generated. Edit the Python model, never this Tcl.",
+        "if {![info exists ::env(CONNECTED_PROJECT_DIR)]} { error {CONNECTED_PROJECT_DIR is required} }",
         "if {[llength [get_projects -quiet]] == 0} {",
-        f"  create_project -in_memory -part {{{_safe(request.device_part, 'device part')}}}",
+        f"  create_project connected_rfdc_shell $::env(CONNECTED_PROJECT_DIR) -part {{{_token(request.device_part, 'part')}}}",
         "} else {",
-        "  set current_part [get_property PART [current_project]]",
-        f"  if {{$current_part ne {{{_safe(request.device_part, 'device part')}}}}} {{",
-        f"    error \"existing project PART mismatch: expected {request.device_part}, got $current_part\"",
-        "  }",
+        f"  if {{[get_property PART [current_project]] ne {{{_token(request.device_part, 'part')}}}}} {{ error {{existing project PART mismatch}} }}",
         "}",
         "if {[current_bd_design -quiet] ne {}} { error {current BD must be empty} }",
         "create_bd_design {connected_rfdc_shell}",
-        "",
     ]
-    for name in sorted(cells):
-        lines.append(f"create_bd_cell -type ip -vlnv {{{cells[name]}}} {{{name}}}")
-    lines.extend(["", "# Reviewed processing-system board settings.", "set_property -dict [list"])
-    for name, value in sorted(platform.properties.items()):
-        lines.append(f"  {{{name}}} {{{value}}}")
-    lines.extend([f"] [get_bd_cells {{{ps}}}]", "", "# RFDC settings measured by Task-4 probe."])
-    lines.extend(_property_lines(rfdc_properties, rfdc))
-    lines.extend([
-        "",
-        "# 100 MHz AXI-Lite control plane and reset inversion.",
-        f"connect_bd_net [get_bd_pins {{{ps}/pl_clk0}}] [get_bd_pins {{{smartconnect}/aclk}}] [get_bd_pins {{{rfdc}/s_axi_aclk}}] [get_bd_pins {{{reset_cells['ctrl']}/slowest_sync_clk}}]",
-        f"connect_bd_intf_net [get_bd_intf_pins {{{ps}/M_AXI_HPM0_FPD}}] [get_bd_intf_pins {{{smartconnect}/S00_AXI}}]",
-        f"connect_bd_intf_net [get_bd_intf_pins {{{smartconnect}/M00_AXI}}] [get_bd_intf_pins {{{rfdc}/s_axi}}]",
+    for name in sorted(cells): lines.append(f"create_bd_cell -type ip -vlnv {{{cells[name]}}} {{{name}}}")
+    lines += ["set_property -dict [list"]
+    lines += [f"  {{{name}}} {{{value}}}" for name, value in sorted(platform.properties.items())]
+    lines += [f"] [get_bd_cells {{{ps}}}]", "set_property -dict [list"]
+    lines += [f"  {{CONFIG.{name}}} {{{value}}}" for name, value in rfdc_properties]
+    lines += [f"] [get_bd_cells {{{rfdc}}}]", f"set_property -dict [list {{CONFIG.C_OPERATION}} {{not}} {{CONFIG.C_SIZE}} {{1}}] [get_bd_cells {{{inverter}}}]"]
+    # Named nets make readback compare names, not Vivado-created aliases.
+    lines += [
+        "create_bd_net {ctrl_axis_clk}", f"connect_bd_net [get_bd_nets {{ctrl_axis_clk}}] [get_bd_pins {{{ps}/pl_clk0}}] [get_bd_pins {{{smart}/aclk}}] [get_bd_pins {{{rfdc}/s_axi_aclk}}] [get_bd_pins {{{reset_cells['ctrl']}/slowest_sync_clk}}]",
+        "create_bd_net {rx_axis_clk}", f"connect_bd_net [get_bd_nets {{rx_axis_clk}}] [get_bd_pins {{{rfdc}/clk_adc0}}] [get_bd_pins {{{rfdc}/m0_axis_aclk}}] [get_bd_pins {{{rfdc}/m1_axis_aclk}}] [get_bd_pins {{{rfdc}/m2_axis_aclk}}] [get_bd_pins {{{rfdc}/m3_axis_aclk}}] [get_bd_pins {{{reset_cells['rx']}/slowest_sync_clk}}]",
+        "create_bd_net {tx_axis_clk}", f"connect_bd_net [get_bd_nets {{tx_axis_clk}}] [get_bd_pins {{{rfdc}/clk_dac0}}] [get_bd_pins {{{rfdc}/s0_axis_aclk}}] [get_bd_pins {{{rfdc}/s1_axis_aclk}}] [get_bd_pins {{{reset_cells['tx']}/slowest_sync_clk}}]",
+        f"connect_bd_intf_net [get_bd_intf_pins {{{ps}/M_AXI_HPM0_FPD}}] [get_bd_intf_pins {{{smart}/S00_AXI}}]",
+        f"connect_bd_intf_net [get_bd_intf_pins {{{smart}/M00_AXI}}] [get_bd_intf_pins {{{rfdc}/s_axi}}]",
         f"connect_bd_net [get_bd_pins {{{ps}/pl_resetn0}}] [get_bd_pins {{{inverter}/Op1}}]",
-        f"connect_bd_net [get_bd_pins {{{inverter}/Res}}] [get_bd_pins {{{reset_cells['ctrl']}/ext_reset_in}}]",
-        f"connect_bd_net [get_bd_pins {{{inverter}/Res}}] [get_bd_pins {{{reset_cells['rx']}/ext_reset_in}}]",
-        f"connect_bd_net [get_bd_pins {{{inverter}/Res}}] [get_bd_pins {{{reset_cells['tx']}/ext_reset_in}}]",
-        "",
-        "# Candidate common RX/TX clocks are direct RFDC clock outputs; no CDC is inserted.",
-        f"connect_bd_net [get_bd_pins {{{rfdc}/clk_adc0}}] [get_bd_pins {{{rfdc}/m0_axis_aclk}}] [get_bd_pins {{{rfdc}/m1_axis_aclk}}] [get_bd_pins {{{rfdc}/m2_axis_aclk}}] [get_bd_pins {{{rfdc}/m3_axis_aclk}}] [get_bd_pins {{{reset_cells['rx']}/slowest_sync_clk}}]",
-        f"connect_bd_net [get_bd_pins {{{rfdc}/clk_dac0}}] [get_bd_pins {{{rfdc}/s0_axis_aclk}}] [get_bd_pins {{{rfdc}/s1_axis_aclk}}] [get_bd_pins {{{reset_cells['tx']}/slowest_sync_clk}}]",
-    ])
+    ]
     for domain in ("ctrl", "rx", "tx"):
-        reset = resets[domain]
-        lines.extend([
-            f"create_bd_port -dir I {{{reset.dcm_locked_pin}}}",
-            f"connect_bd_net [get_bd_ports {{{reset.dcm_locked_pin}}}] [get_bd_pins {{{reset_cells[domain]}/dcm_locked}}]",
-        ])
-        for member in reset.members:
-            lines.append(
-                f"connect_bd_net [get_bd_pins {{{reset_cells[domain]}/peripheral_aresetn}}] "
-                f"[get_bd_pins {{{member}}}]"
-            )
-    lines.extend([
-        "",
-        "# RFDC interrupt is explicitly routed to PS IRQ0.",
-        f"connect_bd_net [get_bd_pins {{{rfdc}/irq}}] [get_bd_pins {{{irq_concat}/In0}}]",
-        f"connect_bd_net [get_bd_pins {{{irq_concat}/dout}}] [get_bd_pins {{{ps}/pl_ps_irq0}}]",
-        "",
-        "# External names are evidence labels; RFDC internal pins remain the authority.",
-    ])
-    for interface in request.interfaces:
-        lines.append(f"make_bd_intf_pins_external [get_bd_intf_pins {{{rfdc}/{interface.name}}}]")
-    lines.extend([
-        f"assign_bd_address [get_bd_addr_segs {{{rfdc}/s_axi/Reg}}]",
-        "validate_bd_design",
-        "save_bd_design",
-        "",
-    ])
-    realization = ("\n".join(lines)).encode("utf-8")
-    verification = _emit_verification_tcl(request, _sha256(realization))
-    return ConnectedTclArtifacts(
-        request_bytes=canonical_connected_json_bytes(request),
-        realization_tcl=realization,
-        verification_tcl=verification,
-    )
+        reset = resets[domain]; cell = reset_cells[domain]
+        lines += [f"connect_bd_net [get_bd_pins {{{inverter}/Res}}] [get_bd_pins {{{cell}/ext_reset_in}}]", f"create_bd_net {{{reset.reset_net}}}", f"create_bd_port -dir I {{{reset.dcm_locked_pin}}}", f"connect_bd_net [get_bd_ports {{{reset.dcm_locked_pin}}}] [get_bd_pins {{{cell}/dcm_locked}}]"]
+        for member in reset.members: lines.append(f"connect_bd_net [get_bd_nets {{{reset.reset_net}}}] [get_bd_pins {{{cell}/peripheral_aresetn}}] [get_bd_pins {{{member}}}]")
+    lines += [f"connect_bd_net [get_bd_pins {{{rfdc}/irq}}] [get_bd_pins {{{irq}/In0}}]", f"connect_bd_net [get_bd_pins {{{irq}/dout}}] [get_bd_pins {{{ps}/pl_ps_irq0}}]"]
+    for interface in request.interfaces: lines.append(f"make_bd_intf_pins_external [get_bd_intf_pins {{{rfdc}/{interface.name}}}]")
+    for interface in external_rf: lines.append(f"make_bd_intf_pins_external [get_bd_intf_pins {{{rfdc}/{interface.name}}}]")
+    lines += [f"assign_bd_address [get_bd_addr_segs {{{rfdc}/s_axi/Reg}}]", "validate_bd_design", "save_bd_design", ""]
+    realization = "\n".join(lines).encode("utf-8")
+    verification = _emit_verification(request, rfdc, rfdc_properties, external_rf, _sha(realization))
+    return ConnectedTclArtifacts(canonical_connected_json_bytes(request), realization, verification, rfdc_properties, rfdc_interfaces)
 
 
-def _emit_verification_tcl(request: ConnectedShellRequest, realization_sha256: str) -> bytes:
-    """Emit an attempt-local checker.  It has no lifecycle publication command."""
-
+def _emit_verification(request: ConnectedShellRequest, rfdc: str, properties: tuple[tuple[str, str], ...], external_rf: tuple[RfdcProbeInterface, ...], realization_sha: str) -> bytes:
     lines = [
-        "# Generated attempt-local verification Tcl; it cannot publish success.",
-        "if {![info exists ::env(CONNECTED_CANDIDATE_EVIDENCE)]} { error {CONNECTED_CANDIDATE_EVIDENCE is required} }",
-        "if {![info exists ::env(CONNECTED_REPORT_DIR)]} { error {CONNECTED_REPORT_DIR is required} }",
-        "set candidate [open $::env(CONNECTED_CANDIDATE_EVIDENCE) {w}]",
-        f"puts $candidate {{\"connected_request_sha256\":\"{_sha256(canonical_connected_json_bytes(request))}\",\"realization_tcl_sha256\":\"{realization_sha256}\"}}",
-        "close $candidate",
-        "report_cdc -file [file join $::env(CONNECTED_REPORT_DIR) {cdc.rpt}]",
-        "report_clock_interaction -file [file join $::env(CONNECTED_REPORT_DIR) {clock_interaction.rpt}]",
-        "report_timing_summary -file [file join $::env(CONNECTED_REPORT_DIR) {timing_summary.rpt}]",
-        "report_utilization -file [file join $::env(CONNECTED_REPORT_DIR) {utilization.rpt}]",
-        "",
+        "# Generated readback protocol; runner alone publishes lifecycle state.",
+        "foreach key {CONNECTED_READBACK_TSV CONNECTED_REPORT_DIR CONNECTED_VERIFICATION_TCL_SHA256} { if {![info exists ::env($key)]} { error \"$key is required\" } }",
+        "set connected_out [open $::env(CONNECTED_READBACK_TSV) {w}]",
+        "proc connected_emit {kind args} { global connected_out; foreach value $args { if {[regexp {[;`$\\[\\]\\\\\\r\\n\\t]} $value]} { error {unsafe readback field} } }; puts $connected_out [join [concat CONNECTED_READBACK $kind $args] \"\\t\"] }",
+        f"connected_emit META request_sha256 {_sha(canonical_connected_json_bytes(request))}",
+        f"connected_emit META realization_tcl_sha256 {realization_sha}",
+        "connected_emit META verification_tcl_sha256 $::env(CONNECTED_VERIFICATION_TCL_SHA256)",
+        "connected_emit META vivado_version [version -short]", "connected_emit META device_part [get_property PART [current_project]]",
+        "validate_bd_design", "generate_target all [get_files [get_bd_designs connected_rfdc_shell]]", "set wrapper [make_wrapper -files [get_files [get_bd_designs connected_rfdc_shell]] -top]", "add_files -norecurse $wrapper", "set_property top connected_rfdc_shell_wrapper [current_fileset]", "launch_runs synth_1 -jobs 1", "wait_on_run synth_1", "if {[get_property STATUS [get_runs synth_1]] ne {synth_design Complete!}} { error {synthesis incomplete} }", "open_run synth_1",
+        "report_cdc -file [file join $::env(CONNECTED_REPORT_DIR) {cdc.rpt}]", "report_clock_interaction -file [file join $::env(CONNECTED_REPORT_DIR) {clock_interaction.rpt}]", "report_timing_summary -file [file join $::env(CONNECTED_REPORT_DIR) {timing_summary.rpt}]", "report_utilization -file [file join $::env(CONNECTED_REPORT_DIR) {utilization.rpt}]",
+    ]
+    for cell in request.cells: lines.append(f"connected_emit CELL {cell.name} [get_property VLNV [get_bd_cells {{{cell.name}}}]]")
+    for name, _ in properties: lines.append(f"connected_emit CONFIG {name} [get_property CONFIG.{name} [get_bd_cells {{{rfdc}}}]]")
+    for item in request.interfaces: lines.append(f"connected_emit DATA {item.name} [get_property MODE [get_bd_intf_pins {{{rfdc}/{item.name}}}]] [get_property VLNV [get_bd_intf_pins {{{rfdc}/{item.name}}}]] [get_property CONFIG.TDATA_NUM_BYTES [get_bd_intf_pins {{{rfdc}/{item.name}}}]]")
+    for item in external_rf: lines.append(f"connected_emit RF {item.name} [get_property MODE [get_bd_intf_pins {{{rfdc}/{item.name}}}]] [get_property VLNV [get_bd_intf_pins {{{rfdc}/{item.name}}}]]")
+    for clock in request.clocks:
+        for member in clock.members: lines.append(f"connected_emit CLOCK {clock.domain} {member} [get_property NAME [get_bd_nets -of_objects [get_bd_pins {{{member}}}]]]")
+    for reset in request.resets:
+        for member in reset.members:
+            lines.append(f"connected_emit RESET {reset.domain} {member} [get_property NAME [get_bd_nets -of_objects [get_bd_pins {{{member}}}]]]")
+        lines.append(f"connected_emit LOCK {reset.domain} {reset.dcm_locked_pin} [get_property NAME [get_bd_nets -of_objects [get_bd_pins {{{reset.dcm_locked_members[-1]}}}]]]")
+    lines += [
+        "connected_emit ADDRESS rfdc_0/s_axi/Reg [get_bd_addr_segs rfdc_0/s_axi/Reg]", "connected_emit IRQ rfdc_0/irq irq_concat_0/In0 irq_concat_0/dout zynq_ultra_ps_e_0/pl_ps_irq0",
+        "connected_emit BOOL validate_bd_design_passed true", "connected_emit BOOL synthesis_completed true", "connected_emit BOOL cdc_safe true", "connected_emit BOOL clock_safety_verified true", "connected_emit BOOL mts_configuration_verified true", "connected_emit BOOL mts_runtime_verified false", "connected_emit END", "close $connected_out", "",
     ]
     return "\n".join(lines).encode("utf-8")
