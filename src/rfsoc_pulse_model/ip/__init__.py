@@ -27,6 +27,7 @@ from .evidence import (
     parse_catalog_evidence,
     validate_catalog_evidence,
 )
+from .platform import PS_VLNV, PsPlatformConfig
 if TYPE_CHECKING:
     from .lock import (
         GenerationMode,
@@ -52,6 +53,8 @@ __all__ = [
     "ParameterStatus",
     "ProductionLock",
     "ProductionLockValidation",
+    "PS_VLNV",
+    "PsPlatformConfig",
     "RFDC_2_6_VLNV",
     "RequiredResponsibilitiesSpec",
     "RfdcIntegrationMetadata",
