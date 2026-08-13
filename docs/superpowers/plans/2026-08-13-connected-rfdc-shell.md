@@ -444,10 +444,10 @@ attempts on the same blocking condition, stop with all logs preserved.
 Require exact readback and `validate_bd_design`. Run `generate_target all`,
 `make_wrapper -top`, `add_files -norecurse`, set the generated wrapper as top,
 `launch_runs synth_1 -jobs 1`, `wait_on_run synth_1`, and require
-`STATUS == {synth_design Complete!}`. Emit utilization and timing-summary
-reports, then run `report_cdc`, clock interaction and unconstrained-clock
-checks. No broad false-path or asynchronous-clock-group waiver may hide an
-unsafe crossing.
+`STATUS == {synth_design Complete!}`. Run `open_run synth_1` before emitting
+utilization and timing-summary reports and before running `report_cdc`, clock
+interaction and unconstrained-clock checks. No broad false-path or
+asynchronous-clock-group waiver may hide an unsafe crossing.
 
 - [ ] **Step 5: Parse evidence and prove shell readiness**
 

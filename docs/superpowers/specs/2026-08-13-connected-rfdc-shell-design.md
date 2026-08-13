@@ -314,8 +314,9 @@ The checkpoint requires all of the following:
 8. synthesis of the generated `connected_rfdc_shell_wrapper` top after
    `generate_target all`, `make_wrapper -top`, `add_files -norecurse`, and
    `launch_runs synth_1 -jobs 1`, with `wait_on_run synth_1`,
-   `get_property STATUS == {synth_design Complete!}`, and a generated
-   utilization/timing-summary report;
+   `get_property STATUS == {synth_design Complete!}`, followed by
+   `open_run synth_1` before CDC, clock-interaction, utilization and
+   timing-summary reports are generated from the synthesized netlist;
 9. `report_cdc` with no unhandled critical or unsafe crossing;
 10. clock-interaction and unconstrained-clock review;
 11. a new acceptance artifact that states every unverified boundary.
