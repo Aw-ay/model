@@ -266,6 +266,13 @@ publication lifecycle, lock, attempt directory, subprocess, Tcl-emission or
 Vivado-launch responsibility. Given identical authority objects and evidence
 bytes, it returns identical values and reasons.
 
+The request schema includes a required immutable `RfdcProbeProvenance` value
+containing the measured Vivado version, probe Tcl SHA-256, raw-output SHA-256
+and numeric run ID. The pure factory accepts this value as an explicit argument
+and never imports the probe implementation or searches the filesystem. Task 4
+produces the measured value; Task 5 is the sole build layer that combines it
+with the three authorities to emit canonical request bytes.
+
 Evidence publication belongs to the later generated-runner layer, not to the
 pure evidence types. The runner owns a separate canonical lifecycle envelope,
 `connected_rfdc_shell_state.json`; the pure final evidence bytes remain in
@@ -292,6 +299,12 @@ Task 3 pure request/evidence contract
 ```
 
 Task 3 never imports or tests Task 5/6 behavior.
+
+`connected_runner.py` is the only type/parser authority for the lifecycle
+envelope. It exports a validated-success consumer that returns a pure Task 3
+evidence object only after canonical state, success state, run ID, evidence
+hash and report hashes match. Task 7 and all other consumers must call this API;
+they may not parse lifecycle JSON or treat evidence-file presence as success.
 
 RFDC probe output is not acceptance evidence, but its Vivado version, probe
 Tcl SHA-256, raw-output SHA-256 and run ID are recorded in the connected request

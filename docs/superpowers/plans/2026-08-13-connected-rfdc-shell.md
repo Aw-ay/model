@@ -254,6 +254,13 @@ The request must derive the exact expected cell set, VLNV family references,
 domains, address path and MTS grouping from the three authorities. No second
 channel or sample-rate mapping is allowed.
 
+Task 3 also defines the immutable `RfdcProbeProvenance` value required by the
+request: Vivado version, probe Tcl SHA-256, raw-output SHA-256 and numeric run
+ID. The pure request factory requires this value explicitly and has no default,
+filesystem lookup or Task 4 import. Task 3 tests use declared fixtures; Task 4
+later produces the measured value, and Task 5 is the only layer that calls the
+factory for generated build metadata.
+
 Evidence tests must reject stale hashes, wrong part/Vivado version, missing or
 extra cells/interfaces, wrong I/Q identity, width drift, clock-net split,
 cross-domain reset reuse, invalid address paths, `validate_bd_design=false`,
@@ -270,6 +277,7 @@ of the Task 3 evidence dataclass.
 - [ ] **Step 2: Prove RED**
 
 ```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\.worktrees\connected-bd-rfdc-shell-20260813\src'
 & 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest tests.ip.test_connected -v
 ```
 
@@ -317,6 +325,8 @@ semantic configuration for ADC tiles 0-3 and DAC tiles 0-1, no PS/BD transport
 cells, and deterministic machine output. The probe must enumerate writable
 `CONFIG.*` properties, internal RFDC interface pins, scalar pins, directions,
 widths, `FREQ_HZ`, `CLK_DOMAIN`, associated clocks/resets and validation errors.
+The strict probe parser returns Task 3's `RfdcProbeProvenance`; it does not
+construct the connected request itself.
 
 Negative tests cover wrong part/Vivado version, missing RFDC 2.6, duplicate or
 partial evidence, unexpected extra IP, unsafe Tcl quoting and noncanonical
@@ -400,9 +410,16 @@ of success followed by failure, interruption, stale report reuse, malformed
 candidate evidence, and concurrent runners. The runner consumes Task 3 types;
 Task 3 never imports the runner.
 
+`connected_runner.py` is the sole schema/parser authority for
+`connected_rfdc_shell_state.json`. It exposes one validated-success consumer
+API that checks canonical state bytes, state, run ID, evidence SHA-256 and
+report hashes before returning the pure Task 3 evidence object. No generator or
+later task may parse or interpret lifecycle JSON independently.
+
 - [ ] **Step 2: Prove RED**
 
 ```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\.worktrees\connected-bd-rfdc-shell-20260813\src'
 & 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest tests.ip.test_connected_tcl tests.ip.test_connected_runner tests.ip.test_generate_architecture -v
 ```
 
@@ -437,7 +454,8 @@ git commit -m "feat: generate connected RFDC shell Tcl"
   `src/rfsoc_pulse_model/ip/connected_tcl.py`,
   `src/rfsoc_pulse_model/ip/connected_runner.py`
 - Modify covering tests before every source fix:
-  `tests/ip/test_connected_tcl.py`, `tests/ip/test_connected.py`
+  `tests/ip/test_connected_tcl.py`, `tests/ip/test_connected_runner.py`,
+  `tests/ip/test_connected.py`
 - Generated locally: `build/vivado/connected_rfdc_shell/**`
 - Generated locally: `build/metadata/connected_rfdc_shell_state.json`
 - Generated locally: `build/metadata/connected_rfdc_shell_evidence.json`
@@ -450,6 +468,10 @@ reports. Generated project files are not committed.
 
 Confirm catalog lock valid, connected request present, and shell readiness
 false before evidence.
+
+```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\.worktrees\connected-bd-rfdc-shell-20260813\src'
+```
 
 - [ ] **Step 2: Execute through the Task 5 runner in Vivado 2025.2**
 
@@ -511,6 +533,11 @@ Vivado project or raw generated artifacts.
 lifecycle state plus evidence, reports shell readiness separately, invalidates
 stale evidence, and never lets shell readiness satisfy pending production
 owners.
+
+Task 7 consumes lifecycle state and evidence only through the validated-success
+API exported by `connected_runner.py`. It must not call `json.loads`, define a
+second lifecycle dataclass/parser, or infer success directly from file
+existence.
 
 - [ ] **Step 1: Write RED top-level status tests**
 
