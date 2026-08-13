@@ -30,7 +30,7 @@ class PsPlatformConfigTest(unittest.TestCase):
             config.source_bd_path,
             "save_v2.1/XCZU27_MEM_TEST_TOP/XCZU27_TOP.srcs/sources_1/bd/design_1/design_1.bd",
         )
-        self.assertEqual(config.source_bd_base, "repository_root")
+        self.assertEqual(config.source_bd_base, "external_workspace_root")
         self.assertRegex(config.source_bd_sha256, r"^[0-9a-f]{64}$")
         self.assertEqual(config.gem3_board_io.status, "pending")
         self.assertTrue(config.gem3_board_io.blocking_reason)
@@ -128,8 +128,8 @@ class PsPlatformConfigTest(unittest.TestCase):
             config.source_bd_sha256,
             "63dc103980f369d1ba7246652cd533382b9ab96bed9ccede4b2dd5536df8517a",
         )
-        repository_root = Path(__file__).resolve().parents[4]
-        source_bd = config.resolve_source_bd(repository_root)
+        external_workspace_root = Path(__file__).resolve().parents[4]
+        source_bd = config.resolve_source_bd(external_workspace_root)
         self.assertEqual(
             hashlib.sha256(source_bd.read_bytes()).hexdigest(), config.source_bd_sha256
         )

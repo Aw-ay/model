@@ -169,9 +169,9 @@ class PsPlatformConfig:
             raise ValueError("control_clock_hz must be an integer")
         if self.control_clock_hz != 100_000_000:
             raise ValueError("control_clock_hz must be 100000000")
-        if self.source_bd_base != "repository_root":
-            raise ValueError("source_bd_base must be repository_root")
-        _require_repository_root_relative_path(self.source_bd_path)
+        if self.source_bd_base != "external_workspace_root":
+            raise ValueError("source_bd_base must be external_workspace_root")
+        _require_external_workspace_relative_path(self.source_bd_path)
         _require_nonempty_str(self.source_bd_sha256, "source_bd_sha256")
         if not _SHA256_RE.fullmatch(self.source_bd_sha256):
             raise ValueError("source_bd_sha256 must be lowercase SHA-256")
@@ -252,12 +252,12 @@ class PsPlatformConfig:
             "GEM3 board I/O is pending: " + self.gem3_board_io.blocking_reason
         )
 
-    def resolve_source_bd(self, repository_root: Path) -> Path:
-        """Resolve provenance only when an explicit repository root is supplied."""
+    def resolve_source_bd(self, external_workspace_root: Path) -> Path:
+        """Resolve external provenance only when the caller explicitly supplies its root."""
 
-        if not isinstance(repository_root, Path):
-            raise ValueError("repository_root must be a pathlib.Path")
-        return repository_root / Path(*self.source_bd_path.split("/"))
+        if not isinstance(external_workspace_root, Path):
+            raise ValueError("external_workspace_root must be a pathlib.Path")
+        return external_workspace_root / Path(*self.source_bd_path.split("/"))
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -299,11 +299,11 @@ def _require_nonempty_str(value: object, field_name: str) -> None:
         raise ValueError(f"{field_name} must be nonempty")
 
 
-def _require_repository_root_relative_path(value: object) -> None:
+def _require_external_workspace_relative_path(value: object) -> None:
     _require_nonempty_str(value, "source_bd_path")
     assert isinstance(value, str)
     if "\\" in value or value.startswith("/") or value.startswith("./"):
-        raise ValueError("source_bd_path must be a canonical repository-root-relative POSIX path")
+        raise ValueError("source_bd_path must be a canonical external-workspace-relative POSIX path")
     parts = value.split("/")
     if any(part in {"", ".", ".."} or ":" in part for part in parts):
-        raise ValueError("source_bd_path must be a canonical repository-root-relative POSIX path")
+        raise ValueError("source_bd_path must be a canonical external-workspace-relative POSIX path")
