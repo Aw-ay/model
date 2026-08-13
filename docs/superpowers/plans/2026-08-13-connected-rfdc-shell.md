@@ -59,10 +59,15 @@ AXI SmartConnect, Processor System Reset, SHA-256, Git checkpoints.
   manifest, BD, wrapper, or generated RTL.
 - A partial/interrupted Vivado evidence file is invalid and cannot make shell
   readiness true.
+- `connected.py` is a pure data layer. It must not acquire locks, create
+  attempt directories, launch Vivado, run subprocesses, or publish lifecycle
+  markers.
 - Every real connected attempt first invalidates canonical success with an
   atomically published, run-ID-bound `in_progress` marker under a
   repository-scoped advisory lock. Only an all-green attempt may atomically
-  publish `success`; a failed retry can never reuse an older success.
+  publish `success`; a failed retry can never reuse an older success. This
+  lifecycle belongs to Task 5's runner and is exercised with real Vivado only
+  in Task 6.
 - `production_integration_ready` remains false throughout this plan.
 - Do not claim post-route timing, bitstream, MTS runtime, DMA/Ethernet, board
   loopback or analogue mapping closure.
@@ -85,6 +90,7 @@ AXI SmartConnect, Processor System Reset, SHA-256, Git checkpoints.
 | `src/rfsoc_pulse_model/ip/connected.py` | Connected request/evidence types and validation |
 | `src/rfsoc_pulse_model/ip/rfdc_probe.py` | RFDC-only property and port probe Tcl |
 | `src/rfsoc_pulse_model/ip/connected_tcl.py` | Deterministic realization/verification Tcl |
+| `src/rfsoc_pulse_model/ip/connected_runner.py` | Advisory lock, attempt lifecycle and Vivado launcher |
 | `src/rfsoc_pulse_model/ip/generate.py` | Catalog plus connected artifact orchestration |
 | `config/ip_architecture.json` | Connected topology, families and instances |
 | `src/rfsoc_pulse_model/config/ip_architecture.json` | Byte-identical package authority |
@@ -94,6 +100,7 @@ AXI SmartConnect, Processor System Reset, SHA-256, Git checkpoints.
 | `tests/ip/test_connected.py` | Request/evidence/readiness tests |
 | `tests/ip/test_rfdc_probe.py` | Probe generation and strict diagnostic evidence tests |
 | `tests/ip/test_connected_tcl.py` | Generated Tcl structural tests |
+| `tests/ip/test_connected_runner.py` | Transactional lifecycle and injected-launcher tests |
 | `docs/contracts/connected-rfdc-shell.md` | Published interface and proof contract |
 | `docs/verification/connected-rfdc-shell-acceptance.md` | Final measured checkpoint |
 
@@ -255,11 +262,10 @@ keys and noncanonical bytes.
 
 The schema includes exact `ctrl_clock_locked`, `rx_clock_locked` and
 `tx_clock_locked` memberships for the three `proc_sys_reset/dcm_locked` pins.
-The runner uses a repo-scoped advisory lock, atomically publishes an
-`in_progress` marker before launching Vivado, writes attempt-local reports, and
-publishes `success` only after all hashes and gates pass. Cover success followed
-by a failed retry with unchanged sources, interruption before publish, stale
-report reuse and concurrent runners.
+Task 3 tests only canonical request/evidence values and pure validation. They
+must not require a runner, advisory lock, lifecycle marker, attempt directory,
+subprocess, Tcl emitter, or Vivado installation. Publication state is not part
+of the Task 3 evidence dataclass.
 
 - [ ] **Step 2: Prove RED**
 
@@ -271,7 +277,9 @@ report reuse and concurrent runners.
 
 Use frozen dataclasses, tuples and read-only mapping snapshots. Canonical JSON
 is UTF-8, sorted, compact, and ends in exactly one LF. Readiness reasons are
-stable machine strings and never alter `production_integration_ready`.
+stable machine strings and never alter `production_integration_ready`. All
+functions are deterministic and side-effect free apart from explicitly reading
+the caller-supplied evidence bytes.
 
 - [ ] **Step 4: GREEN and regressions**
 
@@ -350,14 +358,20 @@ git commit -m "test: probe RFDC 2.6 connected contract"
 **Files:**
 
 - Create: `src/rfsoc_pulse_model/ip/connected_tcl.py`
+- Create: `src/rfsoc_pulse_model/ip/connected_runner.py`
 - Modify: `src/rfsoc_pulse_model/ip/generate.py`
 - Modify: `src/rfsoc_pulse_model/ip/__init__.py`
 - Create: `tests/ip/test_connected_tcl.py`
+- Create: `tests/ip/test_connected_runner.py`
 - Modify: `tests/ip/test_generate_architecture.py`
 
 **Produces:** `realize_connected_rfdc_shell.tcl`,
 `verify_connected_rfdc_shell.tcl`, canonical connected request metadata, and
 separate realization/verification provenance hashes based on Task 4 readback.
+It also produces the runner that owns advisory locking, attempt directories,
+atomic lifecycle publication and Vivado subprocess invocation. Task 5 unit
+tests use an injected fake launcher; they do not claim a successful real
+Vivado run.
 
 - [ ] **Step 1: Write RED Tcl tests**
 
@@ -372,18 +386,24 @@ evidence fields.
 
 Assert explicit exported `ctrl_clock_locked`, `rx_clock_locked` and
 `tx_clock_locked` pins and their one-to-one connections to the three
-`proc_sys_reset/dcm_locked` inputs. Assert the generated runner invalidates any
-old success before invoking Vivado and atomically publishes only attempt-local
-success.
+`proc_sys_reset/dcm_locked` inputs.
 
 Negative tests cover wrong existing project part, wrong current BD, unsafe Tcl
 word quoting, unknown platform property, unresolved required VLNV, duplicate
 instance/interface name and any undeclared cell family.
 
+Runner tests separately assert a repository-scoped advisory lock, a new numeric
+run ID, atomic replacement of any old success by `in_progress` before the
+injected launcher is called, attempt-local report/evidence paths, atomic
+publication only after pure Task 3 validation passes, and fail-closed handling
+of success followed by failure, interruption, stale report reuse, malformed
+candidate evidence, and concurrent runners. The runner consumes Task 3 types;
+Task 3 never imports the runner.
+
 - [ ] **Step 2: Prove RED**
 
 ```powershell
-& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest tests.ip.test_connected_tcl tests.ip.test_generate_architecture -v
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest tests.ip.test_connected_tcl tests.ip.test_connected_runner tests.ip.test_generate_architecture -v
 ```
 
 - [ ] **Step 3: Implement deterministic emitters**
@@ -391,7 +411,9 @@ instance/interface name and any undeclared cell family.
 Do not modify the catalog-discovery grammar except to consume the expanded
 required family set later. Write generated files as bytes. Verification Tcl
 must write machine fields only after all readbacks and reports complete; on
-Tcl error it must leave no valid canonical evidence.
+Tcl error it must leave no valid candidate evidence. The runner owns canonical
+publication and must validate the attempt-local candidate through Task 3's pure
+parser before publishing it.
 
 - [ ] **Step 4: GREEN, double generation and regression**
 
@@ -401,7 +423,7 @@ compare every controlled file recursively. Run all `tests.ip` tests.
 - [ ] **Step 5: Commit and independently review**
 
 ```powershell
-git add src/rfsoc_pulse_model/ip/connected_tcl.py src/rfsoc_pulse_model/ip/generate.py src/rfsoc_pulse_model/ip/__init__.py tests/ip/test_connected_tcl.py tests/ip/test_generate_architecture.py
+git add src/rfsoc_pulse_model/ip/connected_tcl.py src/rfsoc_pulse_model/ip/connected_runner.py src/rfsoc_pulse_model/ip/generate.py src/rfsoc_pulse_model/ip/__init__.py tests/ip/test_connected_tcl.py tests/ip/test_connected_runner.py tests/ip/test_generate_architecture.py
 git commit -m "feat: generate connected RFDC shell Tcl"
 ```
 
@@ -412,10 +434,12 @@ git commit -m "feat: generate connected RFDC shell Tcl"
 **Files:**
 
 - Modify only if real readback requires source fixes:
-  `src/rfsoc_pulse_model/ip/connected_tcl.py`
+  `src/rfsoc_pulse_model/ip/connected_tcl.py`,
+  `src/rfsoc_pulse_model/ip/connected_runner.py`
 - Modify covering tests before every source fix:
   `tests/ip/test_connected_tcl.py`, `tests/ip/test_connected.py`
 - Generated locally: `build/vivado/connected_rfdc_shell/**`
+- Generated locally: `build/metadata/connected_rfdc_shell_state.json`
 - Generated locally: `build/metadata/connected_rfdc_shell_evidence.json`
 - Generated locally: CDC, clock, synthesis and validation reports
 
@@ -427,10 +451,13 @@ reports. Generated project files are not committed.
 Confirm catalog lock valid, connected request present, and shell readiness
 false before evidence.
 
-- [ ] **Step 2: Execute realization Tcl in Vivado 2025.2**
+- [ ] **Step 2: Execute through the Task 5 runner in Vivado 2025.2**
 
-Require a fresh exact-part project and exact declared cells. Capture stdout,
-journal and log under ignored build metadata. Do not patch the generated BD.
+Require the runner to publish a new `in_progress` marker before it launches the
+generated Tcl in a fresh exact-part project. Capture stdout, journal and log in
+the run-ID-bound ignored attempt directory. Require exact declared cells. Do
+not invoke the Tcl outside the runner for acceptance and do not patch the
+generated BD.
 
 - [ ] **Step 3: Handle real property/port mismatches with bounded TDD**
 
@@ -451,9 +478,16 @@ asynchronous-clock-group waiver may hide an unsafe crossing.
 
 - [ ] **Step 5: Parse evidence and prove shell readiness**
 
-Use the strict Python parser. Require `rfdc_shell_structural_ready=true`,
+Require the runner to validate and atomically publish the attempt-local
+candidate, then use the strict Task 3 parser. Require
+`rfdc_shell_structural_ready=true`,
 `mts_configuration_verified=true`, `mts_runtime_verified=false`, and
 `production_integration_ready=false`.
+
+Exercise at least one controlled failed retry through the runner and prove it
+cannot reuse the previous success. Real-Vivado concurrency is not required;
+the advisory-lock concurrency contract is established by Task 5's injected
+launcher tests.
 
 - [ ] **Step 6: Run focused/full regressions and commit source fixes only**
 
@@ -474,12 +508,14 @@ Vivado project or raw generated artifacts.
 - Modify: `tests/verilog/test_generate.py`
 
 **Produces:** deterministic top-level metadata that consumes current connected
-evidence, reports shell readiness separately, invalidates stale evidence, and
-never lets shell readiness satisfy pending production owners.
+lifecycle state plus evidence, reports shell readiness separately, invalidates
+stale evidence, and never lets shell readiness satisfy pending production
+owners.
 
 - [ ] **Step 1: Write RED top-level status tests**
 
-Cover missing, current, stale, partial and malformed connected evidence;
+Cover missing, `in_progress`, `failed`, current-success, state/evidence hash or
+run-ID mismatch, stale, partial and malformed connected evidence;
 production/development modes; deterministic generation; and explicit false
 overall readiness despite true shell readiness.
 

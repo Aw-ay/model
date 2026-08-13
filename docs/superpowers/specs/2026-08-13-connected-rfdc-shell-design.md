@@ -259,15 +259,39 @@ MTS configuration/runtime flags, validation result, generated report hashes,
 and stable failure reasons. Duplicate JSON keys, unknown fields, noncanonical
 encoding, stale hashes, partial evidence, and non-exact sets are rejected.
 
-Evidence publication is transactional and attempt-bound. Before each real
+`connected.py` owns only this pure data contract: immutable request/evidence
+objects, canonical JSON encoding/decoding, exact comparisons, provenance
+checks and `rfdc_shell_structural_ready` evaluation. It has no filesystem
+publication lifecycle, lock, attempt directory, subprocess, Tcl-emission or
+Vivado-launch responsibility. Given identical authority objects and evidence
+bytes, it returns identical values and reasons.
+
+Evidence publication belongs to the later generated-runner layer, not to the
+pure evidence types. The runner owns a separate canonical lifecycle envelope,
+`connected_rfdc_shell_state.json`; the pure final evidence bytes remain in
+`connected_rfdc_shell_evidence.json`. Before each real
 realization/verification attempt, the runner acquires the repository-scoped
-connected-evidence advisory lock and atomically replaces any canonical success
-artifact with a canonical `in_progress` marker carrying a new numeric run ID.
-All reports and candidate evidence are written in a unique attempt directory.
-Only after every required step succeeds is a canonical success object written
-and atomically published. A failed/interrupted attempt leaves `in_progress` or
-`failed`, never an earlier success. The parser rejects non-success state,
-run-ID/report mismatches, and report bytes from another attempt.
+connected-evidence advisory lock and atomically publishes an `in_progress`
+state carrying a new numeric run ID. From that point, consumers must reject any
+older evidence file regardless of whether its bytes still exist. All reports
+and candidate evidence are written in a unique attempt directory. Only after
+every required step succeeds does the runner first atomically publish the pure
+validated evidence and then atomically publish a `success` state binding that
+run ID, evidence SHA-256 and report hashes. A failed/interrupted attempt leaves
+`in_progress` or `failed`, never a state that authorizes earlier evidence. The
+runner rejects non-success lifecycle state, run-ID/report/hash mismatches and
+report bytes from another attempt, then delegates evidence validation and
+readiness evaluation to the pure `connected.py` parser. The dependency
+direction is one-way:
+
+```text
+Task 3 pure request/evidence contract
+        -> Task 4 RFDC probe result
+        -> Task 5 Tcl emitters and transactional runner
+        -> Task 6 real Vivado execution and publication
+```
+
+Task 3 never imports or tests Task 5/6 behavior.
 
 RFDC probe output is not acceptance evidence, but its Vivado version, probe
 Tcl SHA-256, raw-output SHA-256 and run ID are recorded in the connected request
