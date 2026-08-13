@@ -10,6 +10,7 @@ from importlib import resources
 
 from rfsoc_pulse_model.common.config import ModelConfig
 from rfsoc_pulse_model.ip.connected import (
+    ConnectedAuthorityBytes,
     ConnectedShellEvidence,
     RfdcProbeProvenance,
     build_connected_request,
@@ -40,6 +41,10 @@ def fixture() -> tuple[object, ConnectedShellEvidence]:
         PsPlatformConfig.load_default(),
         decode_production_lock_json(authority_bytes("ip_lock.json"), "fixture lock"),
         probe,
+        ConnectedAuthorityBytes(
+            authority_bytes("default.json"), authority_bytes("ip_architecture.json"),
+            authority_bytes("ps_platform.json"), authority_bytes("ip_lock.json"),
+        ),
     )
     evidence = ConnectedShellEvidence(
         evidence_schema_version=1,
@@ -64,6 +69,58 @@ def fixture() -> tuple[object, ConnectedShellEvidence]:
 
 
 class ConnectedShellContractTest(unittest.TestCase):
+    def test_authority_bytes_are_explicit_bound_immutable_inputs(self) -> None:
+        bundle = ConnectedAuthorityBytes(
+            authority_bytes("default.json"), authority_bytes("ip_architecture.json"),
+            authority_bytes("ps_platform.json"), authority_bytes("ip_lock.json"),
+        )
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            bundle.model_config_bytes = b"forged"  # type: ignore[misc]
+        with self.assertRaisesRegex(ValueError, "model_config_bytes"):
+            build_connected_request(
+                ModelConfig.load_default(), HardwareArchitectureConfig.load_default(),
+                PsPlatformConfig.load_default(),
+                decode_production_lock_json(authority_bytes("ip_lock.json"), "fixture lock"),
+                RfdcProbeProvenance("2025.2", "0" * 64, "1" * 64, 1),
+                dataclasses.replace(bundle, model_config_bytes=b"{}\n"),
+            )
+
+    def test_request_rejects_forged_topology_even_before_matching_evidence(self) -> None:
+        request, _ = fixture()
+        forged_cell = dataclasses.replace(
+            request.cells[0], name="forged_rfdc", vlnv="xilinx.com:ip:not_rfdc:9.9"
+        )
+        cases = (
+            ("cell", {"cells": (forged_cell, *request.cells[1:])}),
+            ("interface", {"interfaces": tuple(
+                dataclasses.replace(item, iq_component="Q") if item.name == "m00_axis" else item
+                for item in request.interfaces)}),
+            ("width", {"interfaces": tuple(
+                dataclasses.replace(item, width_bits=64) if item.name == "m00_axis" else item
+                for item in request.interfaces)}),
+            ("clock", {"clocks": request.clocks[:-1]}),
+            ("reset", {"resets": request.resets[:-1]}),
+            ("address", {"address_path": ("forged",)}),
+            ("irq", {"irq_path": ("forged",)}),
+            ("mts", {"mts_groups": (dataclasses.replace(request.mts_groups[0], tiles=(9,)), request.mts_groups[1])}),
+            ("nco", {"rfdc_semantics": dataclasses.replace(request.rfdc_semantics, dac_nco_frequency_hz=1)}),
+        )
+        for name, changes in cases:
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                dataclasses.replace(request, **changes)
+
+    def test_connected_json_wire_bytes_are_compact_sorted_utf8_and_one_lf(self) -> None:
+        request, _ = fixture()
+        encoded = canonical_connected_json_bytes(request)
+        self.assertTrue(encoded.endswith(b"\n"))
+        self.assertFalse(encoded.endswith(b"\n\n"))
+        self.assertNotIn(b"\n ", encoded)
+        self.assertEqual(
+            encoded,
+            json.dumps(json.loads(encoded), sort_keys=True, ensure_ascii=False,
+                       separators=(",", ":")).encode("utf-8") + b"\n",
+        )
+
     def test_true_ready_fixture_has_exact_24_interfaces_and_never_sets_production_ready(self) -> None:
         request, evidence = fixture()
         self.assertEqual(len(request.cells), 8)
@@ -129,8 +186,8 @@ class ConnectedShellContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown or missing"):
             parse_connected_evidence(canonical_connected_json_bytes(payload))
         duplicate = encoded.decode("utf-8").replace(
-            '\n  "evidence_schema_version": 1,',
-            '\n  "evidence_schema_version": 1,\n  "evidence_schema_version": 1,',
+            '"evidence_schema_version":1,',
+            '"evidence_schema_version":1,"evidence_schema_version":1,',
         ).encode("utf-8")
         with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
             parse_connected_evidence(duplicate)

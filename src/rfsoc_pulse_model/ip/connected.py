@@ -10,15 +10,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, is_dataclass
 import hashlib
-from importlib import resources
 import json
 import re
-from types import MappingProxyType
 from typing import Any
 
 from rfsoc_pulse_model.common.config import ModelConfig
 
-from .evidence import canonical_json_bytes
 from .platform import PsPlatformConfig
 from .types import HardwareArchitectureConfig
 
@@ -88,6 +85,28 @@ class RfdcProbeProvenance:
         _sha256(self.probe_tcl_sha256, "probe_tcl_sha256")
         _sha256(self.raw_output_sha256, "raw_output_sha256")
         _integer(self.run_id, "run_id", 1)
+
+
+@dataclass(frozen=True)
+class ConnectedAuthorityBytes:
+    """Explicit caller-owned provenance bytes bound to validated authorities.
+
+    Task 5 reads/package-locates these bytes.  Task 3 only receives and binds
+    them, so it has no hidden installed-resource or filesystem input.
+    """
+
+    model_config_bytes: bytes
+    architecture_config_bytes: bytes
+    ps_platform_config_bytes: bytes
+    production_lock_bytes: bytes
+
+    def __post_init__(self) -> None:
+        for field in (
+            "model_config_bytes", "architecture_config_bytes", "ps_platform_config_bytes",
+            "production_lock_bytes",
+        ):
+            if not isinstance(getattr(self, field), bytes):
+                raise ValueError(f"{field} must be immutable bytes")
 
 
 @dataclass(frozen=True)
@@ -307,6 +326,11 @@ class ConnectedShellEvidence:
             _boolean(getattr(self, field), field)
         if not isinstance(self.report_hashes, tuple):
             raise ValueError("report_hashes must be a tuple")
+        if any(
+            not isinstance(item, tuple) or len(item) != 2
+            for item in self.report_hashes
+        ):
+            raise ValueError("report_hashes must contain immutable name/hash tuples")
         report_hashes = tuple((_text(name, "report name"), _sha256(value, "report hash"))
                               for name, value in self.report_hashes)
         if {name for name, _ in report_hashes} != {
@@ -328,51 +352,50 @@ def _typed_tuple(value: object, item_type: type[Any], field: str) -> None:
         raise ValueError(f"{field} must be a tuple of {item_type.__name__}")
 
 
-def _authority_bytes(name: str) -> bytes:
-    return resources.files("rfsoc_pulse_model.config").joinpath(name).read_bytes()
+def _expected_cells() -> tuple[ConnectedCell, ...]:
+    return tuple(sorted((
+        ConnectedCell("rfdc_0", "xilinx.com:ip:usp_rf_data_converter:2.6"),
+        ConnectedCell("zynq_ultra_ps_e_0", "xilinx.com:ip:zynq_ultra_ps_e:3.5"),
+        ConnectedCell("ctrl_smartconnect_0", "xilinx.com:ip:smartconnect:1.0"),
+        ConnectedCell("reset_inverter_0", "xilinx.com:ip:util_vector_logic:2.0"),
+        ConnectedCell("ctrl_reset_0", "xilinx.com:ip:proc_sys_reset:5.0"),
+        ConnectedCell("rx_reset_0", "xilinx.com:ip:proc_sys_reset:5.0"),
+        ConnectedCell("tx_reset_0", "xilinx.com:ip:proc_sys_reset:5.0"),
+        ConnectedCell("irq_concat_0", "xilinx.com:ip:xlconcat:2.1"),
+    ), key=lambda item: item.name))
 
 
-def _expected_cells(architecture: HardwareArchitectureConfig) -> tuple[ConnectedCell, ...]:
-    return tuple(sorted(
-        (ConnectedCell(instance.instance_name, architecture.family_by_id(instance.family_ref).vlnv or "")
-        for instance in architecture.ip_instances
-        if instance.instance_name in {
-            "rfdc_0", "zynq_ultra_ps_e_0", "ctrl_smartconnect_0", "reset_inverter_0",
-            "ctrl_reset_0", "rx_reset_0", "tx_reset_0", "irq_concat_0",
-        }), key=lambda item: item.name
-    ))
-
-
-def _expected_interfaces(model: ModelConfig) -> tuple[AxisInterface, ...]:
-    axis = model.rfdc_axis
+def _expected_interfaces() -> tuple[AxisInterface, ...]:
+    adc_i_names = ("m00_axis", "m02_axis", "m10_axis", "m12_axis", "m20_axis", "m22_axis", "m30_axis", "m32_axis")
+    adc_q_names = ("m01_axis", "m03_axis", "m11_axis", "m13_axis", "m21_axis", "m23_axis", "m31_axis", "m33_axis")
+    adc_routes = ((0, 0), (0, 2), (1, 0), (1, 2), (2, 0), (2, 2), (3, 0), (3, 2))
     items: list[AxisInterface] = []
-    for channel, (i_name, q_name) in enumerate(zip(axis.adc_i_axis_names, axis.adc_q_axis_names, strict=True)):
-        route = model.adc_channel_map[channel]
+    for channel, (i_name, q_name) in enumerate(zip(adc_i_names, adc_q_names, strict=True)):
+        tile, slice_number = adc_routes[channel]
         items.extend((
-            AxisInterface(i_name, "master", "adc_component", channel, route.rfdc_tile,
-                          route.rfdc_slice, "I", axis.adc_component_stream_width_bits,
+            AxisInterface(i_name, "master", "adc_component", channel, tile,
+                          slice_number, "I", 32,
                           "rx_axis_clk", "rx_peripheral_aresetn"),
-            AxisInterface(q_name, "master", "adc_component", channel, route.rfdc_tile,
-                          route.rfdc_slice, "Q", axis.adc_component_stream_width_bits,
+            AxisInterface(q_name, "master", "adc_component", channel, tile,
+                          slice_number, "Q", 32,
                           "rx_axis_clk", "rx_peripheral_aresetn"),
         ))
-    for channel, name in enumerate(axis.dac_axis_names):
-        route = model.dac_channel_map[channel]
-        items.append(AxisInterface(name, "slave", "dac_complex", channel, route.rfdc_tile,
-                                   route.rfdc_slice, "IQ", axis.dac_axis_width_bits,
+    for channel, name in enumerate(("s00_axis", "s01_axis", "s02_axis", "s03_axis", "s10_axis", "s11_axis", "s12_axis", "s13_axis")):
+        items.append(AxisInterface(name, "slave", "dac_complex", channel, channel // 4,
+                                   channel % 4, "IQ", 64,
                                    "tx_axis_clk", "tx_peripheral_aresetn"))
     return tuple(sorted(items, key=lambda item: item.name))
 
 
-def _expected_clocks(platform: PsPlatformConfig, model: ModelConfig) -> tuple[ClockNet, ...]:
+def _expected_clocks() -> tuple[ClockNet, ...]:
     return (
-        ClockNet("ctrl", "ctrl_axis_clk", platform.control_clock_hz, (
+        ClockNet("ctrl", "ctrl_axis_clk", 100_000_000, (
             "zynq_ultra_ps_e_0/pl_clk0", "ctrl_smartconnect_0/aclk", "rfdc_0/s_axi_aclk",
             "ctrl_reset_0/slowest_sync_clk")),
-        ClockNet("rx", "rx_axis_clk", model.rx_fabric_clock_hz, (
+        ClockNet("rx", "rx_axis_clk", 250_000_000, (
             "rfdc_0/clk_adc0", "rfdc_0/m0_axis_aclk", "rfdc_0/m1_axis_aclk",
             "rfdc_0/m2_axis_aclk", "rfdc_0/m3_axis_aclk", "rx_reset_0/slowest_sync_clk")),
-        ClockNet("tx", "tx_axis_clk", model.rx_fabric_clock_hz, (
+        ClockNet("tx", "tx_axis_clk", 250_000_000, (
             "rfdc_0/clk_dac0", "rfdc_0/s0_axis_aclk", "rfdc_0/s1_axis_aclk",
             "tx_reset_0/slowest_sync_clk")),
     )
@@ -393,21 +416,20 @@ def _expected_resets() -> tuple[ResetNet, ...]:
     )
 
 
-def _expected_semantics(model: ModelConfig, architecture: HardwareArchitectureConfig) -> RfdcSemantics:
+def _expected_semantics() -> RfdcSemantics:
     return RfdcSemantics(
-        adc_tiles=(0, 1, 2, 3), adc_slices=tuple((entry.rfdc_tile, entry.rfdc_slice)
-        for entry in model.adc_channel_map), adc_sample_rate_hz=model.adc_sample_rate_hz,
-        adc_decimation=model.rfdc_decimation, dac_tiles=(0, 1),
-        dac_slices=tuple((entry.rfdc_tile, entry.rfdc_slice) for entry in model.dac_channel_map),
-        dac_sample_rate_hz=model.dac_sample_rate_hz, dac_interpolation=model.rfdc_interpolation,
-        dac_nco_frequency_hz=architecture.rfdc_integration.dac_nco_frequency_hz,
-        dac_mixer_mode=architecture.rfdc_integration.dac_mixer_mode,
+        adc_tiles=(0, 1, 2, 3), adc_slices=((0, 0), (0, 2), (1, 0), (1, 2), (2, 0), (2, 2), (3, 0), (3, 2)),
+        adc_sample_rate_hz=4_000_000_000, adc_decimation=8, dac_tiles=(0, 1),
+        dac_slices=((0, 0), (0, 1), (0, 2), (0, 3), (1, 0), (1, 1), (1, 2), (1, 3)),
+        dac_sample_rate_hz=4_000_000_000, dac_interpolation=8,
+        dac_nco_frequency_hz=2_800_000_000, dac_mixer_mode="iq_to_real",
     )
 
 
 def build_connected_request(
     model: ModelConfig, architecture: HardwareArchitectureConfig, platform: PsPlatformConfig,
     production_lock: Mapping[str, object], probe_provenance: RfdcProbeProvenance,
+    authority_bytes: ConnectedAuthorityBytes,
 ) -> ConnectedShellRequest:
     """Create the side-effect-free canonical shell request from frozen authority."""
 
@@ -415,32 +437,80 @@ def build_connected_request(
         raise ValueError("model and architecture must be validated authority objects")
     if not isinstance(platform, PsPlatformConfig) or not isinstance(probe_provenance, RfdcProbeProvenance):
         raise ValueError("platform and probe_provenance must be validated authority objects")
+    if not isinstance(authority_bytes, ConnectedAuthorityBytes):
+        raise ValueError("authority_bytes must be ConnectedAuthorityBytes")
     if model.device_part != architecture.device_part or model.device_part != platform.device_part:
         raise ValueError("authority device parts must match")
     if architecture.vivado_version != platform.vivado_version or probe_provenance.vivado_version != architecture.vivado_version:
         raise ValueError("authority Vivado versions must match")
-    if not isinstance(production_lock, Mapping):
-        raise ValueError("production_lock must be a mapping")
-    lock_bytes = canonical_json_bytes(production_lock)
-    packaged_lock = _authority_bytes("ip_lock.json")
-    if lock_bytes != packaged_lock:
-        raise ValueError("production_lock must be the current exact packaged lock")
+    _bind_authority_bytes(model, architecture, platform, production_lock, authority_bytes)
     return ConnectedShellRequest(
         request_schema_version=1,
-        model_config_sha256=hashlib.sha256(_authority_bytes("default.json")).hexdigest(),
-        architecture_config_sha256=hashlib.sha256(_authority_bytes("ip_architecture.json")).hexdigest(),
-        ps_platform_config_sha256=hashlib.sha256(_authority_bytes("ps_platform.json")).hexdigest(),
-        production_lock_sha256=hashlib.sha256(packaged_lock).hexdigest(),
+        model_config_sha256=hashlib.sha256(authority_bytes.model_config_bytes).hexdigest(),
+        architecture_config_sha256=hashlib.sha256(authority_bytes.architecture_config_bytes).hexdigest(),
+        ps_platform_config_sha256=hashlib.sha256(authority_bytes.ps_platform_config_bytes).hexdigest(),
+        production_lock_sha256=hashlib.sha256(authority_bytes.production_lock_bytes).hexdigest(),
         vivado_version=architecture.vivado_version, device_part=model.device_part,
-        probe_provenance=probe_provenance, cells=_expected_cells(architecture),
-        interfaces=_expected_interfaces(model), clocks=_expected_clocks(platform, model),
+        probe_provenance=probe_provenance, cells=_expected_cells(),
+        interfaces=_expected_interfaces(), clocks=_expected_clocks(),
         resets=_expected_resets(),
         address_path=("zynq_ultra_ps_e_0/M_AXI_HPM0_FPD", "ctrl_smartconnect_0/S00_AXI",
                       "ctrl_smartconnect_0/M00_AXI", "rfdc_0/s_axi"),
         irq_path=("rfdc_0/irq", "irq_concat_0/In0", "irq_concat_0/dout", "zynq_ultra_ps_e_0/pl_ps_irq0"),
-        rfdc_semantics=_expected_semantics(model, architecture),
+        rfdc_semantics=_expected_semantics(),
         mts_groups=(MtsGroup("adc", (0, 1, 2, 3)), MtsGroup("dac", (0, 1))),
     )
+
+
+def _strict_json_mapping(raw_bytes: bytes, field: str) -> Mapping[str, object]:
+    if not isinstance(raw_bytes, bytes):
+        raise ValueError(f"{field} must be bytes")
+    try:
+        value = json.loads(raw_bytes.decode("utf-8"), object_pairs_hook=_reject_duplicates)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise ValueError(f"{field} must be strict UTF-8 JSON: {error}") from error
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field} must contain a JSON object")
+    return value
+
+
+def _bind_authority_bytes(
+    model: ModelConfig, architecture: HardwareArchitectureConfig, platform: PsPlatformConfig,
+    production_lock: Mapping[str, object], authority_bytes: ConnectedAuthorityBytes,
+) -> None:
+    """Bind each explicit byte input to its caller-supplied validated object."""
+
+    if not isinstance(production_lock, Mapping):
+        raise ValueError("production_lock must be a mapping")
+    model_payload = _strict_json_mapping(authority_bytes.model_config_bytes, "model_config_bytes")
+    architecture_payload = _strict_json_mapping(authority_bytes.architecture_config_bytes, "architecture_config_bytes")
+    platform_payload = _strict_json_mapping(authority_bytes.ps_platform_config_bytes, "ps_platform_config_bytes")
+    lock_payload = _strict_json_mapping(authority_bytes.production_lock_bytes, "production_lock_bytes")
+    try:
+        parsed_model = ModelConfig.from_mapping(model_payload)
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"model_config_bytes are invalid: {error}") from error
+    try:
+        parsed_architecture = HardwareArchitectureConfig.from_mapping(architecture_payload)
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"architecture_config_bytes are invalid: {error}") from error
+    try:
+        parsed_platform = PsPlatformConfig.from_mapping(platform_payload)
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"ps_platform_config_bytes are invalid: {error}") from error
+    try:
+        from .lock import decode_production_lock_json
+        parsed_lock = decode_production_lock_json(authority_bytes.production_lock_bytes, "production_lock_bytes")
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"production_lock_bytes are invalid: {error}") from error
+    if parsed_model != model:
+        raise ValueError("model_config_bytes do not bind to model authority")
+    if parsed_architecture != architecture:
+        raise ValueError("architecture_config_bytes do not bind to architecture authority")
+    if parsed_platform != platform:
+        raise ValueError("ps_platform_config_bytes do not bind to platform authority")
+    if parsed_lock != production_lock or lock_payload != production_lock:
+        raise ValueError("production_lock_bytes do not bind to production_lock")
 
 
 def _validate_request_shape(request: ConnectedShellRequest) -> None:
@@ -454,6 +524,29 @@ def _validate_request_shape(request: ConnectedShellRequest) -> None:
         raise ValueError("request must contain exact control/RX/TX resets")
     if len({item.reset_net for item in request.resets}) != 3:
         raise ValueError("request reset domains must be separate")
+    if request.device_part != "xczu27dr-fsve1156-2-i":
+        raise ValueError("request device part must match frozen connected shell")
+    if request.cells != _expected_cells():
+        raise ValueError("request cells must match frozen connected shell contract")
+    if request.interfaces != _expected_interfaces():
+        raise ValueError("request interfaces must match frozen connected shell contract")
+    if request.clocks != _expected_clocks():
+        raise ValueError("request clocks must match frozen connected shell contract")
+    if request.resets != _expected_resets():
+        raise ValueError("request resets must match frozen connected shell contract")
+    if request.address_path != (
+        "zynq_ultra_ps_e_0/M_AXI_HPM0_FPD", "ctrl_smartconnect_0/S00_AXI",
+        "ctrl_smartconnect_0/M00_AXI", "rfdc_0/s_axi",
+    ):
+        raise ValueError("request address path must match frozen connected shell contract")
+    if request.irq_path != (
+        "rfdc_0/irq", "irq_concat_0/In0", "irq_concat_0/dout", "zynq_ultra_ps_e_0/pl_ps_irq0",
+    ):
+        raise ValueError("request IRQ path must match frozen connected shell contract")
+    if request.rfdc_semantics != _expected_semantics():
+        raise ValueError("request RFDC semantics must match frozen connected shell contract")
+    if request.mts_groups != (MtsGroup("adc", (0, 1, 2, 3)), MtsGroup("dac", (0, 1))):
+        raise ValueError("request MTS groups must match frozen connected shell contract")
 
 
 def _normalise(value: object) -> object:
@@ -474,7 +567,9 @@ def canonical_connected_json_bytes(value: object) -> bytes:
     normalised = _normalise(value)
     if not isinstance(normalised, Mapping):
         raise ValueError("connected JSON root must be an object")
-    return canonical_json_bytes(normalised)
+    return json.dumps(
+        normalised, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8") + b"\n"
 
 
 def _reject_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:

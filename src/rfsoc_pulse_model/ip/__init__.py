@@ -31,6 +31,7 @@ from .platform import Gem3BoardIoConfig, PS_VLNV, PsPlatformConfig
 from .connected import (
     AxisInterface,
     ClockNet,
+    ConnectedAuthorityBytes,
     ConnectedCell,
     ConnectedShellEvidence,
     ConnectedShellReadiness,
@@ -60,6 +61,7 @@ __all__ = [
     "AxisInterface",
     "ConnectionStatus",
     "ClockNet",
+    "ConnectedAuthorityBytes",
     "ConnectedCell",
     "ConnectedShellEvidence",
     "ConnectedShellReadiness",
