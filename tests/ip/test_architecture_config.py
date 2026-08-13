@@ -8,9 +8,11 @@ from rfsoc_pulse_model.common.config import ModelConfig
 from rfsoc_pulse_model.ip.types import (
     ArchitectureBlockSpec,
     ArchitectureStatus,
+    ConnectionStatus,
     HardwareArchitectureConfig,
     ImplementationKind,
     IpInstanceLifecycle,
+    ParameterStatus,
 )
 
 
@@ -195,6 +197,85 @@ class HardwareArchitectureConfigTest(unittest.TestCase):
             replace_block("rfdc_frontend", instance_refs=())
         with self.assertRaisesRegex(ValueError, "monitor_branch.*AMD owner"):
             replace_block("monitor_branch", instance_refs=("rfdc_0",))
+
+    def test_connected_shell_protected_owner_contract_rejects_all_kind_status_bypasses(
+        self,
+    ) -> None:
+        """Protected owner authority must not depend on attacker-selected kind."""
+        config = HardwareArchitectureConfig.load_default()
+        protected_owners = {
+            "rfdc_frontend": "rfdc_0",
+            "monitor_branch": "monitor_fir_dec2_0",
+        }
+
+        def bypass_block(
+            block: ArchitectureBlockSpec,
+            kind: ImplementationKind,
+        ) -> ArchitectureBlockSpec:
+            if kind is ImplementationKind.AMD_IP:
+                return dataclasses.replace(block, source="rtl/owner_bypass.v")
+            if kind is ImplementationKind.ARCHITECTURE_PENDING:
+                return dataclasses.replace(
+                    block,
+                    implementation_kind=kind,
+                    architecture_status=ArchitectureStatus.ARCHITECTURE_PENDING,
+                    instance_refs=(),
+                    source=None,
+                )
+            if kind is ImplementationKind.LEGACY_NON_PRODUCTION:
+                return dataclasses.replace(
+                    block,
+                    implementation_kind=kind,
+                    responsibilities=(),
+                    reference_responsibilities=("legacy_reference.owner_bypass",),
+                    instance_refs=(),
+                    source=None,
+                )
+            return dataclasses.replace(
+                block,
+                implementation_kind=kind,
+                source="rtl/owner_bypass.v",
+            )
+
+        for block_name, instance_name in protected_owners.items():
+            original_block = config.block_by_name(block_name)
+            for implementation_kind in ImplementationKind:
+                for parameter_status in ParameterStatus:
+                    for connection_status in ConnectionStatus:
+                        with self.subTest(
+                            block_name=block_name,
+                            implementation_kind=implementation_kind,
+                            parameter_status=parameter_status,
+                            connection_status=connection_status,
+                        ):
+                            candidate_block = bypass_block(
+                                original_block,
+                                implementation_kind,
+                            )
+                            candidate_instances = tuple(
+                                dataclasses.replace(
+                                    instance,
+                                    parameter_status=parameter_status,
+                                    connection_status=connection_status,
+                                )
+                                if instance.instance_name == instance_name
+                                else instance
+                                for instance in config.ip_instances
+                            )
+                            with self.assertRaisesRegex(
+                                ValueError,
+                                f"{block_name}.*protected owner",
+                            ):
+                                dataclasses.replace(
+                                    config,
+                                    ip_instances=candidate_instances,
+                                    architecture_blocks=tuple(
+                                        candidate_block
+                                        if block.block_name == block_name
+                                        else block
+                                        for block in config.architecture_blocks
+                                    ),
+                                )
 
     def test_connected_shell_rejects_extra_planned_shell_instances_and_rfdc_authority_drift(self) -> None:
         config = HardwareArchitectureConfig.load_default()

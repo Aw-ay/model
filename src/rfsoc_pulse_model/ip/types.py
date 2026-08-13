@@ -405,34 +405,49 @@ class HardwareArchitectureConfig:
         if rfdc_instance.lifecycle is IpInstanceLifecycle.RETIRED:
             raise ValueError("rfdc_integration instance_ref cannot be retired")
         for block in self.architecture_blocks:
+            expected_owner = _CONNECTED_AMD_OWNER_INSTANCE_CONTRACT.get(
+                block.block_name
+            )
+            if expected_owner is not None:
+                expected_family, expected_refs = expected_owner
+                if (
+                    block.implementation_kind is not ImplementationKind.AMD_IP
+                    or block.architecture_status is not ArchitectureStatus.FROZEN
+                    or block.source is not None
+                ):
+                    raise ValueError(
+                        f"{block.block_name} protected owner must remain a frozen "
+                        "source-less AMD IP"
+                    )
+                if block.instance_refs != expected_refs:
+                    raise ValueError(
+                        f"{block.block_name} AMD owner instance_refs must exactly match "
+                        f"{expected_refs}"
+                    )
+                unknown_refs = set(block.instance_refs) - instance_names
+                if unknown_refs:
+                    raise ValueError(
+                        f"{block.block_name} has unknown instance_refs: "
+                        f"{sorted(unknown_refs)}"
+                    )
+                if any(
+                    self.instance_by_name(instance_name).family_ref != expected_family
+                    for instance_name in block.instance_refs
+                ):
+                    raise ValueError(
+                        f"{block.block_name} AMD owner instances must use "
+                        f"family {expected_family}"
+                    )
+                continue
             unknown_refs = set(block.instance_refs) - instance_names
             if unknown_refs:
                 raise ValueError(
                     f"{block.block_name} has unknown instance_refs: {sorted(unknown_refs)}"
                 )
-            if block.implementation_kind is not ImplementationKind.AMD_IP:
-                continue
-            expected_owner = _CONNECTED_AMD_OWNER_INSTANCE_CONTRACT.get(
-                block.block_name
-            )
-            if expected_owner is None:
+            if block.implementation_kind is ImplementationKind.AMD_IP:
                 raise ValueError(
                     f"connected shell AMD owner has no declared family contract: "
                     f"{block.block_name}"
-                )
-            expected_family, expected_refs = expected_owner
-            if block.instance_refs != expected_refs:
-                raise ValueError(
-                    f"{block.block_name} AMD owner instance_refs must exactly match "
-                    f"{expected_refs}"
-                )
-            if any(
-                self.instance_by_name(instance_name).family_ref != expected_family
-                for instance_name in block.instance_refs
-            ):
-                raise ValueError(
-                    f"{block.block_name} AMD owner instances must use "
-                    f"family {expected_family}"
                 )
 
     def family_by_id(self, family_id: str) -> IpFamilySpec:
