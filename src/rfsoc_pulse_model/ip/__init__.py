@@ -28,6 +28,23 @@ from .evidence import (
     validate_catalog_evidence,
 )
 from .platform import Gem3BoardIoConfig, PS_VLNV, PsPlatformConfig
+from .connected import (
+    AxisInterface,
+    ClockNet,
+    ConnectedCell,
+    ConnectedShellEvidence,
+    ConnectedShellReadiness,
+    ConnectedShellRequest,
+    MtsGroup,
+    ResetNet,
+    RfdcProbeProvenance,
+    RfdcSemantics,
+    build_connected_request,
+    canonical_connected_json_bytes,
+    parse_connected_evidence,
+    parse_connected_request,
+    validate_connected_evidence,
+)
 if TYPE_CHECKING:
     from .lock import (
         GenerationMode,
@@ -40,7 +57,13 @@ if TYPE_CHECKING:
 __all__ = [
     "ArchitectureBlockSpec",
     "ArchitectureStatus",
+    "AxisInterface",
     "ConnectionStatus",
+    "ClockNet",
+    "ConnectedCell",
+    "ConnectedShellEvidence",
+    "ConnectedShellReadiness",
+    "ConnectedShellRequest",
     "GenerationMode",
     "Gem3BoardIoConfig",
     "CatalogEvidence",
@@ -59,13 +82,22 @@ __all__ = [
     "RFDC_2_6_VLNV",
     "RequiredResponsibilitiesSpec",
     "RfdcIntegrationMetadata",
+    "RfdcProbeProvenance",
+    "RfdcSemantics",
+    "ResetNet",
+    "MtsGroup",
     "ValidatedCatalogEvidence",
     "build_candidate_lock",
     "build_catalog_request",
+    "build_connected_request",
+    "canonical_connected_json_bytes",
     "canonical_json_bytes",
     "parse_catalog_evidence",
+    "parse_connected_evidence",
+    "parse_connected_request",
     "promote_candidate_lock",
     "validate_catalog_evidence",
+    "validate_connected_evidence",
     "validate_production_lock",
 ]
 
