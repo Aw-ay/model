@@ -56,6 +56,8 @@ from .rfdc_probe import (
     emit_rfdc_probe_tcl,
     parse_rfdc_probe_evidence,
 )
+from .connected_tcl import ConnectedTclArtifacts, emit_connected_tcl
+from .connected_runner import ConnectedShellAttempt, ConnectedShellRunner
 if TYPE_CHECKING:
     from .lock import (
         GenerationMode,
@@ -76,6 +78,9 @@ __all__ = [
     "ConnectedShellEvidence",
     "ConnectedShellReadiness",
     "ConnectedShellRequest",
+    "ConnectedShellAttempt",
+    "ConnectedShellRunner",
+    "ConnectedTclArtifacts",
     "GenerationMode",
     "Gem3BoardIoConfig",
     "CatalogEvidence",
@@ -111,6 +116,7 @@ __all__ = [
     "canonical_json_bytes",
     "canonical_rfdc_probe_json_bytes",
     "emit_rfdc_probe_tcl",
+    "emit_connected_tcl",
     "parse_catalog_evidence",
     "parse_connected_evidence",
     "parse_connected_request",

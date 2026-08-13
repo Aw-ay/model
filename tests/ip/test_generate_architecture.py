@@ -9,7 +9,7 @@ from rfsoc_pulse_model.ip.evidence import (
     build_catalog_request,
     canonical_json_bytes,
 )
-from rfsoc_pulse_model.ip.generate import generate_ip_architecture
+from rfsoc_pulse_model.ip.generate import generate_connected_rfdc_shell, generate_ip_architecture
 from rfsoc_pulse_model.ip.generate import _validate_packaged_lock
 from rfsoc_pulse_model.ip.lock import GenerationMode
 from rfsoc_pulse_model.ip.tcl import emit_catalog_discovery_tcl
@@ -18,6 +18,39 @@ from rfsoc_pulse_model.generate import main as generate_main
 
 
 class GenerateIpArchitectureTest(unittest.TestCase):
+    def test_connected_generation_binds_probe_bytes_and_is_byte_deterministic(self) -> None:
+        """Dropping probe provenance or nondeterministic paths must break this."""
+
+        from rfsoc_pulse_model.common.config import ModelConfig
+        from rfsoc_pulse_model.ip.rfdc_probe import (
+            build_rfdc_probe_evidence,
+            emit_rfdc_probe_tcl,
+        )
+        from tests.ip.test_rfdc_probe import RfdcProbeContractTests
+
+        model = ModelConfig.load_default()
+        architecture = HardwareArchitectureConfig.load_default()
+        probe_tcl = emit_rfdc_probe_tcl(model, architecture).encode("utf-8")
+        probe = build_rfdc_probe_evidence(
+            RfdcProbeContractTests._measured_raw_fixture(), probe_tcl, model, architecture,
+            run_id=17,
+        )
+        with tempfile.TemporaryDirectory() as first_temp, tempfile.TemporaryDirectory() as second_temp:
+            first = generate_connected_rfdc_shell(Path(first_temp), probe, probe_tcl)
+            second = generate_connected_rfdc_shell(Path(second_temp), probe, probe_tcl)
+            first_bytes = {
+                path.relative_to(first_temp): path.read_bytes()
+                for path in Path(first_temp).rglob("*") if path.is_file()
+            }
+            second_bytes = {
+                path.relative_to(second_temp): path.read_bytes()
+                for path in Path(second_temp).rglob("*") if path.is_file()
+            }
+            self.assertEqual(first, second)
+            self.assertEqual(first_bytes, second_bytes)
+            self.assertIn(Path("metadata/connected_request.json"), first_bytes)
+            self.assertIn(Path("vivado/realize_connected_rfdc_shell.tcl"), first_bytes)
+
     def test_canonical_request_has_sorted_utf8_json_and_one_newline(self) -> None:
         config = HardwareArchitectureConfig.load_default()
         request = build_catalog_request(config, "a" * 64, "b" * 64)

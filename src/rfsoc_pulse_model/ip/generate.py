@@ -22,6 +22,11 @@ from .lock import (
     decode_production_lock_json,
     validate_production_lock,
 )
+from .connected import ConnectedAuthorityBytes, build_connected_request, canonical_connected_json_bytes
+from .connected_tcl import emit_connected_tcl
+from .platform import PsPlatformConfig
+from .rfdc_probe import parse_rfdc_probe_evidence
+from rfsoc_pulse_model.common.config import ModelConfig
 
 
 def _sha256(data: bytes) -> str:
@@ -159,6 +164,59 @@ def generate_ip_architecture(
         canonical_json_bytes(architecture)
     )
     return architecture
+
+
+def generate_connected_rfdc_shell(
+    output_root: Path,
+    probe_evidence_bytes: bytes,
+    probe_tcl_bytes: bytes,
+) -> dict[str, object]:
+    """Generate connected-shell request/Tcl from explicit Task-4 evidence.
+
+    This is artifact orchestration only.  It does not run Vivado, create a
+    lifecycle marker or make structural-readiness claims.
+    """
+
+    root = Path(output_root)
+    model = ModelConfig.load_default()
+    architecture = HardwareArchitectureConfig.load_default()
+    platform = PsPlatformConfig.load_default()
+    model_bytes = resources.files("rfsoc_pulse_model.config").joinpath("default.json").read_bytes()
+    architecture_bytes = resources.files("rfsoc_pulse_model.config").joinpath("ip_architecture.json").read_bytes()
+    platform_bytes = resources.files("rfsoc_pulse_model.config").joinpath("ps_platform.json").read_bytes()
+    lock_bytes = resources.files("rfsoc_pulse_model.config").joinpath("ip_lock.json").read_bytes()
+    production_lock = decode_production_lock_json(lock_bytes, "packaged production lock")
+    discovery_bytes = emit_catalog_discovery_tcl(architecture).encode("utf-8")
+    catalog_request_bytes = canonical_json_bytes(build_catalog_request(
+        architecture, _sha256(architecture_bytes), _sha256(discovery_bytes)
+    ))
+    probe = parse_rfdc_probe_evidence(
+        probe_evidence_bytes, probe_tcl_bytes, model, architecture
+    )
+    authority_bytes = ConnectedAuthorityBytes(
+        model_bytes, architecture_bytes, platform_bytes, lock_bytes,
+        discovery_bytes, catalog_request_bytes,
+    )
+    request = build_connected_request(
+        model, architecture, platform, production_lock, probe.provenance, authority_bytes
+    )
+    artifacts = emit_connected_tcl(request, platform, probe.applied_config)
+    metadata_root = root / "metadata"
+    vivado_root = root / "vivado"
+    metadata_root.mkdir(parents=True, exist_ok=True)
+    vivado_root.mkdir(parents=True, exist_ok=True)
+    (metadata_root / "connected_request.json").write_bytes(artifacts.request_bytes)
+    (vivado_root / "realize_connected_rfdc_shell.tcl").write_bytes(artifacts.realization_tcl)
+    (vivado_root / "verify_connected_rfdc_shell.tcl").write_bytes(artifacts.verification_tcl)
+    return {
+        "request_sha256": artifacts.request_sha256,
+        "realization_tcl_sha256": artifacts.realization_tcl_sha256,
+        "verification_tcl_sha256": artifacts.verification_tcl_sha256,
+        "probe_tcl_sha256": probe.provenance.probe_tcl_sha256,
+        "probe_raw_output_sha256": probe.provenance.raw_output_sha256,
+        "probe_run_id": probe.provenance.run_id,
+        "production_integration_ready": False,
+    }
 
 
 def _validate_packaged_lock(
