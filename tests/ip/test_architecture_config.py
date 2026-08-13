@@ -148,7 +148,7 @@ class HardwareArchitectureConfigTest(unittest.TestCase):
                 ),
             )
 
-        with self.assertRaisesRegex(ValueError, "materialized instance set"):
+        with self.assertRaisesRegex(ValueError, "shell instance set"):
             dataclasses.replace(
                 config,
                 ip_instances=tuple(
@@ -157,7 +157,7 @@ class HardwareArchitectureConfigTest(unittest.TestCase):
                     if instance.instance_name != "rfdc_0"
                 ),
             )
-        with self.assertRaisesRegex(ValueError, "materialized instance set"):
+        with self.assertRaisesRegex(ValueError, "shell instance set"):
             dataclasses.replace(
                 config,
                 ip_instances=(
@@ -195,6 +195,67 @@ class HardwareArchitectureConfigTest(unittest.TestCase):
             replace_block("rfdc_frontend", instance_refs=())
         with self.assertRaisesRegex(ValueError, "monitor_branch.*AMD owner"):
             replace_block("monitor_branch", instance_refs=("rfdc_0",))
+
+    def test_connected_shell_rejects_extra_planned_shell_instances_and_rfdc_authority_drift(self) -> None:
+        config = HardwareArchitectureConfig.load_default()
+        shell_templates = {
+            "rfdc": "rfdc_0",
+            "zynq_ultra_ps_e": "zynq_ultra_ps_e_0",
+            "smartconnect": "ctrl_smartconnect_0",
+            "proc_sys_reset": "ctrl_reset_0",
+            "util_vector_logic": "reset_inverter_0",
+            "xlconcat": "irq_concat_0",
+        }
+        for family_id, template_name in shell_templates.items():
+            with self.subTest(family_id=family_id):
+                extra = dataclasses.replace(
+                    config.instance_by_name(template_name),
+                    instance_name=f"{family_id}_future_0",
+                    lifecycle=IpInstanceLifecycle.PLANNED,
+                )
+                with self.assertRaisesRegex(ValueError, "shell instance set"):
+                    dataclasses.replace(
+                        config,
+                        ip_instances=(*config.ip_instances, extra),
+                    )
+
+        planned_rfdc = dataclasses.replace(
+            config.instance_by_name("rfdc_0"),
+            instance_name="rfdc_future_0",
+            lifecycle=IpInstanceLifecycle.PLANNED,
+        )
+        with self.assertRaisesRegex(ValueError, "shell instance set"):
+            dataclasses.replace(
+                config,
+                ip_instances=(*config.ip_instances, planned_rfdc),
+                rfdc_integration=dataclasses.replace(
+                    config.rfdc_integration,
+                    instance_ref="rfdc_future_0",
+                ),
+            )
+        with self.assertRaisesRegex(ValueError, "rfdc_integration.instance_ref.*rfdc_0"):
+            dataclasses.replace(
+                config,
+                rfdc_integration=dataclasses.replace(
+                    config.rfdc_integration,
+                    instance_ref="ctrl_reset_0",
+                ),
+            )
+
+    def test_connected_shell_allows_future_non_shell_instances(self) -> None:
+        config = HardwareArchitectureConfig.load_default()
+        future_axi_dma = dataclasses.replace(
+            config.instance_by_name("monitor_fir_dec2_0"),
+            instance_name="axi_dma_future_0",
+            family_ref="axi_dma",
+            logical_role="future_event_transport",
+            lifecycle=IpInstanceLifecycle.PLANNED,
+        )
+        result = dataclasses.replace(
+            config,
+            ip_instances=(*config.ip_instances, future_axi_dma),
+        )
+        self.assertEqual(result.instance_by_name("axi_dma_future_0"), future_axi_dma)
 
     def test_connected_authority_rejects_missing_or_extra_required_platform_families(self) -> None:
         missing = self.root_payload()

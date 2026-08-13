@@ -374,13 +374,12 @@ class HardwareArchitectureConfig:
             instance
             for instance in self.ip_instances
             if instance.family_ref in _CONNECTED_SHELL_FAMILIES
-            and instance.lifecycle is IpInstanceLifecycle.MATERIALIZED
         )
         shell_instance_names = {instance.instance_name for instance in shell_instances}
         expected_shell_instance_names = set(_CONNECTED_MATERIALIZED_INSTANCE_CONTRACT)
         if shell_instance_names != expected_shell_instance_names:
             raise ValueError(
-                "connected shell materialized instance set mismatch: "
+                "connected shell instance set mismatch: "
                 f"missing={sorted(expected_shell_instance_names - shell_instance_names)}, "
                 f"extra={sorted(shell_instance_names - expected_shell_instance_names)}"
             )
@@ -391,12 +390,15 @@ class HardwareArchitectureConfig:
             if (
                 instance.family_ref != expected_family
                 or instance.logical_role != expected_role
+                or instance.lifecycle is not IpInstanceLifecycle.MATERIALIZED
             ):
                 raise ValueError(
                     "connected shell materialized instance contract mismatch: "
                     f"{instance.instance_name}"
                 )
         instance_names = {instance.instance_name for instance in self.ip_instances}
+        if self.rfdc_integration.instance_ref != "rfdc_0":
+            raise ValueError("rfdc_integration.instance_ref must be rfdc_0")
         rfdc_instance = self.instance_by_name(self.rfdc_integration.instance_ref)
         if rfdc_instance.family_ref != "rfdc":
             raise ValueError("rfdc_integration instance_ref must reference rfdc")
