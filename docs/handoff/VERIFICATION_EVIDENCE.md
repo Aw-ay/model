@@ -102,4 +102,3 @@ At the implementation anchor, Task 5 remains structurally blocked even though it
 - Production Cycle and generated-Verilog implementations for RX/TX 2SPC, continuous reflection, and monitor events.
 - DMA/DDR/GEM3 event-only transfer, packet-loss accounting, and host reception.
 - Board-level 8 ADC/8 DAC continuity, H/V identity, +20/0/-20 dB range ratios, loopback, phase stability, and 24-hour operation.
-
