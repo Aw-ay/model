@@ -12,6 +12,9 @@ repository path as environment-only data. `build/metadata/environment_ready.json
 is `ready:true` for Vivado 2025.2 build `6299465`, a clean Git tree, and
 unchanged authority hashes.
 
+The current environment manifest SHA-256 is
+`437fc84bca930b66b634c6df2897f56e84864eca7e7fe96e07194b4e8010c2bc`.
+
 The four authority SHA-256 values below are unchanged. The current `build/`
 contains fresh current-machine catalog, RFDC probe, and connected-request
 artifacts; no old attempt-local Vivado project or report outputs were copied.
@@ -77,7 +80,9 @@ Current source verification establishes:
 - the fresh catalog run is bound to the current environment manifest and has
   `catalog_status=all_required_ip_resolved` with a valid production lock;
 - current catalog evidence SHA-256:
-  `a0669349b74f0f97a2cd6f2e1ff8738ff8e899caa8f18efb6b8c00323d719721`;
+  `b95be311f60ffe29d812c016cadfa321204a5ea7ecbac7af500ca8f559d456c7`;
+- current catalog provenance SHA-256:
+  `2ac1c50e92db326ade0ea59d17e2841bcf7382b10f6a41ff739162e9d9dce37f`;
 - catalog completeness and lock validity do not imply connected topology or production integration.
 
 ## RFDC 2.6 Probe
@@ -104,8 +109,12 @@ Its measured result is:
 
 The current evidence records 13 MTS properties, 12 readback records, and 6
 tile-to-property bindings. Its evidence SHA-256 is
-`084228502c80bdd1256fb8612f2bfbadf14a40653ddb9f4164b479810a0c5b23`, bound to
+`05980c77b654c1cc2ab78ef859d46032bee7eb70a280214d4d05e9de9f2097e4`, bound to
 the current environment manifest and probe Tcl/raw-output hashes.
+
+The fresh connected request SHA-256 is
+`bf4151a15e3fa8640c7b6053bc03c2b03087b7216583267ed4f7182623011619`; it
+consumes probe `run_id=1` and remains `production_integration_ready=false`.
 
 The mandatory diagnostic counters were sampled from before the first project/BD/cell/property action and emitted unconditionally. The strict parser rejects missing, duplicate, unknown, malformed, or nonzero diagnostic records and validates exact interface/scalar inventories and authority-derived RFDC properties.
 
