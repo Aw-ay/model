@@ -218,12 +218,22 @@ def emit_connected_tcl(
         lines += [f"connect_bd_net [get_bd_pins {{{inverter}/Res}}] [get_bd_pins {{{cell}/ext_reset_in}}]", f"create_bd_net {{{reset.reset_net}}}", f"create_bd_port -dir I {{{reset.dcm_locked_pin}}}", f"connect_bd_net [get_bd_ports {{{reset.dcm_locked_pin}}}] [get_bd_pins {{{cell}/dcm_locked}}]"]
         for member in reset.members: lines.append(f"connect_bd_net [get_bd_nets {{{reset.reset_net}}}] [get_bd_pins {{{cell}/peripheral_aresetn}}] [get_bd_pins {{{member}}}]")
     lines += [f"connect_bd_net [get_bd_pins {{{rfdc}/irq}}] [get_bd_pins {{{irq}/In0}}]", f"connect_bd_net [get_bd_pins {{{irq}/dout}}] [get_bd_pins {{{ps}/pl_ps_irq0}}]"]
+    lines += [
+        f"set rfdc_adc_axis_freq_mhz [get_property CONFIG.ADC0_Outclk_Freq [get_bd_cells {{{rfdc}}}]]",
+        f"set rfdc_dac_axis_freq_mhz [get_property CONFIG.DAC0_Outclk_Freq [get_bd_cells {{{rfdc}}}]]",
+    ]
     for interface in request.interfaces:
         lines.append(f"make_bd_intf_pins_external [get_bd_intf_pins {{{rfdc}/{interface.name}}}]")
-        lines.append(
-            f"set_property CONFIG.FREQ_HZ [get_property CONFIG.FREQ_HZ [get_bd_intf_pins {{{rfdc}/{interface.name}}}]] "
-            f"[get_bd_intf_ports -of_objects [get_bd_intf_pins {{{rfdc}/{interface.name}}}]]"
-        )
+        if re.fullmatch(r"m\d\d_axis", interface.name):
+            lines.append(
+                f"set_property CONFIG.FREQ_HZ [expr {{int(round(1000000.0 * $rfdc_adc_axis_freq_mhz))}}] "
+                f"[get_bd_intf_ports {{{interface.name}_0}}]"
+            )
+        elif re.fullmatch(r"s\d\d_axis", interface.name):
+            lines.append(
+                f"set_property CONFIG.FREQ_HZ [expr {{int(round(1000000.0 * $rfdc_dac_axis_freq_mhz))}}] "
+                f"[get_bd_intf_ports {{{interface.name}_0}}]"
+            )
     for interface in external_rf: lines.append(f"make_bd_intf_pins_external [get_bd_intf_pins {{{rfdc}/{interface.name}}}]")
     lines += [f"assign_bd_address [get_bd_addr_segs {{{rfdc}/s_axi/Reg}}]", "validate_bd_design", "save_bd_design", ""]
     realization = "\n".join(lines).encode("utf-8")
@@ -258,8 +268,8 @@ def _emit_verification(request: ConnectedShellRequest, rfdc: str, properties: tu
     lines.append(f"connected_emit CONCAT NUM_PORTS [get_property CONFIG.NUM_PORTS [get_bd_cells {{{concat}}}]]")
     # actual generated external names are checked as an exact inventory by their
     # authoritative internal source pins.
-    for item in request.interfaces: lines.append(f"connected_emit PORT {item.name} [get_property NAME [get_bd_intf_ports -of_objects [get_bd_intf_pins {{{rfdc}/{item.name}}}]]]")
-    for item in external_rf: lines.append(f"connected_emit PORT {item.name} [get_property NAME [get_bd_intf_ports -of_objects [get_bd_intf_pins {{{rfdc}/{item.name}}}]]]")
+    for item in request.interfaces: lines.append(f"connected_emit PORT {item.name} [get_property NAME [get_bd_intf_ports {{{item.name}_0}}]]")
+    for item in external_rf: lines.append(f"connected_emit PORT {item.name} [get_property NAME [get_bd_intf_ports {{{item.name}_0}}]]")
     for clock in request.clocks:
         for member in clock.members: lines.append(f"connected_emit CLOCK {clock.domain} {member} [get_property NAME [get_bd_nets -of_objects [get_bd_pins {{{member}}}]]]")
     for reset in request.resets:

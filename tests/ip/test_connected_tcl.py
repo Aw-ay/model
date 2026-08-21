@@ -53,7 +53,15 @@ class ConnectedTclTest(unittest.TestCase):
         self.assertIn("{CONFIG.PSU__USE__M_AXI_GP2} {0}", text)
         self.assertIn("maxihpm0_fpd_aclk", text)
         self.assertIn(
-            "set_property CONFIG.FREQ_HZ [get_property CONFIG.FREQ_HZ [get_bd_intf_pins",
+            "set rfdc_adc_axis_freq_mhz [get_property CONFIG.ADC0_Outclk_Freq [get_bd_cells {rfdc_0}]]",
+            text,
+        )
+        self.assertIn(
+            "set_property CONFIG.FREQ_HZ [expr {int(round(1000000.0 * $rfdc_adc_axis_freq_mhz))}] [get_bd_intf_ports {m00_axis_0}]",
+            text,
+        )
+        self.assertIn(
+            "set_property CONFIG.FREQ_HZ [expr {int(round(1000000.0 * $rfdc_dac_axis_freq_mhz))}] [get_bd_intf_ports {s00_axis_0}]",
             text,
         )
         self.assertIn("create_project connected_rfdc_shell $::env(CONNECTED_PROJECT_DIR)", text)
@@ -67,6 +75,10 @@ class ConnectedTclTest(unittest.TestCase):
         for forbidden in ("axi_dma", "detector", "automation"):
             self.assertNotIn(forbidden, text.lower())
         verification = first.verification_tcl.decode("utf-8")
+        self.assertIn(
+            "connected_emit PORT m00_axis [get_property NAME [get_bd_intf_ports {m00_axis_0}]]",
+            verification,
+        )
         self.assertIn("CONNECTED_READBACK_TSV", verification)
         self.assertIn("generate_target all", verification)
         self.assertIn("open_run synth_1", verification)
