@@ -455,13 +455,18 @@ legacy verification RTL to `build/reference_rtl/`, numeric metadata,
 `production_rtl` and `reference_rtl` arrays. The build directory is disposable
 and generated files must be regenerated rather than hand-edited.
 
-Run catalog discovery first, passing the four SHA-256 values emitted/bound by
-the generated request and environment manifest; it creates only a fixed-part
-in-memory catalog project and writes `build/metadata/catalog_evidence.tsv`:
+Run catalog discovery first, passing the three authority SHA-256 values from
+the generated request; it creates only a fixed-part in-memory catalog project
+and writes a fresh `build/metadata/catalog_evidence.tsv`:
 
 ```text
-vivado -mode batch -source build/vivado/discover_ip_catalog.tcl -tclargs <architecture_config_sha256> <generated_tcl_sha256> <catalog_request_sha256> <environment_manifest_sha256>
+vivado -mode batch -source build/vivado/discover_ip_catalog.tcl -tclargs <architecture_config_sha256> <generated_tcl_sha256> <catalog_request_sha256>
 ```
+
+After strict evidence ingestion, the environment-aware generation step writes
+`build/metadata/catalog_provenance.json`. That sidecar binds the fresh TSV to
+the current Phase-0 manifest without changing the architecture discovery or
+production-lock hashes. Never copy the TSV or sidecar from another machine.
 
 After strict evidence ingestion and explicit lock promotion, production
 generation emits `build/vivado/realize_ip_architecture.tcl`. Run that script

@@ -53,6 +53,15 @@ class IpArchitectureTclTest(unittest.TestCase):
             tcl,
         )
 
+    def test_environment_binding_does_not_change_authority_discovery_bytes(self) -> None:
+        config = HardwareArchitectureConfig.load_default()
+        authority_tcl = emit_catalog_discovery_tcl(config)
+        environment_bound_call = emit_catalog_discovery_tcl(config, "a" * 64)
+
+        self.assertEqual(authority_tcl, environment_bound_call)
+        self.assertIn("evidence_schema_version\\t1", authority_tcl)
+        self.assertNotIn("environment_manifest_sha256", authority_tcl)
+
     def test_realization_creates_only_materialized_instances(self) -> None:
         config = HardwareArchitectureConfig.load_default()
         tcl = emit_architecture_realization_tcl(config)

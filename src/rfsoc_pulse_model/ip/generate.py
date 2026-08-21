@@ -10,8 +10,10 @@ from .evidence import (
     CatalogResolutionStatus,
     build_candidate_lock,
     build_catalog_request,
+    build_catalog_provenance,
     canonical_json_bytes,
     parse_catalog_evidence,
+    validate_catalog_provenance,
     validate_catalog_evidence,
 )
 from .registry import ArchitectureRegistry
@@ -82,9 +84,9 @@ def generate_ip_architecture(
             environment_manifest_bytes
         ).sha256
 
-    discovery_bytes = emit_catalog_discovery_tcl(
-        config, environment_manifest_sha256
-    ).encode("utf-8")
+    # Discovery is architecture authority.  Environment provenance is bound
+    # separately below and must not change the packaged lock hash.
+    discovery_bytes = emit_catalog_discovery_tcl(config).encode("utf-8")
     generated_tcl_sha256 = _sha256(discovery_bytes)
     realization_bytes = emit_architecture_realization_tcl(config).encode("utf-8")
     realization_tcl_sha256 = _sha256(realization_bytes)
@@ -108,6 +110,11 @@ def generate_ip_architecture(
         if not candidate_path.is_file():
             raise ValueError(f"candidate lock path is not a file: {candidate_path}")
         candidate_path.unlink()
+    provenance_path = metadata_root / "catalog_provenance.json"
+    if provenance_path.exists():
+        if not provenance_path.is_file():
+            raise ValueError(f"catalog provenance path is not a file: {provenance_path}")
+        provenance_path.unlink()
     evidence_path = metadata_root / "catalog_evidence.tsv"
     if evidence_path.is_file():
         validated_evidence = validate_catalog_evidence(
@@ -128,6 +135,19 @@ def generate_ip_architecture(
         candidate_path.write_bytes(
             canonical_json_bytes(build_candidate_lock(config, validated_evidence))
         )
+        if environment_manifest_sha256 is not None:
+            evidence_bytes = evidence_path.read_bytes()
+            provenance_path.write_bytes(
+                canonical_json_bytes(
+                    build_catalog_provenance(
+                        evidence_bytes,
+                        request_bytes,
+                        discovery_bytes,
+                        validated_evidence.evidence,
+                        environment_manifest_sha256,
+                    )
+                )
+            )
 
     rfdc_family = config.family_by_id("rfdc")
     architecture: dict[str, object] = {
@@ -234,12 +254,43 @@ def generate_connected_rfdc_shell(
         parse_environment_manifest(environment_manifest_bytes).sha256
         if environment_manifest_bytes is not None else None
     )
-    discovery_bytes = emit_catalog_discovery_tcl(
-        architecture, environment_manifest_sha256
-    ).encode("utf-8")
+    # Keep the discovery/lock bytes machine-independent.  The environment
+    # manifest is already bound in the connected request and in the catalog
+    # provenance record validated below.
+    discovery_bytes = emit_catalog_discovery_tcl(architecture).encode("utf-8")
     catalog_request_bytes = canonical_json_bytes(build_catalog_request(
         architecture, _sha256(architecture_bytes), _sha256(discovery_bytes)
     ))
+    if environment_manifest_sha256 is not None:
+        evidence_path = root / "metadata" / "catalog_evidence.tsv"
+        provenance_path = root / "metadata" / "catalog_provenance.json"
+        if not evidence_path.is_file() or not provenance_path.is_file():
+            raise ValueError(
+                "current environment-bound catalog evidence is required before connected generation"
+            )
+        catalog_evidence_bytes = evidence_path.read_bytes()
+        catalog_evidence = parse_catalog_evidence(
+            catalog_evidence_bytes.decode("utf-8")
+        )
+        validated_catalog = validate_catalog_evidence(
+            architecture,
+            catalog_request_bytes,
+            discovery_bytes,
+            catalog_evidence,
+            environment_manifest_sha256,
+        )
+        if not validated_catalog.catalog_resolution_complete:
+            raise ValueError(
+                "current environment-bound catalog evidence is not complete"
+            )
+        validate_catalog_provenance(
+            provenance_path.read_bytes(),
+            catalog_evidence_bytes,
+            catalog_request_bytes,
+            discovery_bytes,
+            catalog_evidence,
+            environment_manifest_sha256,
+        )
     probe = parse_rfdc_probe_evidence(
         probe_evidence_bytes,
         probe_tcl_bytes,

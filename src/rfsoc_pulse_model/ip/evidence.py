@@ -97,6 +97,75 @@ def build_catalog_request(
     }
 
 
+def build_catalog_provenance(
+    evidence_bytes: bytes,
+    request_bytes: bytes,
+    discovery_tcl_bytes: bytes,
+    evidence: CatalogEvidence,
+    environment_manifest_sha256: str,
+) -> dict[str, object]:
+    """Bind fresh catalog output to the current environment without changing authority.
+
+    The discovery Tcl and catalog request remain architecture-authority bytes.
+    This separate record binds the exact Vivado-produced TSV bytes and its run
+    identity to the current Phase-0 manifest.
+    """
+
+    if not _SHA256_RE.fullmatch(environment_manifest_sha256):
+        raise ValueError("environment_manifest_sha256 must be lowercase SHA-256")
+    if evidence.evidence_schema_version not in {1, 2}:
+        raise ValueError("unsupported catalog evidence schema")
+    return {
+        "catalog_provenance_schema_version": 1,
+        "catalog_evidence_sha256": hashlib.sha256(evidence_bytes).hexdigest(),
+        "catalog_request_sha256": hashlib.sha256(request_bytes).hexdigest(),
+        "generated_tcl_sha256": hashlib.sha256(discovery_tcl_bytes).hexdigest(),
+        "environment_manifest_sha256": environment_manifest_sha256,
+        "vivado_version": evidence.vivado_version,
+        "run_id": evidence.run_id,
+    }
+
+
+def validate_catalog_provenance(
+    raw: bytes,
+    evidence_bytes: bytes,
+    request_bytes: bytes,
+    discovery_tcl_bytes: bytes,
+    evidence: CatalogEvidence,
+    environment_manifest_sha256: str,
+) -> None:
+    """Validate the environment-only catalog binding record exactly."""
+
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"invalid catalog provenance JSON: {error}") from error
+    if not isinstance(payload, dict):
+        raise ValueError("catalog provenance must be a JSON object")
+    expected = {
+        "catalog_provenance_schema_version",
+        "catalog_evidence_sha256",
+        "catalog_request_sha256",
+        "generated_tcl_sha256",
+        "environment_manifest_sha256",
+        "vivado_version",
+        "run_id",
+    }
+    if set(payload) != expected or payload["catalog_provenance_schema_version"] != 1:
+        raise ValueError("catalog provenance has unknown, missing, or unsupported keys")
+    expected_payload = build_catalog_provenance(
+        evidence_bytes,
+        request_bytes,
+        discovery_tcl_bytes,
+        evidence,
+        environment_manifest_sha256,
+    )
+    if payload != expected_payload:
+        raise ValueError("catalog provenance does not match current evidence and environment")
+    if raw != canonical_json_bytes(payload):
+        raise ValueError("catalog provenance is not canonical")
+
+
 def parse_catalog_evidence(text: str) -> CatalogEvidence:
     """Parse exactly the schema-v2 three-column catalog TSV grammar."""
 
@@ -203,7 +272,10 @@ def validate_catalog_evidence(
     if environment_manifest_sha256 is not None:
         if not _SHA256_RE.fullmatch(environment_manifest_sha256):
             raise ValueError("environment_manifest_sha256 must be lowercase SHA-256")
-        if evidence.environment_manifest_sha256 != environment_manifest_sha256:
+        if (
+            evidence.environment_manifest_sha256 is not None
+            and evidence.environment_manifest_sha256 != environment_manifest_sha256
+        ):
             return ValidatedCatalogEvidence(
                 status=CatalogResolutionStatus.STALE_EVIDENCE,
                 catalog_resolution_complete=False,
@@ -234,6 +306,7 @@ def validate_catalog_evidence(
         and evidence.vivado_version == config.vivado_version
         and (
             environment_manifest_sha256 is None
+            or evidence.environment_manifest_sha256 is None
             or evidence.environment_manifest_sha256 == environment_manifest_sha256
         )
     )

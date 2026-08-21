@@ -14,8 +14,15 @@ def emit_catalog_discovery_tcl(
 ) -> str:
     """Emit catalog-only Tcl for every required IP family.
 
-    The hashes bound into evidence are runtime arguments so this generated Tcl
-    never contains (and therefore never needs) its own digest.
+    The discovery Tcl is an architecture-authority artifact.  Its bytes must
+    therefore be invariant across machines.  Environment provenance is bound
+    by the Python-side catalog provenance record after this stable script has
+    run; it must never be added as a Tcl argument because doing so would
+    change the production lock hash on every migration.
+
+    ``environment_manifest_sha256`` is retained as a compatibility argument
+    for callers from the first migration implementation.  It is validated but
+    intentionally not emitted into the authority Tcl.
     """
 
     required_families = config.required_families()
@@ -23,13 +30,8 @@ def emit_catalog_discovery_tcl(
         r"[0-9a-f]{64}", environment_manifest_sha256
     ):
         raise ValueError("environment_manifest_sha256 must be lowercase SHA-256")
-    argument_count = 4 if environment_manifest_sha256 is not None else 3
-    argument_names = (
-        "architecture_config_sha256 generated_tcl_sha256 catalog_request_sha256 "
-        "environment_manifest_sha256"
-        if environment_manifest_sha256 is not None
-        else "architecture_config_sha256 generated_tcl_sha256 catalog_request_sha256"
-    )
+    argument_count = 3
+    argument_names = "architecture_config_sha256 generated_tcl_sha256 catalog_request_sha256"
     lines = [
         "# Generated file. Modify the Python architecture source, not this Tcl.",
         "set required_vivado_prefix {2025.2}",
@@ -88,18 +90,11 @@ def emit_catalog_discovery_tcl(
             "  return [lindex $matches end]",
             "}",
             "",
-            f"puts $catalog_evidence \"meta\\tevidence_schema_version\\t{2 if environment_manifest_sha256 is not None else 1}\"",
+            "puts $catalog_evidence \"meta\\tevidence_schema_version\\t1\"",
             "puts $catalog_evidence \"meta\\tarchitecture_config_sha256\\t$architecture_config_sha256\"",
             "puts $catalog_evidence \"meta\\tgenerated_tcl_sha256\\t$generated_tcl_sha256\"",
             "puts $catalog_evidence \"meta\\tcatalog_request_sha256\\t$catalog_request_sha256\"",
             "puts $catalog_evidence \"meta\\tvivado_version\\t$actual_vivado_version\"",
-            *(
-                [
-                    "puts $catalog_evidence \"meta\\tenvironment_manifest_sha256\\t$environment_manifest_sha256\"",
-                ]
-                if environment_manifest_sha256 is not None
-                else []
-            ),
             "puts $catalog_evidence \"meta\\trun_id\\t[pid]-[clock milliseconds]\"",
             "",
         ]

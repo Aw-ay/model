@@ -93,8 +93,12 @@ probe must come from real Vivado output and establish the expected 868 CONFIG,
 facts.
 
 Catalog discovery is also new-machine evidence. The generated discovery Tcl
-uses `update_ip_catalog` and takes the environment hash as its fourth Tcl
-argument. It writes schema 2 `catalog_evidence.tsv`; do not copy the old TSV.
+uses `update_ip_catalog`, but remains a stable architecture-authority artifact
+so its hash continues to match the immutable production lock. It writes a
+fresh schema 1 `catalog_evidence.tsv`. The Python ingestion step then writes
+`catalog_provenance.json`, which binds the exact TSV bytes, Vivado run ID,
+authority request/Tcl hashes, and the current environment manifest hash. Do
+not copy either the old TSV or the old provenance record.
 
 ## Phase 2 and Phase 3
 

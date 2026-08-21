@@ -9,9 +9,11 @@ import unittest
 from rfsoc_pulse_model.ip.evidence import (
     CatalogEvidence,
     CatalogResolutionStatus,
+    build_catalog_provenance,
     build_catalog_request,
     canonical_json_bytes,
     parse_catalog_evidence,
+    validate_catalog_provenance,
     validate_catalog_evidence,
 )
 from rfsoc_pulse_model.ip.generate import generate_ip_architecture
@@ -89,6 +91,36 @@ class CatalogEvidenceTest(unittest.TestCase):
         )
         self.assertEqual(result.status, CatalogResolutionStatus.STALE_EVIDENCE)
         self.assertFalse(result.catalog_resolution_complete)
+
+    def test_schema1_catalog_is_environment_bound_by_separate_provenance(self) -> None:
+        config, request_bytes, discovery_tcl_bytes, evidence = make_evidence_fixture()
+        evidence_bytes = evidence_tsv(evidence).encode("utf-8")
+        manifest_sha256 = "a" * 64
+        result = validate_catalog_evidence(
+            config,
+            request_bytes,
+            discovery_tcl_bytes,
+            evidence,
+            manifest_sha256,
+        )
+        self.assertTrue(result.catalog_resolution_complete)
+
+        provenance = build_catalog_provenance(
+            evidence_bytes,
+            request_bytes,
+            discovery_tcl_bytes,
+            evidence,
+            manifest_sha256,
+        )
+        raw_provenance = canonical_json_bytes(provenance)
+        validate_catalog_provenance(
+            raw_provenance,
+            evidence_bytes,
+            request_bytes,
+            discovery_tcl_bytes,
+            evidence,
+            manifest_sha256,
+        )
 
     def test_missing_extra_duplicate_and_wrong_identity_fail(self) -> None:
         config, request_bytes, discovery_tcl_bytes, evidence = make_evidence_fixture()
