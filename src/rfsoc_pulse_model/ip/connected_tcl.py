@@ -206,7 +206,7 @@ def emit_connected_tcl(
     lines += [f"] [get_bd_cells {{{rfdc}}}]", f"set_property -dict [list {{CONFIG.C_OPERATION}} {{not}} {{CONFIG.C_SIZE}} {{1}}] [get_bd_cells {{{inverter}}}]"]
     # Named nets make readback compare names, not Vivado-created aliases.
     lines += [
-        "create_bd_net {ctrl_axis_clk}", f"connect_bd_net [get_bd_nets {{ctrl_axis_clk}}] [get_bd_pins {{{ps}/pl_clk0}}] [get_bd_pins {{{smart}/aclk}}] [get_bd_pins {{{rfdc}/s_axi_aclk}}] [get_bd_pins {{{reset_cells['ctrl']}/slowest_sync_clk}}]",
+        "create_bd_net {ctrl_axis_clk}", f"connect_bd_net [get_bd_nets {{ctrl_axis_clk}}] [get_bd_pins {{{ps}/pl_clk0}}] [get_bd_pins {{{ps}/maxihpm0_fpd_aclk}}] [get_bd_pins {{{smart}/aclk}}] [get_bd_pins {{{rfdc}/s_axi_aclk}}] [get_bd_pins {{{reset_cells['ctrl']}/slowest_sync_clk}}]",
         "create_bd_net {rx_axis_clk}", f"connect_bd_net [get_bd_nets {{rx_axis_clk}}] [get_bd_pins {{{rfdc}/clk_adc0}}] [get_bd_pins {{{rfdc}/m0_axis_aclk}}] [get_bd_pins {{{rfdc}/m1_axis_aclk}}] [get_bd_pins {{{rfdc}/m2_axis_aclk}}] [get_bd_pins {{{rfdc}/m3_axis_aclk}}] [get_bd_pins {{{reset_cells['rx']}/slowest_sync_clk}}]",
         "create_bd_net {tx_axis_clk}", f"connect_bd_net [get_bd_nets {{tx_axis_clk}}] [get_bd_pins {{{rfdc}/clk_dac0}}] [get_bd_pins {{{rfdc}/s0_axis_aclk}}] [get_bd_pins {{{rfdc}/s1_axis_aclk}}] [get_bd_pins {{{reset_cells['tx']}/slowest_sync_clk}}]",
         f"connect_bd_intf_net [get_bd_intf_pins {{{ps}/M_AXI_HPM0_FPD}}] [get_bd_intf_pins {{{smart}/S00_AXI}}]",
