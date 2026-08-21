@@ -12,8 +12,10 @@ repository path as environment-only data. `build/metadata/environment_ready.json
 is `ready:true` for Vivado 2025.2 build `6299465`, a clean Git tree, and
 unchanged authority hashes.
 
-The current environment manifest SHA-256 is
-`437fc84bca930b66b634c6df2897f56e84864eca7e7fe96e07194b4e8010c2bc`.
+The current environment manifest SHA-256 is recorded canonically in
+`build/metadata/environment_manifest.json` and echoed by
+`build/metadata/environment_ready.json`; it is intentionally not duplicated
+in this handoff text.
 
 The four authority SHA-256 values below are unchanged. The current `build/`
 contains fresh current-machine catalog, RFDC probe, and connected-request
@@ -79,10 +81,9 @@ Current source verification establishes:
 - discovery provenance is bound separately from realization Tcl;
 - the fresh catalog run is bound to the current environment manifest and has
   `catalog_status=all_required_ip_resolved` with a valid production lock;
-- current catalog evidence SHA-256:
-  `b95be311f60ffe29d812c016cadfa321204a5ea7ecbac7af500ca8f559d456c7`;
-- current catalog provenance SHA-256:
-  `2ac1c50e92db326ade0ea59d17e2841bcf7382b10f6a41ff739162e9d9dce37f`;
+- current catalog evidence and environment-only provenance hashes are recorded
+  canonically in `build/metadata/catalog_evidence.tsv` and
+  `build/metadata/catalog_provenance.json`;
 - catalog completeness and lock validity do not imply connected topology or production integration.
 
 ## RFDC 2.6 Probe
@@ -108,13 +109,13 @@ Its measured result is:
 | `ERROR` count | 0 |
 
 The current evidence records 13 MTS properties, 12 readback records, and 6
-tile-to-property bindings. Its evidence SHA-256 is
-`05980c77b654c1cc2ab78ef859d46032bee7eb70a280214d4d05e9de9f2097e4`, bound to
-the current environment manifest and probe Tcl/raw-output hashes.
+tile-to-property bindings. Its canonical evidence hash is recorded in
+`build/metadata/rfdc_probe_evidence.json`, bound to the current environment
+manifest and probe Tcl/raw-output hashes.
 
-The fresh connected request SHA-256 is
-`bf4151a15e3fa8640c7b6053bc03c2b03087b7216583267ed4f7182623011619`; it
-consumes probe `run_id=1` and remains `production_integration_ready=false`.
+The fresh connected request hash is recorded canonically in
+`build/metadata/connected_request.json`; it consumes probe `run_id=1` and
+remains `production_integration_ready=false`.
 
 The mandatory diagnostic counters were sampled from before the first project/BD/cell/property action and emitted unconditionally. The strict parser rejects missing, duplicate, unknown, malformed, or nonzero diagnostic records and validates exact interface/scalar inventories and authority-derived RFDC properties.
 
