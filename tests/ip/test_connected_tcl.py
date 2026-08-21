@@ -52,6 +52,10 @@ class ConnectedTclTest(unittest.TestCase):
         self.assertIn("CONFIG.C_OPERATION", text)
         self.assertIn("{CONFIG.PSU__USE__M_AXI_GP2} {0}", text)
         self.assertIn("maxihpm0_fpd_aclk", text)
+        self.assertIn(
+            "set_property CONFIG.FREQ_HZ [get_property CONFIG.FREQ_HZ [get_bd_intf_pins",
+            text,
+        )
         self.assertIn("create_project connected_rfdc_shell $::env(CONNECTED_PROJECT_DIR)", text)
         self.assertIn("validate_bd_design", text)
         self.assertIn("save_bd_design", text)

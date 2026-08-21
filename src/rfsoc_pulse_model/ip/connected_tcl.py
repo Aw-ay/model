@@ -218,7 +218,12 @@ def emit_connected_tcl(
         lines += [f"connect_bd_net [get_bd_pins {{{inverter}/Res}}] [get_bd_pins {{{cell}/ext_reset_in}}]", f"create_bd_net {{{reset.reset_net}}}", f"create_bd_port -dir I {{{reset.dcm_locked_pin}}}", f"connect_bd_net [get_bd_ports {{{reset.dcm_locked_pin}}}] [get_bd_pins {{{cell}/dcm_locked}}]"]
         for member in reset.members: lines.append(f"connect_bd_net [get_bd_nets {{{reset.reset_net}}}] [get_bd_pins {{{cell}/peripheral_aresetn}}] [get_bd_pins {{{member}}}]")
     lines += [f"connect_bd_net [get_bd_pins {{{rfdc}/irq}}] [get_bd_pins {{{irq}/In0}}]", f"connect_bd_net [get_bd_pins {{{irq}/dout}}] [get_bd_pins {{{ps}/pl_ps_irq0}}]"]
-    for interface in request.interfaces: lines.append(f"make_bd_intf_pins_external [get_bd_intf_pins {{{rfdc}/{interface.name}}}]")
+    for interface in request.interfaces:
+        lines.append(f"make_bd_intf_pins_external [get_bd_intf_pins {{{rfdc}/{interface.name}}}]")
+        lines.append(
+            f"set_property CONFIG.FREQ_HZ [get_property CONFIG.FREQ_HZ [get_bd_intf_pins {{{rfdc}/{interface.name}}}]] "
+            f"[get_bd_intf_ports -of_objects [get_bd_intf_pins {{{rfdc}/{interface.name}}}]]"
+        )
     for interface in external_rf: lines.append(f"make_bd_intf_pins_external [get_bd_intf_pins {{{rfdc}/{interface.name}}}]")
     lines += [f"assign_bd_address [get_bd_addr_segs {{{rfdc}/s_axi/Reg}}]", "validate_bd_design", "save_bd_design", ""]
     realization = "\n".join(lines).encode("utf-8")
