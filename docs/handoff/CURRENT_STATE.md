@@ -2,7 +2,13 @@
 
 ## Snapshot Semantics
 
-The live migration checkout is anchored at `commit:0123a56c` (`Harden migration artifact cleanup`). It adds portable environment provenance and fresh-attempt cleanup on top of the earlier connected-shell implementation anchor `commit:89a2362`; it does not make Task 5 complete or prove additional hardware readiness.
+The live migration checkout is identified by the `git_commit` field in
+`build/metadata/environment_manifest.json`; the latest connected-attempt
+provenance hardening is `commit:47c251f` (`Bind connected attempts to on-disk
+Tcl hashes`). It adds portable environment provenance and fresh-attempt
+cleanup on top of the earlier connected-shell implementation anchor
+`commit:89a2362`; it does not make Task 5 complete or prove additional
+hardware readiness.
 
 Always compare this snapshot with the live checkout before acting. The observed HEAD when the handoff implementation began was `commit:8cd3494`, which already followed the implementation anchor with handoff design and planning commits.
 
@@ -11,7 +17,7 @@ Always compare this snapshot with the live checkout before acting. The observed 
 | Role | Branch | Stable reference | Meaning |
 |---|---|---|---|
 | Accepted prior development line | `model-update-20260811` | `commit:dc31c5c` | Last accepted AMD IP normalization documentation state before connected-shell work |
-| Connected-shell isolated line | `connected-bd-rfdc-shell-20260813` | `commit:0123a56c` | Current migration-provenance checkout; hardware implementation anchor remains `commit:89a2362` |
+| Connected-shell isolated line | `connected-bd-rfdc-shell-20260813` | `environment_manifest.git_commit` | Current migration-provenance checkout; hardware implementation anchor remains `commit:89a2362` |
 
 The two branches were observed as separate linked worktrees. Their old absolute locations are intentionally not part of this portable authority.
 
@@ -48,7 +54,7 @@ The migration gates are now implemented, but Phase 0 is still **NOT READY** on t
 
 ## Verification Boundary
 
-At the current migration checkout, the full Python regression under the bundled Python 3.12.13 runtime reports 298 tests passing and 8 host-dependent Windows symbolic-link capability skips. This proves the tested Python contracts only.
+At the current migration checkout, the full Python regression under the bundled Python 3.12.13 runtime reports 300 tests passing and 8 host-dependent Windows symbolic-link capability skips. This proves the tested Python contracts only.
 
 It does not prove that generated connected-shell Tcl can accept a clean real Vivado report, that the exact MTS properties exist in the required Vivado 2025.2 installation, or that the shell synthesizes and closes CDC/timing. No Task 6 claim may be inferred from this test count.
 

@@ -73,7 +73,10 @@ The fresh build is the only source of generated Tcl, catalog evidence, probe
 evidence, connected requests, reports, and lifecycle state. A previous success
 file is not valid merely because its JSON parses; the current manifest hash is
 bound through catalog evidence, RFDC probe evidence, connected request, and
-connected-shell evidence. The first migration attempt therefore starts with
+connected-shell evidence. The runner additionally re-hashes the request and
+all connected Tcl files before and after launch, and on success resume; report
+bytes are re-hashed when success is consumed. The first migration attempt
+therefore starts with
 no valid evidence and `attempt_id=1` (`vivado/connected_rfdc_shell_attempts/run_1`).
 Subsequent attempts increment from the durable state/directories, so deleting a
 copied success file cannot make an old attempt look current.
