@@ -27,15 +27,39 @@ from .connected_tcl import emit_connected_tcl
 from .platform import PsPlatformConfig
 from .rfdc_probe import parse_rfdc_probe_evidence
 from rfsoc_pulse_model.common.config import ModelConfig
+from .environment import (
+    parse_environment_manifest,
+    require_environment_ready,
+)
 
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _bind_generation_environment(
+    root: Path, environment_manifest_bytes: bytes | None,
+) -> bytes | None:
+    """Use only the current Phase-0 manifest when a migration build has one."""
+
+    manifest_path = root / "metadata" / "environment_manifest.json"
+    if not manifest_path.is_file():
+        return environment_manifest_bytes
+    _manifest, current_manifest_bytes = require_environment_ready(root)
+    if environment_manifest_bytes is None:
+        return current_manifest_bytes
+    provided = parse_environment_manifest(environment_manifest_bytes)
+    current = parse_environment_manifest(current_manifest_bytes)
+    if provided.sha256 != current.sha256:
+        raise ValueError("provided environment manifest is not the Phase-0 manifest")
+    return environment_manifest_bytes
+
+
 def generate_ip_architecture(
     output_root: Path,
     ip_mode: GenerationMode | str = GenerationMode.DEVELOPMENT,
+    *,
+    environment_manifest_bytes: bytes | None = None,
 ) -> dict[str, object]:
     """Generate unconnected architecture artifacts in strict provenance order."""
 
@@ -49,7 +73,18 @@ def generate_ip_architecture(
     config = HardwareArchitectureConfig.load_default()
     registry = ArchitectureRegistry.default()
 
-    discovery_bytes = emit_catalog_discovery_tcl(config).encode("utf-8")
+    environment_manifest_bytes = _bind_generation_environment(
+        Path(output_root), environment_manifest_bytes
+    )
+    environment_manifest_sha256 = None
+    if environment_manifest_bytes is not None:
+        environment_manifest_sha256 = parse_environment_manifest(
+            environment_manifest_bytes
+        ).sha256
+
+    discovery_bytes = emit_catalog_discovery_tcl(
+        config, environment_manifest_sha256
+    ).encode("utf-8")
     generated_tcl_sha256 = _sha256(discovery_bytes)
     realization_bytes = emit_architecture_realization_tcl(config).encode("utf-8")
     realization_tcl_sha256 = _sha256(realization_bytes)
@@ -68,7 +103,6 @@ def generate_ip_architecture(
     (vivado_root / "realize_ip_architecture.tcl").write_bytes(realization_bytes)
     (metadata_root / "catalog_request.json").write_bytes(request_bytes)
     catalog_request_sha256 = _sha256(request_bytes)
-
     candidate_path = metadata_root / "ip_lock.candidate.json"
     if candidate_path.exists():
         if not candidate_path.is_file():
@@ -81,6 +115,7 @@ def generate_ip_architecture(
             request_bytes,
             discovery_bytes,
             parse_catalog_evidence(evidence_path.read_text(encoding="utf-8")),
+            environment_manifest_sha256,
         )
     else:
         validated_evidence = None
@@ -160,6 +195,8 @@ def generate_ip_architecture(
         ),
         "production_lock_valid": production_lock_valid,
     }
+    if environment_manifest_sha256 is not None:
+        architecture["environment_manifest_sha256"] = environment_manifest_sha256
     (metadata_root / "ip_architecture.json").write_bytes(
         canonical_json_bytes(architecture)
     )
@@ -170,6 +207,8 @@ def generate_connected_rfdc_shell(
     output_root: Path,
     probe_evidence_bytes: bytes,
     probe_tcl_bytes: bytes,
+    *,
+    environment_manifest_bytes: bytes | None = None,
 ) -> dict[str, object]:
     """Generate connected-shell request/Tcl from explicit Task-4 evidence.
 
@@ -178,6 +217,11 @@ def generate_connected_rfdc_shell(
     """
 
     root = Path(output_root)
+    environment_manifest_bytes = _bind_generation_environment(
+        root, environment_manifest_bytes
+    )
+    if environment_manifest_bytes is not None:
+        parse_environment_manifest(environment_manifest_bytes)
     model = ModelConfig.load_default()
     architecture = HardwareArchitectureConfig.load_default()
     platform = PsPlatformConfig.load_default()
@@ -186,28 +230,43 @@ def generate_connected_rfdc_shell(
     platform_bytes = resources.files("rfsoc_pulse_model.config").joinpath("ps_platform.json").read_bytes()
     lock_bytes = resources.files("rfsoc_pulse_model.config").joinpath("ip_lock.json").read_bytes()
     production_lock = decode_production_lock_json(lock_bytes, "packaged production lock")
-    discovery_bytes = emit_catalog_discovery_tcl(architecture).encode("utf-8")
+    environment_manifest_sha256 = (
+        parse_environment_manifest(environment_manifest_bytes).sha256
+        if environment_manifest_bytes is not None else None
+    )
+    discovery_bytes = emit_catalog_discovery_tcl(
+        architecture, environment_manifest_sha256
+    ).encode("utf-8")
     catalog_request_bytes = canonical_json_bytes(build_catalog_request(
         architecture, _sha256(architecture_bytes), _sha256(discovery_bytes)
     ))
     probe = parse_rfdc_probe_evidence(
-        probe_evidence_bytes, probe_tcl_bytes, model, architecture
+        probe_evidence_bytes,
+        probe_tcl_bytes,
+        model,
+        architecture,
+        environment_manifest_sha256=(
+            parse_environment_manifest(environment_manifest_bytes).sha256
+            if environment_manifest_bytes is not None else None
+        ),
     )
     authority_bytes = ConnectedAuthorityBytes(
         model_bytes, architecture_bytes, platform_bytes, lock_bytes,
-        discovery_bytes, catalog_request_bytes,
+        discovery_bytes, catalog_request_bytes, environment_manifest_bytes or b"",
     )
     request = build_connected_request(
         model, architecture, platform, production_lock, probe.provenance, authority_bytes
     )
     artifacts = emit_connected_tcl(
-        request, platform, probe.applied_config, probe.interfaces
+        request, platform, probe
     )
     metadata_root = root / "metadata"
     vivado_root = root / "vivado"
     metadata_root.mkdir(parents=True, exist_ok=True)
     vivado_root.mkdir(parents=True, exist_ok=True)
     (metadata_root / "connected_request.json").write_bytes(artifacts.request_bytes)
+    (metadata_root / "rfdc_probe_evidence.json").write_bytes(probe_evidence_bytes)
+    (vivado_root / "probe_rfdc_contract.tcl").write_bytes(probe_tcl_bytes)
     (vivado_root / "realize_connected_rfdc_shell.tcl").write_bytes(artifacts.realization_tcl)
     (vivado_root / "verify_connected_rfdc_shell.tcl").write_bytes(artifacts.verification_tcl)
     return {

@@ -33,12 +33,14 @@ _EVIDENCE_KEYS = frozenset({
     "validate_bd_design_passed", "synthesis_completed", "cdc_safe", "clock_safety_verified",
     "report_hashes",
 })
+_EVIDENCE_KEYS_V2 = _EVIDENCE_KEYS | {"environment_manifest_sha256"}
 _REQUEST_KEYS = frozenset({
     "request_schema_version", "model_config_sha256", "architecture_config_sha256",
     "ps_platform_config_sha256", "production_lock_sha256", "vivado_version", "device_part",
     "probe_provenance", "cells", "interfaces", "clocks", "resets", "address_path",
     "irq_path", "rfdc_semantics", "mts_groups",
 })
+_REQUEST_KEYS_V2 = _REQUEST_KEYS | {"environment_manifest_sha256"}
 
 
 def _sha256(value: object, field: str) -> str:
@@ -80,6 +82,7 @@ class RfdcProbeProvenance:
     probe_tcl_sha256: str
     raw_output_sha256: str
     run_id: int
+    environment_manifest_sha256: str | None = None
 
     def __post_init__(self) -> None:
         if self.vivado_version != _VIVADO_VERSION:
@@ -87,6 +90,8 @@ class RfdcProbeProvenance:
         _sha256(self.probe_tcl_sha256, "probe_tcl_sha256")
         _sha256(self.raw_output_sha256, "raw_output_sha256")
         _integer(self.run_id, "run_id", 1)
+        if self.environment_manifest_sha256 is not None:
+            _sha256(self.environment_manifest_sha256, "environment_manifest_sha256")
 
 
 @dataclass(frozen=True)
@@ -103,11 +108,13 @@ class ConnectedAuthorityBytes:
     production_lock_bytes: bytes
     discovery_tcl_bytes: bytes
     catalog_request_bytes: bytes
+    environment_manifest_bytes: bytes = b""
 
     def __post_init__(self) -> None:
         for field in (
             "model_config_bytes", "architecture_config_bytes", "ps_platform_config_bytes",
             "production_lock_bytes", "discovery_tcl_bytes", "catalog_request_bytes",
+            "environment_manifest_bytes",
         ):
             if not isinstance(getattr(self, field), bytes):
                 raise ValueError(f"{field} must be immutable bytes")
@@ -253,10 +260,15 @@ class ConnectedShellRequest:
     irq_path: tuple[str, ...]
     rfdc_semantics: RfdcSemantics
     mts_groups: tuple[MtsGroup, ...]
+    environment_manifest_sha256: str | None = None
 
     def __post_init__(self) -> None:
-        if self.request_schema_version != 1:
-            raise ValueError("request_schema_version must be 1")
+        if self.request_schema_version not in {1, 2}:
+            raise ValueError("request_schema_version must be 1 or 2")
+        if self.request_schema_version == 2:
+            _sha256(self.environment_manifest_sha256, "environment_manifest_sha256")
+        elif self.environment_manifest_sha256 is not None:
+            raise ValueError("schema-v1 request must not contain environment_manifest_sha256")
         for field in ("model_config_sha256", "architecture_config_sha256",
                       "ps_platform_config_sha256", "production_lock_sha256"):
             _sha256(getattr(self, field), field)
@@ -304,10 +316,15 @@ class ConnectedShellEvidence:
     cdc_safe: bool
     clock_safety_verified: bool
     report_hashes: tuple[tuple[str, str], ...]
+    environment_manifest_sha256: str | None = None
 
     def __post_init__(self) -> None:
-        if self.evidence_schema_version != 1:
-            raise ValueError("evidence_schema_version must be 1")
+        if self.evidence_schema_version not in {1, 2}:
+            raise ValueError("evidence_schema_version must be 1 or 2")
+        if self.evidence_schema_version == 2:
+            _sha256(self.environment_manifest_sha256, "environment_manifest_sha256")
+        elif self.environment_manifest_sha256 is not None:
+            raise ValueError("schema-v1 evidence must not contain environment_manifest_sha256")
         for field in ("connected_request_sha256", "model_config_sha256",
                       "architecture_config_sha256", "ps_platform_config_sha256",
                       "production_lock_sha256", "realization_tcl_sha256",
@@ -467,8 +484,19 @@ def build_connected_request(
     if architecture.vivado_version != platform.vivado_version or probe_provenance.vivado_version != architecture.vivado_version:
         raise ValueError("authority Vivado versions must match")
     _bind_authority_bytes(model, architecture, platform, production_lock, authority_bytes)
+    environment_manifest_sha256 = None
+    if not authority_bytes.environment_manifest_bytes and probe_provenance.environment_manifest_sha256:
+        raise ValueError("probe provenance is environment-bound but authority bytes are not")
+    if authority_bytes.environment_manifest_bytes:
+        from .environment import parse_environment_manifest
+
+        environment_manifest_sha256 = parse_environment_manifest(
+            authority_bytes.environment_manifest_bytes
+        ).sha256
+        if probe_provenance.environment_manifest_sha256 != environment_manifest_sha256:
+            raise ValueError("probe provenance is not bound to the environment manifest")
     return ConnectedShellRequest(
-        request_schema_version=1,
+        request_schema_version=2 if authority_bytes.environment_manifest_bytes else 1,
         model_config_sha256=hashlib.sha256(authority_bytes.model_config_bytes).hexdigest(),
         architecture_config_sha256=hashlib.sha256(authority_bytes.architecture_config_bytes).hexdigest(),
         ps_platform_config_sha256=hashlib.sha256(authority_bytes.ps_platform_config_bytes).hexdigest(),
@@ -490,6 +518,7 @@ def build_connected_request(
             MtsGroup("adc", tuple(sorted({entry.rfdc_tile for entry in model.adc_channel_map}))),
             MtsGroup("dac", tuple(sorted({entry.rfdc_tile for entry in model.dac_channel_map}))),
         ),
+        environment_manifest_sha256=environment_manifest_sha256,
     )
 
 
@@ -513,6 +542,10 @@ def _bind_authority_bytes(
 
     if not isinstance(production_lock, Mapping):
         raise ValueError("production_lock must be a mapping")
+    if authority_bytes.environment_manifest_bytes:
+        from .environment import parse_environment_manifest
+
+        parse_environment_manifest(authority_bytes.environment_manifest_bytes)
     model_payload = _strict_json_mapping(authority_bytes.model_config_bytes, "model_config_bytes")
     architecture_payload = _strict_json_mapping(authority_bytes.architecture_config_bytes, "architecture_config_bytes")
     platform_payload = _strict_json_mapping(authority_bytes.ps_platform_config_bytes, "ps_platform_config_bytes")
@@ -603,9 +636,14 @@ def _validate_request_shape(request: ConnectedShellRequest) -> None:
 
 def _normalise(value: object) -> object:
     if is_dataclass(value):
-        return _normalise(asdict(value))
+        return _normalise({key: item for key, item in asdict(value).items() if item is not None})
     if isinstance(value, Mapping):
-        return {str(key): _normalise(item) for key, item in value.items()}
+        # Dataclasses are recursively converted by ``asdict`` before this
+        # branch runs, so optional nested fields must be omitted here too.
+        # Otherwise a schema-v1 request serialises the optional environment
+        # binding as JSON ``null`` and cannot round-trip through its exact
+        # legacy key set.
+        return {str(key): _normalise(item) for key, item in value.items() if item is not None}
     if isinstance(value, tuple):
         return [_normalise(item) for item in value]
     if isinstance(value, list):
@@ -722,14 +760,24 @@ def _mts(value: Mapping[str, object]) -> MtsGroup:
 
 
 def _probe(value: Mapping[str, object]) -> RfdcProbeProvenance:
-    _exact_keys(value, {"vivado_version", "probe_tcl_sha256", "raw_output_sha256", "run_id"}, "probe_provenance")
-    return RfdcProbeProvenance(_text(value["vivado_version"], "probe.vivado_version"), _sha256(value["probe_tcl_sha256"], "probe_tcl_sha256"),
-                               _sha256(value["raw_output_sha256"], "raw_output_sha256"), _integer(value["run_id"], "probe.run_id", 1))
+    keys = {"vivado_version", "probe_tcl_sha256", "raw_output_sha256", "run_id"}
+    if "environment_manifest_sha256" in value:
+        keys.add("environment_manifest_sha256")
+    _exact_keys(value, keys, "probe_provenance")
+    return RfdcProbeProvenance(
+        _text(value["vivado_version"], "probe.vivado_version"),
+        _sha256(value["probe_tcl_sha256"], "probe_tcl_sha256"),
+        _sha256(value["raw_output_sha256"], "raw_output_sha256"),
+        _integer(value["run_id"], "probe.run_id", 1),
+        _sha256(value["environment_manifest_sha256"], "environment_manifest_sha256")
+        if "environment_manifest_sha256" in value else None,
+    )
 
 
 def parse_connected_request(raw_bytes: bytes) -> ConnectedShellRequest:
     payload = _decode(raw_bytes, "connected request")
-    _exact_keys(payload, _REQUEST_KEYS, "connected request")
+    schema = _integer(payload.get("request_schema_version"), "request_schema_version", 1)
+    _exact_keys(payload, _REQUEST_KEYS_V2 if schema == 2 else _REQUEST_KEYS, "connected request")
     request = ConnectedShellRequest(
         _integer(payload["request_schema_version"], "request_schema_version", 1),
         _sha256(payload["model_config_sha256"], "model_config_sha256"), _sha256(payload["architecture_config_sha256"], "architecture_config_sha256"),
@@ -738,7 +786,10 @@ def parse_connected_request(raw_bytes: bytes) -> ConnectedShellRequest:
         _object_tuple(payload["cells"], _cell, "cells"), _object_tuple(payload["interfaces"], _interface, "interfaces"),
         _object_tuple(payload["clocks"], _clock, "clocks"), _object_tuple(payload["resets"], _reset, "resets"),
         _tuple_text(payload["address_path"], "address_path"), _tuple_text(payload["irq_path"], "irq_path"),
-        _semantics(_mapping(payload["rfdc_semantics"], "rfdc_semantics")), _object_tuple(payload["mts_groups"], _mts, "mts_groups"))
+        _semantics(_mapping(payload["rfdc_semantics"], "rfdc_semantics")), _object_tuple(payload["mts_groups"], _mts, "mts_groups"),
+        _sha256(payload["environment_manifest_sha256"], "environment_manifest_sha256")
+        if schema == 2 else None,
+    )
     if raw_bytes != canonical_connected_json_bytes(request):
         raise ValueError("connected request bytes are not canonical")
     return request
@@ -746,7 +797,8 @@ def parse_connected_request(raw_bytes: bytes) -> ConnectedShellRequest:
 
 def parse_connected_evidence(raw_bytes: bytes) -> ConnectedShellEvidence:
     payload = _decode(raw_bytes, "connected evidence")
-    _exact_keys(payload, _EVIDENCE_KEYS, "connected evidence")
+    schema = _integer(payload.get("evidence_schema_version"), "evidence_schema_version", 1)
+    _exact_keys(payload, _EVIDENCE_KEYS_V2 if schema == 2 else _EVIDENCE_KEYS, "connected evidence")
     reports = payload["report_hashes"]
     if not isinstance(reports, list): raise ValueError("report_hashes must be an array")
     report_pairs=[]
@@ -762,7 +814,9 @@ def parse_connected_evidence(raw_bytes: bytes) -> ConnectedShellEvidence:
         _tuple_text(payload["address_path"], "address_path"), _tuple_text(payload["irq_path"], "irq_path"),
         _semantics(_mapping(payload["rfdc_semantics"], "rfdc_semantics")), _object_tuple(payload["mts_groups"], _mts, "mts_groups"),
         *(_boolean(payload[field], field) for field in ("mts_configuration_verified", "mts_runtime_verified", "validate_bd_design_passed", "synthesis_completed", "cdc_safe", "clock_safety_verified")),
-        tuple(report_pairs))
+        tuple(report_pairs),
+        _sha256(payload["environment_manifest_sha256"], "environment_manifest_sha256")
+        if schema == 2 else None)
     if raw_bytes != canonical_connected_json_bytes(evidence):
         raise ValueError("connected evidence bytes are not canonical")
     return evidence
@@ -786,6 +840,8 @@ def validate_connected_evidence(
         reasons.append("request_contract_mismatch")
     expected_request_sha = hashlib.sha256(canonical_connected_json_bytes(expected_request)).hexdigest()
     if evidence.connected_request_sha256 != expected_request_sha: reasons.append("request_hash_mismatch")
+    if evidence.environment_manifest_sha256 != expected_request.environment_manifest_sha256:
+        reasons.append("environment_manifest_mismatch")
     for field in ("model_config_sha256", "architecture_config_sha256", "ps_platform_config_sha256", "production_lock_sha256"):
         if getattr(evidence, field) != getattr(expected_request, field): reasons.append(f"{field}_mismatch")
     if evidence.device_part != expected_request.device_part: reasons.append("part_mismatch")

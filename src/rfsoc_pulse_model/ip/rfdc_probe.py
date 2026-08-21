@@ -23,10 +23,12 @@ _MESSAGE_SEVERITIES = ("WARNING", "CRITICAL_WARNING", "ERROR")
 _EVIDENCE_KEYS = frozenset({
     "probe_schema_version", "vivado_version", "device_part", "rfdc_vlnv",
     "cells", "applied_config", "interfaces", "scalar_pins", "messages", "validation_errors",
+    "mts_property_inventory", "mts_value_readback", "mts_bindings",
     "probe_tcl_sha256", "raw_output_sha256", "run_id",
     "common_rx_clock_legality_verified", "common_tx_clock_legality_verified",
     "mts_configuration_verified", "mts_runtime_verified",
 })
+_EVIDENCE_KEYS_V3 = _EVIDENCE_KEYS | {"environment_manifest_sha256"}
 
 
 def _expected_interfaces() -> tuple[tuple[str, str, str, int], ...]:
@@ -170,6 +172,27 @@ class RfdcProbeScalarPin:
 
 
 @dataclass(frozen=True)
+class RfdcProbeMtsProperty:
+    name: str
+    value_type: str
+    read_only: bool
+    current_value: str
+    enumerated_values: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        _text(self.name, "MTS property name")
+        _text(self.value_type, "MTS property type")
+        _bool(self.read_only, "MTS property read_only")
+        _text(self.current_value, "MTS property current_value")
+        if not isinstance(self.enumerated_values, tuple) or any(
+            not isinstance(item, str) or not item for item in self.enumerated_values
+        ):
+            raise ValueError("MTS enumerated_values must be an immutable string tuple")
+        if len(self.enumerated_values) != len(set(self.enumerated_values)):
+            raise ValueError("MTS enumerated_values must not contain duplicates")
+
+
+@dataclass(frozen=True)
 class RfdcProbeResult:
     provenance: RfdcProbeProvenance
     device_part: str
@@ -180,6 +203,9 @@ class RfdcProbeResult:
     scalar_pins: tuple[RfdcProbeScalarPin, ...]
     messages: tuple[tuple[str, int], ...]
     validation_errors: tuple[str, ...]
+    mts_property_inventory: tuple[RfdcProbeMtsProperty, ...]
+    mts_value_readback: tuple[tuple[str, str, str], ...]
+    mts_bindings: tuple[tuple[str, int, str], ...]
     common_rx_clock_legality_verified: bool
     common_tx_clock_legality_verified: bool
     mts_configuration_verified: bool
@@ -206,6 +232,9 @@ class RfdcProbeResult:
         object.__setattr__(self, "messages", _message_counts(self.messages))
         if not isinstance(self.validation_errors, tuple) or any(not isinstance(item, str) for item in self.validation_errors):
             raise ValueError("validation_errors must be an immutable string tuple")
+        _validate_mts_authority(
+            self.mts_property_inventory, self.mts_value_readback, self.mts_bindings,
+        )
         for field in ("common_rx_clock_legality_verified", "common_tx_clock_legality_verified", "mts_configuration_verified", "mts_runtime_verified"):
             if getattr(self, field) is not False:
                 raise ValueError(f"{field} must remain unverified in an RFDC-only probe")
@@ -248,6 +277,13 @@ def _candidate_properties(model: ModelConfig, architecture: HardwareArchitecture
     return tuple(sorted(properties.items()))
 
 
+def _expected_mts_binding_keys(model: ModelConfig) -> frozenset[tuple[str, int]]:
+    return frozenset(
+        {("adc", entry.rfdc_tile) for entry in model.adc_channel_map}
+        | {("dac", entry.rfdc_tile) for entry in model.dac_channel_map}
+    )
+
+
 def emit_rfdc_probe_tcl(model: ModelConfig, architecture: HardwareArchitectureConfig) -> str:
     """Emit a fresh exact-part project with exactly one RFDC 2.6 cell."""
     if not isinstance(model, ModelConfig) or not isinstance(architecture, HardwareArchitectureConfig):
@@ -256,6 +292,11 @@ def emit_rfdc_probe_tcl(model: ModelConfig, architecture: HardwareArchitectureCo
     if any(not _SAFE_TCL_TOKEN.fullmatch(name) or not _SAFE_TCL_TOKEN.fullmatch(value) for name, value in candidates):
         raise ValueError("unsafe RFDC candidate Tcl token")
     properties = "\n".join(f"    CONFIG.{name} {{{value}}} \\" for name, value in candidates)
+    mts_targets = tuple(sorted(
+        {("adc", entry.rfdc_tile) for entry in model.adc_channel_map}
+        | {("dac", entry.rfdc_tile) for entry in model.dac_channel_map}
+    ))
+    mts_target_tcl = " ".join(f"{{{converter} {tile}}}" for converter, tile in mts_targets)
     return f'''# Generated RFDC-only diagnostic probe. Do not edit.
 set probe_part {{{model.device_part}}}
 set rfdc_probe_message_base(WARNING) [get_msg_config -severity WARNING -count]
@@ -283,6 +324,48 @@ proc rfdc_probe_emit {{kind args}} {{
 rfdc_probe_emit VIVADO_VERSION [version -short]
 rfdc_probe_emit DEVICE_PART [get_property PART [current_project]]
 rfdc_probe_emit CELL [get_property NAME $rfdc_0] [get_property VLNV $rfdc_0]
+set rfdc_probe_mts_properties [list]
+foreach property [list_property $rfdc_0] {{
+    if {{[string match CONFIG.*Multi_Tile_Sync* $property] || [string match CONFIG.*MTS* $property] || $property eq "CONFIG.Sysref_Source"}} {{
+        lappend rfdc_probe_mts_properties $property
+    }}
+}}
+set rfdc_probe_mts_properties [lsort -unique $rfdc_probe_mts_properties]
+foreach property $rfdc_probe_mts_properties {{
+    set metadata [report_property -all -return_string $rfdc_0 $property]
+    set metadata_found false
+    foreach line [split $metadata "\\n"] {{
+        set columns [regexp -all -inline {{\\S+}} $line]
+        if {{[llength $columns] == 4 && [lindex $columns 0] eq $property}} {{
+            set enumerated [list_property_value $property $rfdc_0]
+            if {{[llength $enumerated] == 0}} {{ set enumerated NONE }} else {{ set enumerated [join $enumerated ,] }}
+            rfdc_probe_emit MTS_PROPERTY [string range $property 7 end] [lindex $columns 1] [lindex $columns 2] [lindex $columns 3] $enumerated
+            set metadata_found true
+        }}
+    }}
+    if {{!$metadata_found}} {{ error "missing RFDC MTS property metadata: $property" }}
+}}
+set rfdc_probe_mts_tile_targets [list {mts_target_tcl}]
+foreach target $rfdc_probe_mts_tile_targets {{
+    set converter [lindex $target 0]
+    set tile [lindex $target 1]
+    set matches [list]
+    foreach property $rfdc_probe_mts_properties {{
+        set short_name [string range $property 7 end]
+        if {{[regexp -nocase [format {{^%s%s.*multi.*tile.*sync$}} $converter $tile] $short_name]}} {{
+            lappend matches $property
+        }}
+    }}
+    if {{[llength $matches] != 1}} {{
+        error "RFDC MTS tile target did not resolve to exactly one measured property: $converter $tile"
+    }}
+    set property [lindex $matches 0]
+    rfdc_probe_emit MTS_BINDING $converter $tile [string range $property 7 end]
+    set_property $property true $rfdc_0
+    rfdc_probe_emit MTS_VALUE [string range $property 7 end] true [get_property $property $rfdc_0]
+    set_property $property false $rfdc_0
+    rfdc_probe_emit MTS_VALUE [string range $property 7 end] false [get_property $property $rfdc_0]
+}}
 foreach property [lsort [list_property $rfdc_0]] {{
     if {{[string match CONFIG.* $property]}} {{ rfdc_probe_emit CONFIG [string range $property 7 end] [rfdc_probe_get $rfdc_0 $property] }}
 }}
@@ -315,7 +398,11 @@ def _decode_raw(raw_output: bytes) -> dict[str, Any]:
         lines = raw_output.decode("utf-8").splitlines()
     except UnicodeDecodeError as error:
         raise ValueError("raw probe output must be UTF-8") from error
-    values: dict[str, Any] = {"cells": [], "applied_config": [], "interfaces": [], "scalar_pins": [], "messages": [], "validation_errors": []}
+    values: dict[str, Any] = {
+        "cells": [], "applied_config": [], "interfaces": [], "scalar_pins": [],
+        "messages": [], "validation_errors": [], "mts_property_inventory": [],
+        "mts_value_readback": [], "mts_bindings": [],
+    }
     seen: set[tuple[str, str]] = set(); ended = False
     for line in lines:
         fields = line.split("\t")
@@ -349,6 +436,21 @@ def _decode_raw(raw_output: bytes) -> dict[str, Any]:
                 fields[2], fields[3], fields[4] or "0", fields[5] or "0",
                 fields[6] or "unknown",
             ))
+        elif kind == "MTS_PROPERTY" and len(fields) == 7:
+            key = (kind, fields[2])
+            if key in seen: raise ValueError("duplicate MTS_PROPERTY")
+            seen.add(key)
+            values["mts_property_inventory"].append(tuple(fields[2:]))
+        elif kind == "MTS_VALUE" and len(fields) == 5:
+            key = (kind, f"{fields[2]}\0{fields[3]}")
+            if key in seen: raise ValueError("duplicate MTS_VALUE")
+            seen.add(key)
+            values["mts_value_readback"].append(tuple(fields[2:]))
+        elif kind == "MTS_BINDING" and len(fields) == 5:
+            key = (kind, f"{fields[2]}\0{fields[3]}")
+            if key in seen: raise ValueError("duplicate MTS_BINDING")
+            seen.add(key)
+            values["mts_bindings"].append(tuple(fields[2:]))
         elif kind == "MESSAGE_COUNT" and len(fields) == 4:
             severity, count = fields[2:]
             if severity not in _MESSAGE_SEVERITIES or not count.isascii() or not count.isdecimal():
@@ -363,7 +465,15 @@ def _decode_raw(raw_output: bytes) -> dict[str, Any]:
     return values
 
 
-def _result_from_raw(raw_output: bytes, probe_tcl: bytes, model: ModelConfig, architecture: HardwareArchitectureConfig, run_id: int) -> RfdcProbeResult:
+def _result_from_raw(
+    raw_output: bytes,
+    probe_tcl: bytes,
+    model: ModelConfig,
+    architecture: HardwareArchitectureConfig,
+    run_id: int,
+    *,
+    environment_manifest_sha256: str | None = None,
+) -> RfdcProbeResult:
     values = _decode_raw(raw_output)
     if values["VIVADO_VERSION"] != _VIVADO_VERSION: raise ValueError("wrong Vivado version in RFDC probe")
     if values["DEVICE_PART"] != model.device_part or model.device_part != architecture.device_part: raise ValueError("wrong device part in RFDC probe")
@@ -385,7 +495,36 @@ def _result_from_raw(raw_output: bytes, probe_tcl: bytes, model: ModelConfig, ar
         raise ValueError("RFDC probe scalar pin inventory mismatch")
     applied_config = tuple(values["applied_config"])
     _validate_applied_config(applied_config, model, architecture)
-    return RfdcProbeResult(RfdcProbeProvenance(_VIVADO_VERSION, _sha256(probe_tcl), _sha256(raw_output), _integer(run_id, "run_id", 1)), model.device_part, RFDC_PROBE_VLNV, cells, applied_config, interfaces, pins, messages, (), False, False, False, False)
+    mts_inventory = tuple(sorted([
+        RfdcProbeMtsProperty(
+            item[0], item[1], _raw_boolean(item[2], "MTS property read_only"),
+            item[3], () if item[4] == "NONE" else tuple(item[4].split(",")),
+        )
+        for item in values["mts_property_inventory"]
+    ], key=lambda item: item.name))
+    mts_readback = tuple(sorted(values["mts_value_readback"]))
+    try:
+        mts_bindings = tuple(sorted(
+            (item[0], int(item[1]), item[2]) for item in values["mts_bindings"]
+        ))
+    except (TypeError, ValueError) as error:
+        raise ValueError("invalid RFDC MTS binding record") from error
+    _validate_mts_authority(
+        mts_inventory, mts_readback, mts_bindings,
+        _expected_mts_binding_keys(model),
+    )
+    return RfdcProbeResult(
+        RfdcProbeProvenance(
+            _VIVADO_VERSION,
+            _sha256(probe_tcl),
+            _sha256(raw_output),
+            _integer(run_id, "run_id", 1),
+            environment_manifest_sha256,
+        ),
+        model.device_part, RFDC_PROBE_VLNV, cells, applied_config, interfaces, pins,
+        messages, (), mts_inventory, mts_readback, mts_bindings,
+        False, False, False, False,
+    )
 
 
 def _validate_applied_config(applied_config: tuple[tuple[str, str], ...], model: ModelConfig, architecture: HardwareArchitectureConfig) -> None:
@@ -393,20 +532,127 @@ def _validate_applied_config(applied_config: tuple[tuple[str, str], ...], model:
     config = dict(applied_config)
     if len(config) != len(applied_config):
         raise ValueError("duplicate RFDC CONFIG property")
-    # The emitter's complete candidate set is the readback authority.  Keeping
-    # this exact subset comparison here makes a newly emitted CONFIG property
-    # impossible to omit from validation.
+    # The probe records the complete writable CONFIG inventory returned by
+    # Vivado.  It is normally larger than the requested semantic candidate
+    # set, so the measured inventory must contain the candidate set rather
+    # than equal it.  Connected realization applies the exact candidate
+    # subset; the remaining measured properties stay evidence-only.
     expected = _candidate_properties(model, architecture)
     candidates = dict(expected)
     if len(candidates) != len(expected):
         raise ValueError("RFDC probe candidate properties must be unique")
-    mismatches = sorted(name for name, value in candidates.items() if config.get(name) != value)
+    missing = sorted(set(candidates) - set(config))
+    if missing:
+        raise ValueError("RFDC applied CONFIG whitelist is incomplete: " + ",".join(missing))
+    mismatches = sorted(name for name, value in candidates.items() if config[name] != value)
     if mismatches:
         raise ValueError("RFDC applied CONFIG semantic mismatch: " + ",".join(mismatches))
 
 
+def _raw_boolean(value: str, field: str) -> bool:
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    raise ValueError(f"{field} must be canonical true or false")
+
+
+def _validate_mts_authority(
+    inventory: tuple[RfdcProbeMtsProperty, ...],
+    readback: tuple[tuple[str, str, str], ...],
+    bindings: tuple[tuple[str, int, str], ...],
+    expected_binding_keys: frozenset[tuple[str, int]] | None = None,
+) -> None:
+    """Validate measured MTS metadata and its semantic tile-to-property binding.
+
+    The probe is allowed to discover the vendor's exact property names.  The
+    model only owns the semantic converter/tile keys, so a connected build can
+    never substitute a guessed CONFIG name for a measured one.
+    """
+    if not isinstance(inventory, tuple) or any(not isinstance(item, RfdcProbeMtsProperty) for item in inventory):
+        raise ValueError("mts_property_inventory must be immutable MTS property values")
+    if not inventory or len({item.name for item in inventory}) != len(inventory):
+        raise ValueError("RFDC MTS property inventory must be nonempty and unique")
+    if any(
+        item.value_type != "string"
+        or not re.search(r"(?i)(multi.*tile.*sync|(?:^|_)mts(?:_|$)|sysref)", item.name)
+        for item in inventory
+    ):
+        raise ValueError("Vivado 2025.2 RFDC MTS property metadata mismatch")
+    if not isinstance(readback, tuple) or any(
+        not isinstance(item, tuple) or len(item) != 3
+        or any(not isinstance(field, str) or not field for field in item)
+        for item in readback
+    ):
+        raise ValueError("mts_value_readback must be immutable three-field tuples")
+    if not isinstance(bindings, tuple) or any(
+        not isinstance(item, tuple) or len(item) != 3
+        or item[0] not in {"adc", "dac"}
+        or not isinstance(item[1], int) or isinstance(item[1], bool) or item[1] < 0
+        or not isinstance(item[2], str) or not item[2]
+        for item in bindings
+    ):
+        raise ValueError("mts_bindings must be immutable converter/tile/property tuples")
+    binding_keys = {(converter, tile) for converter, tile, _ in bindings}
+    binding_names = {name for _, _, name in bindings}
+    if len(binding_keys) != len(bindings) or len(binding_names) != len(bindings):
+        raise ValueError("mts_bindings must not contain duplicate semantic keys or properties")
+    inventory_names = {item.name for item in inventory}
+    if not binding_names <= inventory_names:
+        raise ValueError("MTS binding refers to a property outside the measured inventory")
+    metadata = {item.name: item for item in inventory}
+    if any(metadata[name].read_only for name in binding_names):
+        raise ValueError("MTS binding refers to a read-only property")
+    expected_readback = tuple(sorted(
+        (name, value, value)
+        for _, _, name in bindings for value in ("false", "true")
+    ))
+    if readback != expected_readback:
+        raise ValueError("Vivado 2025.2 RFDC MTS canonical value/readback mismatch")
+    if expected_binding_keys is not None and binding_keys != set(expected_binding_keys):
+        raise ValueError("RFDC MTS semantic tile binding does not match the model")
+
+
 def _result_mapping(result: RfdcProbeResult) -> dict[str, object]:
-    return {"probe_schema_version": 1, "vivado_version": result.provenance.vivado_version, "device_part": result.device_part, "rfdc_vlnv": result.rfdc_vlnv, "cells": [list(item) for item in result.cells], "applied_config": [list(item) for item in result.applied_config], "interfaces": [{"name": item.name, "mode": item.mode, "vlnv": item.vlnv, "width_bits": item.width_bits, "frequency_hz": item.frequency_hz, "clock_domain": item.clock_domain, "associated_reset": item.associated_reset} for item in result.interfaces], "scalar_pins": [{"name": item.name, "direction": item.direction, "width_bits": item.width_bits, "frequency_hz": item.frequency_hz, "clock_domain": item.clock_domain} for item in result.scalar_pins], "messages": [list(item) for item in result.messages], "validation_errors": list(result.validation_errors), "probe_tcl_sha256": result.provenance.probe_tcl_sha256, "raw_output_sha256": result.provenance.raw_output_sha256, "run_id": result.provenance.run_id, "common_rx_clock_legality_verified": False, "common_tx_clock_legality_verified": False, "mts_configuration_verified": False, "mts_runtime_verified": False}
+    payload = {
+        "probe_schema_version": 3 if result.provenance.environment_manifest_sha256 else 2,
+        "vivado_version": result.provenance.vivado_version,
+        "device_part": result.device_part,
+        "rfdc_vlnv": result.rfdc_vlnv,
+        "cells": [list(item) for item in result.cells],
+        "applied_config": [list(item) for item in result.applied_config],
+        "interfaces": [
+            {"name": item.name, "mode": item.mode, "vlnv": item.vlnv,
+             "width_bits": item.width_bits, "frequency_hz": item.frequency_hz,
+             "clock_domain": item.clock_domain, "associated_reset": item.associated_reset}
+            for item in result.interfaces
+        ],
+        "scalar_pins": [
+            {"name": item.name, "direction": item.direction, "width_bits": item.width_bits,
+             "frequency_hz": item.frequency_hz, "clock_domain": item.clock_domain}
+            for item in result.scalar_pins
+        ],
+        "messages": [list(item) for item in result.messages],
+        "validation_errors": list(result.validation_errors),
+        "mts_property_inventory": [
+            {"name": item.name, "value_type": item.value_type, "read_only": item.read_only,
+             "current_value": item.current_value,
+             "enumerated_values": list(item.enumerated_values)}
+            for item in result.mts_property_inventory
+        ],
+        "mts_value_readback": [list(item) for item in result.mts_value_readback],
+        "mts_bindings": [list(item) for item in result.mts_bindings],
+        "probe_tcl_sha256": result.provenance.probe_tcl_sha256,
+        "raw_output_sha256": result.provenance.raw_output_sha256,
+        "run_id": result.provenance.run_id,
+        "common_rx_clock_legality_verified": False,
+        "common_tx_clock_legality_verified": False,
+        "mts_configuration_verified": False,
+        "mts_runtime_verified": False,
+    }
+    if result.provenance.environment_manifest_sha256 is not None:
+        payload["environment_manifest_sha256"] = result.provenance.environment_manifest_sha256
+    return payload
 
 
 def canonical_rfdc_probe_json_bytes(result: RfdcProbeResult) -> bytes:
@@ -414,8 +660,26 @@ def canonical_rfdc_probe_json_bytes(result: RfdcProbeResult) -> bytes:
     return json.dumps(_result_mapping(result), sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
 
 
-def build_rfdc_probe_evidence(raw_output: bytes, probe_tcl: bytes, model: ModelConfig, architecture: HardwareArchitectureConfig, *, run_id: int) -> bytes:
-    return canonical_rfdc_probe_json_bytes(_result_from_raw(raw_output, probe_tcl, model, architecture, run_id))
+def build_rfdc_probe_evidence(
+    raw_output: bytes,
+    probe_tcl: bytes,
+    model: ModelConfig,
+    architecture: HardwareArchitectureConfig,
+    *,
+    run_id: int,
+    environment_manifest_bytes: bytes | None = None,
+) -> bytes:
+    environment_manifest_sha256 = None
+    if environment_manifest_bytes is not None:
+        from .environment import parse_environment_manifest
+
+        environment_manifest_sha256 = parse_environment_manifest(
+            environment_manifest_bytes
+        ).sha256
+    return canonical_rfdc_probe_json_bytes(_result_from_raw(
+        raw_output, probe_tcl, model, architecture, run_id,
+        environment_manifest_sha256=environment_manifest_sha256,
+    ))
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -426,12 +690,30 @@ def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]
     return result
 
 
-def parse_rfdc_probe_evidence(evidence_bytes: bytes, probe_tcl: bytes, model: ModelConfig, architecture: HardwareArchitectureConfig) -> RfdcProbeResult:
+def parse_rfdc_probe_evidence(
+    evidence_bytes: bytes,
+    probe_tcl: bytes,
+    model: ModelConfig,
+    architecture: HardwareArchitectureConfig,
+    *,
+    environment_manifest_sha256: str | None = None,
+) -> RfdcProbeResult:
     if not isinstance(evidence_bytes, bytes) or not isinstance(probe_tcl, bytes): raise ValueError("probe evidence and Tcl must be bytes")
     try: values = json.loads(evidence_bytes.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys)
     except (UnicodeDecodeError, json.JSONDecodeError) as error: raise ValueError("invalid RFDC probe JSON") from error
-    if not isinstance(values, dict) or set(values) != _EVIDENCE_KEYS: raise ValueError("RFDC probe evidence has unknown or missing keys")
-    if values.get("probe_schema_version") != 1: raise ValueError("probe_schema_version must be 1")
+    if not isinstance(values, dict): raise ValueError("RFDC probe evidence must be an object")
+    schema = values.get("probe_schema_version")
+    if schema == 2:
+        expected_keys = _EVIDENCE_KEYS
+    elif schema == 3:
+        expected_keys = _EVIDENCE_KEYS_V3
+    else:
+        raise ValueError("probe_schema_version must be 2 or 3")
+    if set(values) != expected_keys: raise ValueError("RFDC probe evidence has unknown or missing keys")
+    if environment_manifest_sha256 is not None:
+        _sha(environment_manifest_sha256, "environment_manifest_sha256")
+        if schema != 3 or values.get("environment_manifest_sha256") != environment_manifest_sha256:
+            raise ValueError("RFDC probe environment manifest mismatch")
     interfaces_raw, pins_raw = values["interfaces"], values["scalar_pins"]
     if not isinstance(interfaces_raw, list) or not isinstance(pins_raw, list): raise ValueError("RFDC probe interface fields must be arrays")
     if any(not isinstance(item, dict) for item in interfaces_raw + pins_raw): raise ValueError("RFDC probe interface entries must be objects")
@@ -443,7 +725,55 @@ def parse_rfdc_probe_evidence(evidence_bytes: bytes, probe_tcl: bytes, model: Mo
     ): raise ValueError("messages must be severity/count arrays")
     validation = values["validation_errors"]
     if not isinstance(validation, list) or any(not isinstance(item, str) for item in validation): raise ValueError("validation_errors must be string array")
-    result = RfdcProbeResult(RfdcProbeProvenance(_text(values["vivado_version"], "vivado_version"), _sha(values["probe_tcl_sha256"], "probe_tcl_sha256"), _sha(values["raw_output_sha256"], "raw_output_sha256"), _integer(values["run_id"], "run_id", 1)), _text(values["device_part"], "device_part"), _text(values["rfdc_vlnv"], "rfdc_vlnv"), _pairs(values["cells"], "cells"), _pairs(values["applied_config"], "applied_config"), tuple(RfdcProbeInterface(**item) for item in interfaces_raw), tuple(RfdcProbeScalarPin(**item) for item in pins_raw), tuple(tuple(item) for item in messages), tuple(validation), _bool(values["common_rx_clock_legality_verified"], "common_rx_clock_legality_verified"), _bool(values["common_tx_clock_legality_verified"], "common_tx_clock_legality_verified"), _bool(values["mts_configuration_verified"], "mts_configuration_verified"), _bool(values["mts_runtime_verified"], "mts_runtime_verified"))
+    mts_inventory_raw = values["mts_property_inventory"]
+    mts_readback_raw = values["mts_value_readback"]
+    mts_bindings_raw = values["mts_bindings"]
+    mts_keys = {"name", "value_type", "read_only", "current_value", "enumerated_values"}
+    if not isinstance(mts_inventory_raw, list) or any(
+        not isinstance(item, dict) or set(item) != mts_keys
+        or not isinstance(item["enumerated_values"], list)
+        for item in mts_inventory_raw
+    ):
+        raise ValueError("mts_property_inventory entries must use the exact schema")
+    if not isinstance(mts_readback_raw, list) or any(
+        not isinstance(item, list) or len(item) != 3 for item in mts_readback_raw
+    ):
+        raise ValueError("mts_value_readback entries must be three-element arrays")
+    if not isinstance(mts_bindings_raw, list) or any(
+        not isinstance(item, list) or len(item) != 3 for item in mts_bindings_raw
+    ):
+        raise ValueError("mts_bindings entries must be three-element arrays")
+    result = RfdcProbeResult(
+        RfdcProbeProvenance(
+            _text(values["vivado_version"], "vivado_version"),
+            _sha(values["probe_tcl_sha256"], "probe_tcl_sha256"),
+            _sha(values["raw_output_sha256"], "raw_output_sha256"),
+            _integer(values["run_id"], "run_id", 1),
+            _sha(values["environment_manifest_sha256"], "environment_manifest_sha256")
+            if schema == 3 else None,
+        ),
+        _text(values["device_part"], "device_part"),
+        _text(values["rfdc_vlnv"], "rfdc_vlnv"),
+        _pairs(values["cells"], "cells"),
+        _pairs(values["applied_config"], "applied_config"),
+        tuple(RfdcProbeInterface(**item) for item in interfaces_raw),
+        tuple(RfdcProbeScalarPin(**item) for item in pins_raw),
+        tuple(tuple(item) for item in messages),
+        tuple(validation),
+        tuple(RfdcProbeMtsProperty(
+            name=_text(item["name"], "MTS property name"),
+            value_type=_text(item["value_type"], "MTS property type"),
+            read_only=_bool(item["read_only"], "MTS property read_only"),
+            current_value=_text(item["current_value"], "MTS property current_value"),
+            enumerated_values=tuple(item["enumerated_values"]),
+        ) for item in mts_inventory_raw),
+        tuple(tuple(item) for item in mts_readback_raw),
+        tuple((item[0], item[1], item[2]) for item in mts_bindings_raw),
+        _bool(values["common_rx_clock_legality_verified"], "common_rx_clock_legality_verified"),
+        _bool(values["common_tx_clock_legality_verified"], "common_tx_clock_legality_verified"),
+        _bool(values["mts_configuration_verified"], "mts_configuration_verified"),
+        _bool(values["mts_runtime_verified"], "mts_runtime_verified"),
+    )
     if evidence_bytes != canonical_rfdc_probe_json_bytes(result): raise ValueError("RFDC probe evidence bytes are not canonical")
     if result.provenance.probe_tcl_sha256 != _sha256(probe_tcl): raise ValueError("RFDC probe Tcl hash mismatch")
     if result.device_part != model.device_part or result.device_part != architecture.device_part: raise ValueError("RFDC probe device part mismatch")
@@ -456,4 +786,8 @@ def parse_rfdc_probe_evidence(evidence_bytes: bytes, probe_tcl: bytes, model: Mo
     if observed_pins != _expected_scalar_pins():
         raise ValueError("RFDC probe scalar pin inventory mismatch")
     _validate_applied_config(result.applied_config, model, architecture)
+    _validate_mts_authority(
+        result.mts_property_inventory, result.mts_value_readback,
+        result.mts_bindings, _expected_mts_binding_keys(model),
+    )
     return result

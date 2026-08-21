@@ -56,7 +56,14 @@ class HandoffDocsTest(unittest.TestCase):
         self.assertIn("89a2362", refs)
         for ref in refs:
             result = subprocess.run(
-                ["git", "cat-file", "-e", f"{ref}^{{commit}}"],
+                [
+                    "git",
+                    "-c",
+                    f"safe.directory={ROOT}",
+                    "cat-file",
+                    "-e",
+                    f"{ref}^{{commit}}",
+                ],
                 cwd=ROOT,
                 capture_output=True,
                 text=True,

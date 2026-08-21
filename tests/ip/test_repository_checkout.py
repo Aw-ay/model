@@ -16,7 +16,15 @@ class RepositoryCheckoutPolicyTest(unittest.TestCase):
         )
 
         result = subprocess.run(
-            ["git", "check-attr", "eol", "--", *authorities],
+            [
+                "git",
+                "-c",
+                f"safe.directory={repository_root}",
+                "check-attr",
+                "eol",
+                "--",
+                *authorities,
+            ],
             cwd=repository_root,
             check=True,
             capture_output=True,

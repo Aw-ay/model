@@ -49,6 +49,7 @@ from .connected import (
 from .rfdc_probe import (
     RFDC_PROBE_VLNV,
     RfdcProbeInterface,
+    RfdcProbeMtsProperty,
     RfdcProbeResult,
     RfdcProbeScalarPin,
     build_rfdc_probe_evidence,
@@ -109,6 +110,7 @@ __all__ = [
     "RfdcIntegrationMetadata",
     "RfdcProbeProvenance",
     "RfdcProbeInterface",
+    "RfdcProbeMtsProperty",
     "RfdcProbeResult",
     "RfdcProbeScalarPin",
     "RFDC_PROBE_VLNV",
@@ -134,6 +136,16 @@ __all__ = [
     "validate_catalog_evidence",
     "validate_connected_evidence",
     "validate_production_lock",
+    "AUTHORITY_FILENAMES",
+    "EnvironmentManifest",
+    "EnvironmentReady",
+    "authority_absolute_path_violations",
+    "authority_sha256",
+    "capture_environment_manifest",
+    "parse_environment_manifest",
+    "parse_environment_ready",
+    "prepare_environment",
+    "require_environment_ready",
 ]
 
 
@@ -145,10 +157,27 @@ _LOCK_EXPORTS = {
     "validate_production_lock",
 }
 
+_ENVIRONMENT_EXPORTS = {
+    "AUTHORITY_FILENAMES",
+    "EnvironmentManifest",
+    "EnvironmentReady",
+    "authority_absolute_path_violations",
+    "authority_sha256",
+    "capture_environment_manifest",
+    "parse_environment_manifest",
+    "parse_environment_ready",
+    "prepare_environment",
+    "require_environment_ready",
+}
+
 
 def __getattr__(name: str) -> object:
     if name in _LOCK_EXPORTS:
         from . import lock
 
         return getattr(lock, name)
+    if name in _ENVIRONMENT_EXPORTS:
+        from . import environment
+
+        return getattr(environment, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

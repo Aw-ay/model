@@ -298,7 +298,10 @@ class ArchitectureRegistryTest(unittest.TestCase):
             registry.reference_responsibility_map[
                 "legacy_reference.rx_group_ingress_2spc"
             ] = "wrong_owner"
-        with self.assertRaises(ValueError):
+        # Python 3.12 raises ValueError here; Python 3.13 rejects replacing
+        # an init=False field earlier with TypeError.  Both preserve the
+        # invariant that derived owner maps are not replaceable.
+        with self.assertRaises((TypeError, ValueError)):
             dataclasses.replace(registry, production_owner_map={})
 
         readiness = registry.evaluate_readiness(

@@ -36,6 +36,7 @@ Use these tracked files as the navigation map. Open the relevant authority befor
 - [Hardware architecture authority](../../config/ip_architecture.json)
 - [Production IP lock](../../config/ip_lock.json)
 - [PS platform authority](../../config/ps_platform.json)
+- [Environment provenance and Phase-0 gate](../migration/environment-provenance.md)
 - [Architecture object types](../../src/rfsoc_pulse_model/ip/types.py)
 - [Architecture registry/readiness](../../src/rfsoc_pulse_model/ip/registry.py)
 - [Catalog evidence](../../src/rfsoc_pulse_model/ip/evidence.py)
@@ -45,6 +46,7 @@ Use these tracked files as the navigation map. Open the relevant authority befor
 - [Pure connected request/evidence](../../src/rfsoc_pulse_model/ip/connected.py)
 - [Connected Tcl generation](../../src/rfsoc_pulse_model/ip/connected_tcl.py)
 - [Connected runner/lifecycle](../../src/rfsoc_pulse_model/ip/connected_runner.py)
+- [Environment manifest/gate](../../src/rfsoc_pulse_model/ip/environment.py)
 - [RFDC probe tests](../../tests/ip/test_rfdc_probe.py)
 - [Connected evidence tests](../../tests/ip/test_connected.py)
 - [Connected Tcl tests](../../tests/ip/test_connected_tcl.py)
@@ -82,6 +84,7 @@ Use these tracked files as the navigation map. Open the relevant authority befor
 - [Registry/readiness tests](../../tests/ip/test_registry.py)
 - [Lock workflow tests](../../tests/ip/test_lock.py)
 - [Generator tests](../../tests/ip/test_generate_architecture.py)
+- [Environment provenance tests](../../tests/ip/test_environment.py)
 
 ## Verification and Handoff
 

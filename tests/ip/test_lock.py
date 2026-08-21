@@ -288,12 +288,18 @@ class ProductionLockTest(unittest.TestCase):
             self.assertEqual(root_lock.read_bytes(), package_lock.read_bytes())
 
     def test_module_cli_does_not_preimport_its_own_main_module(self) -> None:
+        repository_root = Path(__file__).resolve().parents[2]
+        environment = os.environ.copy()
+        source_root = str(repository_root / "src")
+        environment["PYTHONPATH"] = os.pathsep.join(
+            value for value in (source_root, environment.get("PYTHONPATH", "")) if value
+        )
         completed = subprocess.run(
             [sys.executable, "-m", "rfsoc_pulse_model.ip.lock", "--help"],
             check=False,
             capture_output=True,
             text=True,
-            env=os.environ.copy(),
+            env=environment,
         )
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -387,12 +393,13 @@ class ProductionLockTest(unittest.TestCase):
             package_lock.parent.mkdir(parents=True)
             root_lock.write_bytes(b"old-root")
             package_lock.write_bytes(b"old-package")
+            resolved_root_lock = root_lock.resolve()
             original = lock_module._assert_snapshot_current
             edited = False
 
             def external_edit_then_check(target, snapshot):
                 nonlocal edited
-                if not edited and target == root_lock:
+                if not edited and Path(target) == resolved_root_lock:
                     target.write_bytes(b"external-editor")
                     edited = True
                 return original(target, snapshot)
@@ -420,10 +427,11 @@ class ProductionLockTest(unittest.TestCase):
             package_lock.parent.mkdir(parents=True)
             root_lock.write_bytes(b"old-root")
             package_lock.write_bytes(b"old-package")
+            resolved_root_lock = root_lock.resolve()
             real_replace = lock_module.os.replace
 
             def external_edit_before_real_replace(source, destination):
-                if Path(destination) == root_lock:
+                if Path(destination) == resolved_root_lock:
                     root_lock.write_bytes(b"manual-editor")
                 return real_replace(source, destination)
 
@@ -452,17 +460,19 @@ class ProductionLockTest(unittest.TestCase):
             package_lock.parent.mkdir(parents=True)
             root_lock.write_bytes(b"old-root")
             package_lock.write_bytes(b"old-package")
+            resolved_root_lock = root_lock.resolve()
+            resolved_package_lock = package_lock.resolve()
             real_replace = lock_module.os.replace
             root_replaced = False
 
             def fail_package_replace_and_root_rollback(source, destination):
                 nonlocal root_replaced
-                if Path(destination) == package_lock:
+                if Path(destination) == resolved_package_lock:
                     raise OSError("injected package replacement failure")
-                if Path(destination) == root_lock and root_replaced:
+                if Path(destination) == resolved_root_lock and root_replaced:
                     raise OSError("injected root rollback failure")
                 result = real_replace(source, destination)
-                if Path(destination) == root_lock:
+                if Path(destination) == resolved_root_lock:
                     root_replaced = True
                 return result
 
@@ -505,11 +515,12 @@ class ProductionLockTest(unittest.TestCase):
             package_lock.parent.mkdir(parents=True)
             root_lock.write_bytes(b"old-root")
             package_lock.write_bytes(b"old-package")
+            resolved_root_lock = root_lock.resolve()
             original_flush = lock_module._flush_directory
 
             def fail_after_root_replace(directory):
                 if (
-                    Path(directory) == root_lock.parent
+                    Path(directory) == resolved_root_lock.parent
                     and root_lock.exists()
                     and root_lock.read_bytes() == expected
                 ):

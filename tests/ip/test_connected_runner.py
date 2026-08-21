@@ -43,15 +43,130 @@ def readback_bytes(artifacts):
 
 
 def write_clean_reports(attempt) -> None:
-    """Minimal bounded report fixtures accepted by the fail-closed parser."""
+    """Measured Vivado 2025.2 report forms accepted by the fail-closed parser."""
     contents = {
-        "cdc": b"CDC_SAFE\n",
-        "clock_interaction": b"CLOCK_SAFE\n",
-        "timing_summary": b"TIMING_CONSTRAINED\n",
-        "utilization": b"UTILIZATION_OK\n",
+        "cdc": clean_cdc_report(),
+        "clock_interaction": clean_clock_report(),
+        "timing_summary": clean_timing_report(),
+        "utilization": clean_utilization_report(),
     }
     for name, path in attempt.report_paths.items():
         path.write_bytes(contents[name])
+
+
+def report_header(command: str) -> str:
+    return "\n".join((
+        "Copyright 1986-2022 Xilinx, Inc. All Rights Reserved.",
+        "----------------------------------------",
+        "| Tool Version      : Vivado v.2025.2 (win64) Build 6299465 Fri Nov 14 19:35:11 GMT 2025",
+        "| Date              : Thu Aug 20 23:08:34 2026",
+        "| Host              : measured-host",
+        f"| Command           : {command}",
+        "| Design            : connected_rfdc_shell_wrapper",
+        "| Device            : xczu27dr-fsve1156",
+        "| Speed File        : -2 PRODUCTION",
+        "| Design State      : Synthesized",
+        "----------------------------------------",
+        "",
+    ))
+
+
+def vivado_report_bytes(report: str) -> bytes:
+    """Vivado 2025.2 on Windows writes reports with CRLF line endings."""
+    return report.replace("\n", "\r\n").encode("utf-8")
+
+
+def clean_cdc_report() -> bytes:
+    return vivado_report_bytes(report_header("report_cdc -details -file ./cdc.rpt") + """CDC Report
+
+ID     Severity  Count  Description
+-----  --------  -----  ------------------------------------------
+CDC-3  Info          1  1-bit synchronized with ASYNC_REG property
+
+Source Clock: clk_a
+Destination Clock: clk_b
+CDC Type: No Common Primary Clock
+
+Row  ID     Severity  Description                                 Depth  Exception            Source (From)        Destination (To)
+---  -----  --------  ------------------------------------------  -----  -------------------  -------------------  ------------------
+  1  CDC-3  Info      1-bit synchronized with ASYNC_REG property      2  Asynch Clock Groups  source_toggle_reg/C  sync_stage_1_reg/D
+""")
+
+
+def unsafe_cdc_report() -> bytes:
+    return clean_cdc_report().replace(
+        b"CDC-3  Info          1  1-bit synchronized with ASYNC_REG property",
+        b"CDC-1  Critical      1  1-bit unknown CDC circuitry",
+    ).replace(
+        b"CDC-3  Info      1-bit synchronized with ASYNC_REG property      2",
+        b"CDC-1  Critical  1-bit unknown CDC circuitry                         0",
+    )
+
+
+def clean_clock_report() -> bytes:
+    return vivado_report_bytes(report_header("report_clock_interaction -file ./clock_interaction.rpt") + """Clock Interaction Report
+
+Clock Interaction Table
+-----------------------
+
+From Clock    To Clock      Clock Edges  WNS(ns)  TNS(ns)  TNS Failing Endpoints  TNS Total Endpoints  WNS Path Requirement(ns)  Clock-Pair Classification  Inter-Clock Constraints
+------------  ------------  -----------  -------  -------  ---------------------  -------------------  ------------------------  -------------------------  -----------------------
+clk_a         clk_a         rise - rise     9.54     0.00                      0                    1                     10.00  Clean                Timed
+clk_a         clk_b                                                  0            1                   Ignored              Asynchronous Groups
+clk_b         clk_b         rise - rise     7.57     0.00                      0                    1                      8.00  Clean                Timed
+
+""")
+
+
+_CHECKS = (
+    "no_clock", "constant_clock", "pulse_width_clock",
+    "unconstrained_internal_endpoints", "no_input_delay", "no_output_delay",
+    "multiple_clock", "generated_clocks", "loops", "partial_input_delay",
+    "partial_output_delay", "latch_loops",
+)
+
+
+def clean_timing_report() -> bytes:
+    toc = "\n".join(f"{index}. checking {name} (0)" for index, name in enumerate(_CHECKS, 1))
+    details = "\n\n".join(
+        f"{index}. checking {name} (0)\n------------------------\n There are 0 affected objects."
+        for index, name in enumerate(_CHECKS, 1)
+    )
+    return vivado_report_bytes(report_header(
+        "report_timing_summary -report_unconstrained -no_detailed_paths -file ./timing_summary.rpt"
+    ) + f"""Timing Summary Report
+
+check_timing report
+
+Table of Contents
+-----------------
+{toc}
+
+{details}
+
+Timing constraints are not met.
+
+| Unconstrained Path Table
+| ------------------------
+----------------------------------------
+
+Path Group    From Clock    To Clock
+----------    ----------    --------
+
+""")
+
+
+def clean_utilization_report() -> bytes:
+    return vivado_report_bytes(report_header("report_utilization -file ./utilization.rpt") + """Utilization Estimates
+
++----------------------------+------+-------+-----------+-------+
+| Site Type                  | Used | Fixed | Available | Util% |
++----------------------------+------+-------+-----------+-------+
+| CLB LUTs                   | 10   | 0     | 100       | 10.00%|
+| CLB Registers              | 20   | 0     | 200       | 10.00%|
++----------------------------+------+-------+-----------+-------+
+
+""")
 
 
 class ConnectedRunnerTest(unittest.TestCase):
@@ -61,7 +176,85 @@ class ConnectedRunnerTest(unittest.TestCase):
         request, _, context = fixture()
         model, architecture, platform, _, _, _ = context
         probe = probe_result(model, architecture)
-        return emit_connected_tcl(request, platform, probe.applied_config, probe.interfaces), context
+        return emit_connected_tcl(request, platform, probe), context
+
+    def test_fresh_tree_starts_attempt_ids_at_one_and_never_reuses_disk_ids(self) -> None:
+        from rfsoc_pulse_model.ip.connected_runner import ConnectedShellRunner
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runner = ConnectedShellRunner(root, root / "build", require_environment=False)
+            self.assertEqual(runner._next_run_id(), 1)
+
+            attempts = root / "build" / "vivado" / "connected_rfdc_shell_attempts"
+            attempts.mkdir(parents=True)
+            (attempts / "run_1").mkdir()
+            (attempts / "run_7").mkdir()
+            (attempts / "run_notes").mkdir()
+            self.assertEqual(runner._next_run_id(), 8)
+
+    def test_task6_default_rejects_legacy_authority_without_phase0(self) -> None:
+        from rfsoc_pulse_model.ip.connected_runner import ConnectedShellRunner
+
+        _, _, context = fixture()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runner = ConnectedShellRunner(root, root / "build")
+            with self.assertRaisesRegex(ValueError, "Phase-0 environment manifest"):
+                runner._require_current_environment(context[-1])
+
+    def test_environment_bound_candidate_evidence_uses_schema2(self) -> None:
+        """Phase-0-bound requests must publish evidence with the same binding."""
+        import dataclasses
+
+        from rfsoc_pulse_model.ip.connected import build_connected_request
+        from rfsoc_pulse_model.ip.connected_runner import (
+            ConnectedShellRunner,
+            build_candidate_evidence,
+        )
+        from rfsoc_pulse_model.ip.connected_tcl import emit_connected_tcl
+        from rfsoc_pulse_model.ip.environment import EnvironmentManifest
+
+        (model, architecture, platform, lock), bundle, probe = authority_fixture()
+        manifest = EnvironmentManifest(
+            host="new_machine",
+            os="Windows 11",
+            python="3.12.9",
+            vivado="2025.2",
+            vivado_build="6299465",
+            repo_root="E:/new/absolute/path",
+            git_commit="0" * 40,
+            timezone="Asia/Shanghai",
+            git_status_clean=True,
+            vivado_executable="C:/Xilinx/2025.2/Vivado/bin/vivado.bat",
+        )
+        measured_probe = probe_result(model, architecture)
+        bound_probe = dataclasses.replace(
+            measured_probe,
+            provenance=dataclasses.replace(
+                measured_probe.provenance,
+                environment_manifest_sha256=manifest.sha256,
+            ),
+        )
+        bound_bundle = dataclasses.replace(
+            bundle, environment_manifest_bytes=manifest.bytes()
+        )
+        request = build_connected_request(
+            model, architecture, platform, lock, bound_probe.provenance, bound_bundle
+        )
+        artifacts = emit_connected_tcl(request, platform, bound_probe)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runner = ConnectedShellRunner(root, root / "build", require_environment=False)
+            attempt = runner._prepare_attempt(1, artifacts)
+            write_clean_reports(attempt)
+            raw = readback_bytes(artifacts)
+            attempt.readback_path.write_bytes(raw)
+            evidence = build_candidate_evidence(artifacts, raw, attempt)
+
+        self.assertEqual(evidence.evidence_schema_version, 2)
+        self.assertEqual(evidence.environment_manifest_sha256, manifest.sha256)
 
     @staticmethod
     def _successful_fake(artifacts, *, mutate_readback=None, mutate_reports=None):
@@ -84,10 +277,10 @@ class ConnectedRunnerTest(unittest.TestCase):
         request, _, context = fixture()
         model, architecture, platform, _, _, _ = context
         probe = probe_result(model, architecture)
-        artifacts = emit_connected_tcl(request, platform, probe.applied_config, probe.interfaces)
+        artifacts = emit_connected_tcl(request, platform, probe)
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            runner = ConnectedShellRunner(root, root / "build")
+            runner = ConnectedShellRunner(root, root / "build", require_environment=False)
             observed = []
             def fake(attempt):
                 observed.append(attempt)
@@ -111,10 +304,10 @@ class ConnectedRunnerTest(unittest.TestCase):
         _, _, platform, _, _, _ = context
         model, architecture, _, _, _, _ = context
         probe = probe_result(model, architecture)
-        artifacts = emit_connected_tcl(request, platform, probe.applied_config, probe.interfaces)
+        artifacts = emit_connected_tcl(request, platform, probe)
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            runner = ConnectedShellRunner(root, root / "build")
+            runner = ConnectedShellRunner(root, root / "build", require_environment=False)
             old_state = root / "build" / "metadata" / "connected_rfdc_shell_state.json"
             old_state.parent.mkdir(parents=True)
             old_state.write_text('{"stale":true}\n', encoding="utf-8")
@@ -146,10 +339,10 @@ class ConnectedRunnerTest(unittest.TestCase):
         _, _, platform, _, _, _ = context
         model, architecture, _, _, _, _ = context
         probe = probe_result(model, architecture)
-        artifacts = emit_connected_tcl(request, platform, probe.applied_config, probe.interfaces)
+        artifacts = emit_connected_tcl(request, platform, probe)
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            runner = ConnectedShellRunner(root, root / "build")
+            runner = ConnectedShellRunner(root, root / "build", require_environment=False)
             with self.assertRaisesRegex(RuntimeError, "launcher failed"):
                 runner.run(artifacts, *context, launcher=lambda _attempt: 7)
             with self.assertRaisesRegex(ValueError, "success"):
@@ -161,10 +354,15 @@ class ConnectedRunnerTest(unittest.TestCase):
 
         artifacts, context = self._artifacts_context()
         mutations = {
-            "critical_cdc": lambda attempt: attempt.report_paths["cdc"].write_bytes(b"CRITICAL WARNING: unsafe CDC\nCDC_SAFE\n"),
-            "unsafe_clock": lambda attempt: attempt.report_paths["clock_interaction"].write_bytes(b"CLOCK_SAFE\nUNSAFE CLOCK\n"),
-            "unconstrained_timing": lambda attempt: attempt.report_paths["timing_summary"].write_bytes(b"TIMING_CONSTRAINED\nUNCONSTRAINED PATH\n"),
-            "oversized_report": lambda attempt: attempt.report_paths["cdc"].write_bytes(b"CDC_SAFE\n" + b"x" * 1_000_000),
+            "synthetic_protocol": lambda attempt: attempt.report_paths["cdc"].write_bytes(
+                b"CDC_SAFE\nCLOCK_SAFE\nTIMING_CONSTRAINED\n"
+            ),
+            "critical_cdc": lambda attempt: attempt.report_paths["cdc"].write_bytes(unsafe_cdc_report()),
+            "unsafe_clock": lambda attempt: attempt.report_paths["clock_interaction"].write_bytes(clean_clock_report().replace(b"clk_a         clk_b", b"clk_a         clk_c")),
+            "unconstrained_timing": lambda attempt: attempt.report_paths["timing_summary"].write_bytes(clean_timing_report().rstrip() + b"\nclk_a         clk_a         clk_b\n"),
+            "synthetic_utilization": lambda attempt: attempt.report_paths["utilization"].write_bytes(b"UTILIZATION_OK\n"),
+            "wrong_version": lambda attempt: attempt.report_paths["cdc"].write_bytes(clean_cdc_report().replace(b"Vivado v.2025.2", b"Vivado v.2025.1")),
+            "oversized_report": lambda attempt: attempt.report_paths["cdc"].write_bytes(clean_cdc_report() + b"x" * 1_000_000),
             "missing_mts": lambda raw: raw.replace(b"CONNECTED_READBACK\tMTS\tADC0_Multi_Tile_Sync\ttrue\n", b""),
             "wrong_mts": lambda raw: raw.replace(b"CONNECTED_READBACK\tMTS\tDAC0_Multi_Tile_Sync\ttrue", b"CONNECTED_READBACK\tMTS\tDAC0_Multi_Tile_Sync\tfalse"),
         }
@@ -172,7 +370,7 @@ class ConnectedRunnerTest(unittest.TestCase):
             root = Path(temporary)
             for name, mutation in mutations.items():
                 with self.subTest(name=name):
-                    runner = ConnectedShellRunner(root, root / "build")
+                    runner = ConnectedShellRunner(root, root / "build", require_environment=False)
                     if name in {"missing_mts", "wrong_mts"}:
                         fake = self._successful_fake(artifacts, mutate_readback=mutation)
                     else:
@@ -200,7 +398,7 @@ class ConnectedRunnerTest(unittest.TestCase):
             root = Path(temporary)
             for name, mutation in mutations.items():
                 with self.subTest(name=name):
-                    runner = ConnectedShellRunner(root, root / "build")
+                    runner = ConnectedShellRunner(root, root / "build", require_environment=False)
                     with self.assertRaisesRegex(RuntimeError, "failed"):
                         runner.run(artifacts, *context, launcher=self._successful_fake(artifacts, mutate_readback=mutation))
 
@@ -211,14 +409,14 @@ class ConnectedRunnerTest(unittest.TestCase):
         artifacts, context = self._artifacts_context()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            runner = ConnectedShellRunner(root, root / "build")
+            runner = ConnectedShellRunner(root, root / "build", require_environment=False)
             lock = root / ".connected_rfdc_shell.runner.lock"
             lock.write_bytes(b"stale advisory content")
             accepted = runner.run(artifacts, *context, launcher=self._successful_fake(artifacts))
             self.assertTrue(accepted.rfdc_shell_structural_ready)
             with _repository_lock(lock):
                 with self.assertRaisesRegex(RuntimeError, "already active"):
-                    ConnectedShellRunner(root, root / "build").run(artifacts, *context, launcher=self._successful_fake(artifacts))
+                    ConnectedShellRunner(root, root / "build", require_environment=False).run(artifacts, *context, launcher=self._successful_fake(artifacts))
 
     def test_interrupted_evidence_or_success_publication_leaves_failed_authority(self) -> None:
         """Both publish boundaries fail closed instead of leaving a usable success."""
@@ -230,7 +428,7 @@ class ConnectedRunnerTest(unittest.TestCase):
             root = Path(temporary)
             for boundary in ("evidence", "success"):
                 with self.subTest(boundary=boundary):
-                    runner = runner_module.ConnectedShellRunner(root, root / "build")
+                    runner = runner_module.ConnectedShellRunner(root, root / "build", require_environment=False)
                     def interrupted(path, payload, *, target=boundary):
                         if target == "evidence" and path == runner.evidence_path:
                             raise OSError("simulated evidence publish interruption")
@@ -252,7 +450,7 @@ class ConnectedRunnerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary, tempfile.TemporaryDirectory() as outside:
             root = Path(temporary) / "legal}component"
             root.mkdir()
-            runner = ConnectedShellRunner(root, root / "build")
+            runner = ConnectedShellRunner(root, root / "build", require_environment=False)
             observed = []
             def brace_fake(attempt):
                 observed.append(attempt)
@@ -264,9 +462,9 @@ class ConnectedRunnerTest(unittest.TestCase):
             self.assertEqual(launch, "source $::env(CONNECTED_REALIZATION_TCL)\nsource $::env(CONNECTED_VERIFICATION_TCL)\n")
             self.assertEqual(observed[0].vivado_environment(artifacts.verification_tcl_sha256)["CONNECTED_REALIZATION_TCL"], str(observed[0].realization_tcl_path))
 
-            attack_runner = ConnectedShellRunner(root, root / "build_attack")
+            attack_runner = ConnectedShellRunner(root, root / "build_attack", require_environment=False)
             outside_report = Path(outside) / "cdc.rpt"
-            outside_report.write_bytes(b"CDC_SAFE\n")
+            outside_report.write_bytes(clean_cdc_report())
             def symlink_fake(attempt):
                 write_clean_reports(attempt)
                 attempt.report_paths["cdc"].unlink()
@@ -290,7 +488,7 @@ class ConnectedRunnerTest(unittest.TestCase):
             root = Path(temporary)
             external_reports = Path(outside) / "reports"
             external_reports.mkdir()
-            runner = ConnectedShellRunner(root, root / "build")
+            runner = ConnectedShellRunner(root, root / "build", require_environment=False)
             def junction_fake(attempt):
                 reports = next(iter(attempt.report_paths.values())).parent
                 reports.rmdir()
@@ -301,8 +499,10 @@ class ConnectedRunnerTest(unittest.TestCase):
                 if result.returncode != 0:
                     self.skipTest(f"junction capability unavailable: {result.stderr or result.stdout}")
                 contents = {
-                    "cdc": b"CDC_SAFE\n", "clock_interaction": b"CLOCK_SAFE\n",
-                    "timing_summary": b"TIMING_CONSTRAINED\n", "utilization": b"UTILIZATION_OK\n",
+                    "cdc": clean_cdc_report(),
+                    "clock_interaction": clean_clock_report(),
+                    "timing_summary": clean_timing_report(),
+                    "utilization": clean_utilization_report(),
                 }
                 for name, path in attempt.report_paths.items():
                     path.write_bytes(contents[name])

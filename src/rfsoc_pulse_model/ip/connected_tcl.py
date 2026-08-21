@@ -8,7 +8,7 @@ import re
 
 from .connected import ConnectedShellRequest, canonical_connected_json_bytes
 from .platform import PsPlatformConfig
-from .rfdc_probe import RfdcProbeInterface
+from .rfdc_probe import RfdcProbeInterface, RfdcProbeResult
 
 
 _TOKEN = re.compile(r"[A-Za-z0-9_.:+/-]+\Z")
@@ -63,28 +63,85 @@ def _external_rf_interfaces(items: tuple[RfdcProbeInterface, ...]) -> tuple[Rfdc
     return selected
 
 
-def _apply_required_mts(
-    request: ConnectedShellRequest, properties: tuple[tuple[str, str], ...],
-) -> tuple[tuple[tuple[str, str], ...], tuple[tuple[str, str], ...]]:
-    """Promote only Task-4-discovered per-tile MTS properties required by request.
+def _request_rfdc_property_names(request: ConnectedShellRequest) -> frozenset[str]:
+    """Return the exact CONFIG names allowed to cross into connected Tcl.
 
-    The probe establishes the property spelling; the connected request establishes
-    the required converter/tile sets.  We deliberately do not invent a global
-    ``mADC_*`` setting, nor treat a launcher supplied boolean as MTS evidence.
+    The Task-4 probe keeps the full Vivado CONFIG readback inventory.  The
+    connected request carries the model's semantic tile/slice selection, so
+    it can reconstruct the exact candidate-name whitelist without promoting
+    arbitrary measured properties into the production realization.
     """
-    configured = dict(properties)
-    if len(configured) != len(properties):
+    semantics = request.rfdc_semantics
+    for field in ("adc_slices", "dac_slices"):
+        value = getattr(semantics, field)
+        if len(value) != len(set(value)):
+            raise ValueError(f"request contains duplicate {field}")
+    names: set[str] = set()
+    for tile in range(4):
+        names.update({
+            f"ADC{tile}_Enable", f"ADC{tile}_PLL_Enable",
+            f"ADC{tile}_Sampling_Rate", f"ADC{tile}_Fabric_Freq",
+        })
+    for tile, slice_index in semantics.adc_slices:
+        if tile not in range(4) or slice_index not in range(4):
+            raise ValueError("request contains an invalid ADC RFDC tile/slice")
+        suffix = f"{tile}{slice_index}"
+        names.update({
+            f"ADC_Slice{suffix}_Enable", f"ADC_Data_Type{suffix}",
+            f"ADC_Decimation_Mode{suffix}", f"ADC_Data_Width{suffix}",
+            f"ADC_Mixer_Type{suffix}", f"ADC_Mixer_Mode{suffix}",
+            f"ADC_NCO_Freq{suffix}",
+        })
+    for tile in range(2):
+        names.update({
+            f"DAC{tile}_Enable", f"DAC{tile}_PLL_Enable",
+            f"DAC{tile}_Sampling_Rate", f"DAC{tile}_Fabric_Freq",
+        })
+    for tile, slice_index in semantics.dac_slices:
+        if tile not in range(2) or slice_index not in range(4):
+            raise ValueError("request contains an invalid DAC RFDC tile/slice")
+        suffix = f"{tile}{slice_index}"
+        names.update({
+            f"DAC_Slice{suffix}_Enable", f"DAC_Data_Type{suffix}",
+            f"DAC_Interpolation_Mode{suffix}", f"DAC_Data_Width{suffix}",
+            f"DAC_Mixer_Type{suffix}", f"DAC_Mixer_Mode{suffix}",
+            f"DAC_NCO_Freq{suffix}",
+        })
+    return frozenset(names)
+
+
+def _apply_required_mts(
+    request: ConnectedShellRequest, probe: RfdcProbeResult,
+) -> tuple[tuple[tuple[str, str], ...], tuple[tuple[str, str], ...]]:
+    """Promote only the exact per-tile MTS names proven by the Task-4 probe."""
+    measured = dict(probe.applied_config)
+    if len(measured) != len(probe.applied_config):
         raise ValueError("RFDC properties must be unique")
+    allowed = _request_rfdc_property_names(request)
+    missing = sorted(allowed - set(measured))
+    if missing:
+        raise ValueError("RFDC CONFIG whitelist is incomplete: " + ",".join(missing))
+    configured = {name: measured[name] for name in allowed}
+    authority: dict[tuple[str, int], str] = {}
+    inventory_names = {item.name for item in probe.mts_property_inventory}
+    for converter, tile, name in probe.mts_bindings:
+        key = (converter, tile)
+        if key in authority or name not in inventory_names:
+            raise ValueError("Task-4 MTS binding is not canonical")
+        authority[key] = name
+    readbacks = set(probe.mts_value_readback)
+    for name in authority.values():
+        if (name, "false", "false") not in readbacks or (name, "true", "true") not in readbacks:
+            raise ValueError("Task-4 MTS readback is not canonical")
+    requested_tiles = {
+        (group.converter, tile) for group in request.mts_groups for tile in group.tiles
+    }
+    if set(authority) != requested_tiles:
+        raise ValueError("Task-4 MTS authority does not match the requested tile groups")
     expected: list[tuple[str, str]] = []
     for group in request.mts_groups:
-        prefix = "ADC" if group.converter == "adc" else "DAC"
         for tile in group.tiles:
-            name = f"{prefix}{tile}_Multi_Tile_Sync"
-            # Per-tile MTS is a production realization setting, absent from
-            # the RFDC-only candidate set because that probe intentionally
-            # leaves MTS unverified.  The connected request supplies the
-            # exact tile set; Task 6 will still fail closed if Vivado does not
-            # expose/read back this precise CONFIG property.
+            name = authority[(group.converter, tile)]
             configured[name] = "true"
             expected.append((name, "true"))
     return tuple(sorted(configured.items())), tuple(sorted(expected))
@@ -93,8 +150,7 @@ def _apply_required_mts(
 def emit_connected_tcl(
     request: ConnectedShellRequest,
     platform: PsPlatformConfig,
-    rfdc_properties: tuple[tuple[str, str], ...],
-    rfdc_interfaces: tuple[RfdcProbeInterface, ...],
+    probe: RfdcProbeResult,
 ) -> ConnectedTclArtifacts:
     """Emit disk-backed realization plus complete machine-readback protocol.
 
@@ -104,6 +160,8 @@ def emit_connected_tcl(
     """
     if not isinstance(request, ConnectedShellRequest) or not isinstance(platform, PsPlatformConfig):
         raise ValueError("request and platform must be validated authority objects")
+    if not isinstance(probe, RfdcProbeResult):
+        raise ValueError("probe must be a validated Task-4 RfdcProbeResult")
     if request.device_part != platform.device_part: raise ValueError("request/platform device part mismatch")
     cells = {cell.name: cell.vlnv for cell in request.cells}
     if len(cells) != 8: raise ValueError("request must contain exactly eight cells")
@@ -111,12 +169,12 @@ def emit_connected_tcl(
     if rfdc is None: raise ValueError("request lacks exact RFDC 2.6")
     for name, vlnv in cells.items(): _token(name, "cell name"); _token(vlnv, "cell VLNV")
     for name, value in platform.properties.items(): _token(name, "PS property"); _value(value, "PS property value")
-    if not rfdc_properties or len(set(rfdc_properties)) != len(rfdc_properties): raise ValueError("RFDC properties must be unique and nonempty")
-    for name, value in rfdc_properties:
+    if not probe.applied_config or len(set(probe.applied_config)) != len(probe.applied_config): raise ValueError("RFDC properties must be unique and nonempty")
+    for name, value in probe.applied_config:
         if not isinstance(name, str) or not _RF_PROPERTY.fullmatch(name): raise ValueError("RFDC property is unsafe")
         _value(value, "RFDC property value")
-    effective_rfdc_properties, mts_properties = _apply_required_mts(request, rfdc_properties)
-    external_rf = _external_rf_interfaces(rfdc_interfaces)
+    effective_rfdc_properties, mts_properties = _apply_required_mts(request, probe)
+    external_rf = _external_rf_interfaces(probe.interfaces)
     ps = next(name for name, vlnv in cells.items() if vlnv == platform.ps_vlnv)
     smart = next(name for name, vlnv in cells.items() if ":smartconnect:" in vlnv)
     inverter = next(name for name, vlnv in cells.items() if ":util_vector_logic:" in vlnv)
@@ -159,7 +217,7 @@ def emit_connected_tcl(
     lines += [f"assign_bd_address [get_bd_addr_segs {{{rfdc}/s_axi/Reg}}]", "validate_bd_design", "save_bd_design", ""]
     realization = "\n".join(lines).encode("utf-8")
     verification = _emit_verification(request, rfdc, effective_rfdc_properties, tuple(sorted(platform.properties.items())), external_rf, mts_properties, _sha(realization))
-    return ConnectedTclArtifacts(canonical_connected_json_bytes(request), realization, verification, effective_rfdc_properties, rfdc_interfaces, tuple(sorted(platform.properties.items())), external_rf, mts_properties)
+    return ConnectedTclArtifacts(canonical_connected_json_bytes(request), realization, verification, effective_rfdc_properties, probe.interfaces, tuple(sorted(platform.properties.items())), external_rf, mts_properties)
 
 
 def _emit_verification(request: ConnectedShellRequest, rfdc: str, properties: tuple[tuple[str, str], ...], ps_properties: tuple[tuple[str, str], ...], external_rf: tuple[RfdcProbeInterface, ...], mts_properties: tuple[tuple[str, str], ...], realization_sha: str) -> bytes:
@@ -172,8 +230,8 @@ def _emit_verification(request: ConnectedShellRequest, rfdc: str, properties: tu
         f"connected_emit META realization_tcl_sha256 {realization_sha}",
         "connected_emit META verification_tcl_sha256 $::env(CONNECTED_VERIFICATION_TCL_SHA256)",
         "connected_emit META vivado_version [version -short]", "connected_emit META device_part [get_property PART [current_project]]",
-        "validate_bd_design", "generate_target all [get_files [get_bd_designs connected_rfdc_shell]]", "set wrapper [make_wrapper -files [get_files [get_bd_designs connected_rfdc_shell]] -top]", "add_files -norecurse $wrapper", "set_property top connected_rfdc_shell_wrapper [current_fileset]", "launch_runs synth_1 -jobs 1", "wait_on_run synth_1", "if {[get_property STATUS [get_runs synth_1]] ne {synth_design Complete!}} { error {synthesis incomplete} }", "open_run synth_1",
-        "report_cdc -file [file join $::env(CONNECTED_REPORT_DIR) {cdc.rpt}]", "report_clock_interaction -file [file join $::env(CONNECTED_REPORT_DIR) {clock_interaction.rpt}]", "report_timing_summary -file [file join $::env(CONNECTED_REPORT_DIR) {timing_summary.rpt}]", "report_utilization -file [file join $::env(CONNECTED_REPORT_DIR) {utilization.rpt}]",
+        "set validate_result [validate_bd_design -quiet]", "if {[llength $validate_result] != 0} { error {validate_bd_design returned violations} }", "generate_target all [get_files [get_bd_designs connected_rfdc_shell]]", "set wrapper [make_wrapper -files [get_files [get_bd_designs connected_rfdc_shell]] -top]", "add_files -norecurse $wrapper", "set_property top connected_rfdc_shell_wrapper [current_fileset]", "launch_runs synth_1 -jobs 1", "wait_on_run synth_1", "set synth_status [get_property STATUS [get_runs synth_1]]", "if {$synth_status ne {synth_design Complete!}} { error {synthesis incomplete} }", "open_run synth_1",
+        "report_cdc -details -file [file join $::env(CONNECTED_REPORT_DIR) {cdc.rpt}]", "report_clock_interaction -file [file join $::env(CONNECTED_REPORT_DIR) {clock_interaction.rpt}]", "report_timing_summary -report_unconstrained -no_detailed_paths -file [file join $::env(CONNECTED_REPORT_DIR) {timing_summary.rpt}]", "report_utilization -file [file join $::env(CONNECTED_REPORT_DIR) {utilization.rpt}]",
     ]
     for cell in request.cells: lines.append(f"connected_emit CELL {cell.name} [get_property VLNV [get_bd_cells {{{cell.name}}}]]")
     ps = next(cell.name for cell in request.cells if cell.vlnv == "xilinx.com:ip:zynq_ultra_ps_e:3.5")
@@ -198,6 +256,6 @@ def _emit_verification(request: ConnectedShellRequest, rfdc: str, properties: tu
         lines.append(f"connected_emit LOCK {reset.domain} {reset.dcm_locked_pin} [get_property NAME [get_bd_nets -of_objects [get_bd_pins {{{reset.dcm_locked_members[-1]}}}]]]")
     lines += [
         "connected_emit ADDRESS rfdc_0/s_axi/Reg [get_bd_addr_segs rfdc_0/s_axi/Reg]", "connected_emit IRQ rfdc_0/irq irq_concat_0/In0 irq_concat_0/dout zynq_ultra_ps_e_0/pl_ps_irq0",
-        "connected_emit BOOL validate_bd_design_passed true", "connected_emit BOOL synthesis_completed true", "connected_emit BOOL mts_runtime_verified false", "connected_emit END", "close $connected_out", "",
+        "connected_emit BOOL validate_bd_design_passed [expr {[llength $validate_result] == 0}]", "connected_emit BOOL synthesis_completed [expr {$synth_status eq {synth_design Complete!}}]", "connected_emit BOOL mts_runtime_verified false", "connected_emit END", "close $connected_out", "",
     ]
     return "\n".join(lines).encode("utf-8")

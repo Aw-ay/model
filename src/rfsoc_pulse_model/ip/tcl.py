@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import re
 
 from .types import HardwareArchitectureConfig, IpInstanceLifecycle
 
 
-def emit_catalog_discovery_tcl(config: HardwareArchitectureConfig) -> str:
+def emit_catalog_discovery_tcl(
+    config: HardwareArchitectureConfig,
+    environment_manifest_sha256: str | None = None,
+) -> str:
     """Emit catalog-only Tcl for every required IP family.
 
     The hashes bound into evidence are runtime arguments so this generated Tcl
@@ -15,6 +19,17 @@ def emit_catalog_discovery_tcl(config: HardwareArchitectureConfig) -> str:
     """
 
     required_families = config.required_families()
+    if environment_manifest_sha256 is not None and not re.fullmatch(
+        r"[0-9a-f]{64}", environment_manifest_sha256
+    ):
+        raise ValueError("environment_manifest_sha256 must be lowercase SHA-256")
+    argument_count = 4 if environment_manifest_sha256 is not None else 3
+    argument_names = (
+        "architecture_config_sha256 generated_tcl_sha256 catalog_request_sha256 "
+        "environment_manifest_sha256"
+        if environment_manifest_sha256 is not None
+        else "architecture_config_sha256 generated_tcl_sha256 catalog_request_sha256"
+    )
     lines = [
         "# Generated file. Modify the Python architecture source, not this Tcl.",
         "set required_vivado_prefix {2025.2}",
@@ -23,12 +38,12 @@ def emit_catalog_discovery_tcl(config: HardwareArchitectureConfig) -> str:
         "  error \"Vivado 2025.2 is required, got $actual_vivado_version\"",
         "}",
         "",
-        "if {[llength $argv] != 3} {",
-        "  error \"usage: discover_ip_catalog.tcl architecture_config_sha256 generated_tcl_sha256 catalog_request_sha256\"",
+        f"if {{[llength $argv] != {argument_count}}} {{",
+        f"  error \"usage: discover_ip_catalog.tcl {argument_names}\"",
         "}",
-        "lassign $argv architecture_config_sha256 generated_tcl_sha256 catalog_request_sha256",
+        f"lassign $argv {argument_names}",
         "",
-        "foreach argument_name {architecture_config_sha256 generated_tcl_sha256 catalog_request_sha256} {",
+        f"foreach argument_name {{{argument_names}}} {{",
         "  set argument_value [set $argument_name]",
         "  if {![regexp {^[0-9a-f]{64}$} $argument_value]} {",
         "    error \"invalid ${argument_name}: expected 64 lowercase hexadecimal characters\"",
@@ -73,11 +88,18 @@ def emit_catalog_discovery_tcl(config: HardwareArchitectureConfig) -> str:
             "  return [lindex $matches end]",
             "}",
             "",
-            "puts $catalog_evidence \"meta\\tevidence_schema_version\\t1\"",
+            f"puts $catalog_evidence \"meta\\tevidence_schema_version\\t{2 if environment_manifest_sha256 is not None else 1}\"",
             "puts $catalog_evidence \"meta\\tarchitecture_config_sha256\\t$architecture_config_sha256\"",
             "puts $catalog_evidence \"meta\\tgenerated_tcl_sha256\\t$generated_tcl_sha256\"",
             "puts $catalog_evidence \"meta\\tcatalog_request_sha256\\t$catalog_request_sha256\"",
             "puts $catalog_evidence \"meta\\tvivado_version\\t$actual_vivado_version\"",
+            *(
+                [
+                    "puts $catalog_evidence \"meta\\tenvironment_manifest_sha256\\t$environment_manifest_sha256\"",
+                ]
+                if environment_manifest_sha256 is not None
+                else []
+            ),
             "puts $catalog_evidence \"meta\\trun_id\\t[pid]-[clock milliseconds]\"",
             "",
         ]

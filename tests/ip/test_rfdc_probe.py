@@ -74,6 +74,12 @@ class RfdcProbeContractTests(unittest.TestCase):
         self.assertIn("CONFIG.DAC_Mixer_Type00 {2}", first)
         self.assertIn("get_msg_config -severity WARNING -count", first)
         self.assertIn("rfdc_probe_emit MESSAGE_COUNT $severity $delta", first)
+        self.assertIn("rfdc_probe_emit MTS_PROPERTY", first)
+        self.assertIn("rfdc_probe_emit MTS_BINDING", first)
+        self.assertIn("rfdc_probe_emit MTS_VALUE", first)
+        self.assertNotIn("CONFIG.ADC0_Multi_Tile_Sync", first)
+        self.assertIn("report_property -all -return_string", first)
+        self.assertIn("list_property_value", first)
         self.assertNotIn("CURRENT_RUN_COUNT", first)
         self.assertNotIn("report_messages", first)
         self.assertLess(first.index("set rfdc_probe_message_base(WARNING)"), first.index("create_project rfdc_probe"))
@@ -100,6 +106,40 @@ class RfdcProbeContractTests(unittest.TestCase):
         self.assertEqual(result.provenance.run_id, 7)
         self.assertEqual(result.cells, (("rfdc_0", "xilinx.com:ip:usp_rf_data_converter:2.6"),))
         self.assertEqual(result.messages, (("WARNING", 0), ("CRITICAL_WARNING", 0), ("ERROR", 0)))
+        self.assertEqual(len(result.mts_property_inventory), 13)
+        self.assertEqual(len(result.mts_value_readback), 12)
+        self.assertEqual(len(result.mts_bindings), 6)
+        self.assertEqual(
+            tuple(item.name for item in result.mts_property_inventory),
+            (
+                "ADC0_Multi_Tile_Sync", "ADC1_Multi_Tile_Sync",
+                "ADC2_Multi_Tile_Sync", "ADC3_Multi_Tile_Sync",
+                "ADC_MTS_Variable_Fabric_Width",
+                "DAC0_Multi_Tile_Sync", "DAC1_Multi_Tile_Sync",
+                "DAC2_Multi_Tile_Sync", "DAC3_Multi_Tile_Sync",
+                "DAC_MTS_Variable_Fabric_Width", "Sysref_Source",
+                "mADC_Multi_Tile_Sync", "mDAC_Multi_Tile_Sync",
+            ),
+        )
+        self.assertTrue(all(item.value_type == "string" for item in result.mts_property_inventory))
+        self.assertTrue(all(not item.read_only for item in result.mts_property_inventory))
+        self.assertTrue(all(item.enumerated_values == () for item in result.mts_property_inventory))
+        expected_mts = {
+            (f"ADC{tile}_Multi_Tile_Sync", value, value)
+            for tile in range(4) for value in ("false", "true")
+        } | {
+            (f"DAC{tile}_Multi_Tile_Sync", value, value)
+            for tile in range(2) for value in ("false", "true")
+        }
+        self.assertEqual(set(result.mts_value_readback), expected_mts)
+        self.assertEqual(
+            set(result.mts_bindings),
+            {
+                ("adc", tile, f"ADC{tile}_Multi_Tile_Sync") for tile in range(4)
+            } | {
+                ("dac", tile, f"DAC{tile}_Multi_Tile_Sync") for tile in range(2)
+            },
+        )
         self.assertFalse(result.common_rx_clock_legality_verified)
         self.assertFalse(result.mts_runtime_verified)
         self.assertEqual(encoded, canonical_rfdc_probe_json_bytes(result))
@@ -194,6 +234,25 @@ class RfdcProbeContractTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 build_rfdc_probe_evidence(raw.replace(old, new, 1), tcl, model, architecture, run_id=2)
 
+    def test_measured_config_inventory_is_kept_separate_from_connected_whitelist(self) -> None:
+        from rfsoc_pulse_model.ip.rfdc_probe import (
+            build_rfdc_probe_evidence,
+            emit_rfdc_probe_tcl,
+            parse_rfdc_probe_evidence,
+        )
+
+        model = ModelConfig.load_default()
+        architecture = HardwareArchitectureConfig.load_default()
+        tcl = emit_rfdc_probe_tcl(model, architecture).encode("utf-8")
+        raw = self._measured_raw_fixture().replace(
+            b"RFDC_PROBE\tEND",
+            b"RFDC_PROBE\tCONFIG\tMeasured_Only_Property\t0\nRFDC_PROBE\tEND",
+            1,
+        )
+        evidence = build_rfdc_probe_evidence(raw, tcl, model, architecture, run_id=2)
+        result = parse_rfdc_probe_evidence(evidence, tcl, model, architecture)
+        self.assertIn(("Measured_Only_Property", "0"), result.applied_config)
+
     def test_message_counts_require_exact_clean_three_severity_set(self) -> None:
         from rfsoc_pulse_model.ip.rfdc_probe import (
             build_rfdc_probe_evidence,
@@ -233,6 +292,30 @@ class RfdcProbeContractTests(unittest.TestCase):
         )
         for corrupted in cases:
             with self.subTest(corrupted=corrupted[-80:]), self.assertRaises(ValueError):
+                build_rfdc_probe_evidence(corrupted, tcl, model, architecture, run_id=2)
+
+    def test_mts_authority_rejects_missing_extra_duplicate_or_wrong_readback(self) -> None:
+        """Task 5 may consume only the exact MTS contract measured by Vivado 2025.2."""
+        from rfsoc_pulse_model.ip.rfdc_probe import build_rfdc_probe_evidence, emit_rfdc_probe_tcl
+
+        model = ModelConfig.load_default()
+        architecture = HardwareArchitectureConfig.load_default()
+        tcl = emit_rfdc_probe_tcl(model, architecture).encode("utf-8")
+        raw = self._measured_raw_fixture()
+        property_line = b"RFDC_PROBE\tMTS_PROPERTY\tADC0_Multi_Tile_Sync\tstring\tfalse\tfalse\tNONE"
+        value_line = b"RFDC_PROBE\tMTS_VALUE\tADC0_Multi_Tile_Sync\ttrue\ttrue"
+        cases = {
+            "missing_property": raw.replace(property_line + b"\n", b"", 1),
+            "extra_property": raw.replace(b"RFDC_PROBE\tEND", b"RFDC_PROBE\tMTS_PROPERTY\textra\tstring\tfalse\tfalse\tNONE\nRFDC_PROBE\tEND", 1),
+            "duplicate_property": raw.replace(b"RFDC_PROBE\tEND", property_line + b"\nRFDC_PROBE\tEND", 1),
+            "wrong_type": raw.replace(property_line, property_line.replace(b"string", b"bool"), 1),
+            "wrong_readback": raw.replace(value_line, value_line[:-4] + b"false", 1),
+            "missing_value": raw.replace(value_line + b"\n", b"", 1),
+            "duplicate_value": raw.replace(b"RFDC_PROBE\tEND", value_line + b"\nRFDC_PROBE\tEND", 1),
+            "noncanonical_value": raw.replace(value_line, value_line.replace(b"true\ttrue", b"1\ttrue"), 1),
+        }
+        for name, corrupted in cases.items():
+            with self.subTest(name=name), self.assertRaises(ValueError):
                 build_rfdc_probe_evidence(corrupted, tcl, model, architecture, run_id=2)
 
     def test_canonical_evidence_parser_rechecks_message_and_config_contracts(self) -> None:
@@ -291,6 +374,29 @@ class RfdcProbeContractTests(unittest.TestCase):
                     f"RFDC_PROBE\tCONFIG\tADC_Mixer_Mode{suffix}\t0",
                     f"RFDC_PROBE\tCONFIG\tADC_NCO_Freq{suffix}\t2.800",
                     f"RFDC_PROBE\tINTERFACE\tm{suffix}_axis\tMaster\txilinx.com:interface:axis_rtl:1.0\t32\t\t\t",
+                ))
+        mts_current = {
+            **{f"ADC{tile}_Multi_Tile_Sync": "false" for tile in range(4)},
+            "ADC_MTS_Variable_Fabric_Width": "false",
+            **{f"DAC{tile}_Multi_Tile_Sync": "false" for tile in range(4)},
+            "DAC_MTS_Variable_Fabric_Width": "false",
+            "Sysref_Source": "1",
+            "mADC_Multi_Tile_Sync": "false",
+            "mDAC_Multi_Tile_Sync": "false",
+        }
+        records.extend(
+            f"RFDC_PROBE\tMTS_PROPERTY\t{name}\tstring\tfalse\t{value}\tNONE"
+            for name, value in sorted(mts_current.items())
+        )
+        for tile_type, tile_count in (("ADC", 4), ("DAC", 2)):
+            for tile in range(tile_count):
+                name = f"{tile_type}{tile}_Multi_Tile_Sync"
+                records.append(
+                    f"RFDC_PROBE\tMTS_BINDING\t{tile_type.lower()}\t{tile}\t{name}"
+                )
+                records.extend((
+                    f"RFDC_PROBE\tMTS_VALUE\t{name}\tfalse\tfalse",
+                    f"RFDC_PROBE\tMTS_VALUE\t{name}\ttrue\ttrue",
                 ))
         for tile in range(2):
             for slice_index in range(4):

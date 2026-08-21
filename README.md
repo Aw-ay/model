@@ -423,12 +423,28 @@ Its current resolved production catalog lock is
 [`config/ip_lock.json`](config/ip_lock.json); the installed package copy must
 remain byte-identical.
 
-Generate the architecture metadata, production-lock-validated unconnected
+Before any migrated build, freeze the machine-specific environment separately
+from the four authority JSON files. This removes the disposable Vivado tree,
+records the current Git/Python/Vivado identity, and writes a truthful readiness
+decision under `build/metadata/`:
+
+```powershell
+$env:PYTHONPATH=(Join-Path (Get-Location) 'src')
+python -m rfsoc_pulse_model.ip.environment --repo-root (Get-Location) --timezone Asia/Hong_Kong
+```
+
+The command must report `ready: true` before generation. A dirty Git tree,
+anything other than Python 3.12, an unverified Vivado 2025.2 build, changed
+authority bytes, or absolute paths in authority JSON keeps the gate closed.
+`build/metadata/environment.txt` is the package snapshot for this machine; the
+readiness record audits `numpy`, `scipy`, `pytest`, and `unittest`. It is
+environment provenance, not architecture authority.
+
+Only after Phase 0 is ready, generate the architecture metadata, production-lock-validated unconnected
 realization skeleton, and transitional legacy reference RTL with:
 
 ```powershell
-$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
-& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m rfsoc_pulse_model.generate --output 'D:\AWAY\RFSOC\model\build' --ip-mode production
+python -m rfsoc_pulse_model.generate --output (Join-Path (Get-Location) 'build') --ip-mode production
 ```
 
 This writes production-only generated RTL to `build/rtl/`, non-production
@@ -439,12 +455,12 @@ legacy verification RTL to `build/reference_rtl/`, numeric metadata,
 `production_rtl` and `reference_rtl` arrays. The build directory is disposable
 and generated files must be regenerated rather than hand-edited.
 
-Run catalog discovery first, passing the three SHA-256 values emitted in
-`build/metadata/catalog_request.json`; it creates only a fixed-part in-memory
-catalog project and writes `build/metadata/catalog_evidence.tsv`:
+Run catalog discovery first, passing the four SHA-256 values emitted/bound by
+the generated request and environment manifest; it creates only a fixed-part
+in-memory catalog project and writes `build/metadata/catalog_evidence.tsv`:
 
 ```text
-vivado -mode batch -source build/vivado/discover_ip_catalog.tcl -tclargs <architecture_config_sha256> <generated_tcl_sha256> <catalog_request_sha256>
+vivado -mode batch -source build/vivado/discover_ip_catalog.tcl -tclargs <architecture_config_sha256> <generated_tcl_sha256> <catalog_request_sha256> <environment_manifest_sha256>
 ```
 
 After strict evidence ingestion and explicit lock promotion, production
@@ -472,13 +488,13 @@ acceptance is historical only and is not the current invocation contract.
 ## Run
 
 ```powershell
-cd D:\AWAY\RFSOC\model
-$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
-& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m pip install -e .
-& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest discover -s tests -v
+Set-Location '<REPO_ROOT>'
+$env:PYTHONPATH=(Join-Path (Get-Location) 'src')
+python -m pip install -e .
+python -m unittest discover -s tests -v
 ```
 
-The Windows acceptance commands intentionally use the frozen runtime above;
-they do not rely on a machine-default interpreter. Model tests do not validate
+The migration workflow records the actual interpreter used instead of relying
+on a path copied from another machine. Model tests do not validate
 Vivado Block Design, CDC, timing closure, bitstream generation, or board
 operation.

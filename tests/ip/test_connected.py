@@ -15,9 +15,11 @@ from rfsoc_pulse_model.ip.connected import (
     RfdcProbeProvenance,
     build_connected_request,
     canonical_connected_json_bytes,
+    parse_connected_request,
     parse_connected_evidence,
     validate_connected_evidence,
 )
+from rfsoc_pulse_model.ip.environment import EnvironmentManifest
 from rfsoc_pulse_model.ip.lock import decode_production_lock_json
 from rfsoc_pulse_model.ip.platform import PsPlatformConfig
 from rfsoc_pulse_model.ip.types import HardwareArchitectureConfig
@@ -172,6 +174,37 @@ class ConnectedShellContractTest(unittest.TestCase):
             json.dumps(json.loads(encoded), sort_keys=True, ensure_ascii=False,
                        separators=(",", ":")).encode("utf-8") + b"\n",
         )
+
+    def test_environment_bound_request_round_trips_as_schema_v2(self) -> None:
+        (model, architecture, platform, lock), bundle, probe = authority_fixture()
+        manifest = EnvironmentManifest(
+            host="new_machine",
+            os="Windows 11",
+            python="3.12.9",
+            vivado="2025.2",
+            vivado_build="6299465",
+            repo_root="E:/new/absolute/path",
+            git_commit="0" * 40,
+            timezone="Asia/Shanghai",
+            git_status_clean=True,
+            vivado_executable="C:/Xilinx/2025.2/Vivado/bin/vivado.bat",
+        )
+        bound_probe = dataclasses.replace(
+            probe, environment_manifest_sha256=manifest.sha256
+        )
+        bound_bundle = dataclasses.replace(
+            bundle, environment_manifest_bytes=manifest.bytes()
+        )
+
+        request = build_connected_request(
+            model, architecture, platform, lock, bound_probe, bound_bundle
+        )
+        encoded = canonical_connected_json_bytes(request)
+        parsed = parse_connected_request(encoded)
+
+        self.assertEqual(request.request_schema_version, 2)
+        self.assertEqual(request.environment_manifest_sha256, manifest.sha256)
+        self.assertEqual(parsed, request)
 
     def test_true_ready_fixture_has_exact_24_interfaces_and_never_sets_production_ready(self) -> None:
         request, evidence, context = fixture()

@@ -15,10 +15,10 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import tempfile
-import time
 
 from rfsoc_pulse_model.common.config import ModelConfig
 
@@ -124,11 +124,27 @@ class _LifecycleState:
 
 
 class ConnectedShellRunner:
-    """Repository-locked owner of connected-shell lifecycle state."""
+    """Repository-locked owner of connected-shell lifecycle state.
 
-    def __init__(self, repository_root: Path, output_root: Path) -> None:
+    The strict default makes a production Task 6 invocation impossible to
+    start without a fresh Phase-0 environment manifest.  Synthetic tests or
+    historical schema-1 fixtures may explicitly opt out with
+    ``require_environment=False``; that compatibility switch is never used
+    by the migration path.
+    """
+
+    def __init__(
+        self,
+        repository_root: Path,
+        output_root: Path,
+        *,
+        require_environment: bool = True,
+    ) -> None:
         self.repository_root = Path(os.path.abspath(repository_root))
         self.output_root = Path(os.path.abspath(output_root))
+        if not isinstance(require_environment, bool):
+            raise ValueError("require_environment must be a boolean")
+        self.require_environment = require_environment
         if self.output_root != self.repository_root and self.repository_root not in self.output_root.parents:
             raise ValueError("output_root must be inside repository_root")
         _assert_safe_directory_chain(self.repository_root, self.output_root)
@@ -163,6 +179,7 @@ class ConnectedShellRunner:
             raise ValueError("artifacts must be ConnectedTclArtifacts")
         if not callable(launcher):
             raise ValueError("launcher must be callable")
+        self._require_current_environment(authority_bytes)
         request = parse_connected_request(artifacts.request_bytes)
         if request.probe_provenance != probe_provenance:
             raise ValueError("artifact request probe provenance mismatch")
@@ -218,6 +235,7 @@ class ConnectedShellRunner:
     ) -> ConnectedShellEvidence:
         """Consume success only when lifecycle, files and pure evidence agree."""
 
+        self._require_current_environment(authority_bytes)
         with _repository_lock(self.repository_root / _LOCK_NAME):
             state = _parse_state(_read_regular_file(self.state_path))
             if state.state != "success":
@@ -244,14 +262,41 @@ class ConnectedShellRunner:
                 raise ValueError("connected shell success evidence is no longer structurally ready")
             return evidence
 
+    def _require_current_environment(self, authority_bytes: ConnectedAuthorityBytes) -> None:
+        """Reject copied connected artifacts when a Phase-0 manifest is bound."""
+
+        if not authority_bytes.environment_manifest_bytes:
+            if self.require_environment:
+                raise ValueError(
+                    "Task 6 requires a Phase-0 environment manifest; "
+                    "schema-1 authority is legacy fixture-only"
+                )
+            return
+        from .environment import require_environment_ready
+
+        _manifest, current_bytes = require_environment_ready(self.output_root)
+        if current_bytes != authority_bytes.environment_manifest_bytes:
+            raise ValueError("connected shell authority is not bound to current environment")
+
     def _next_run_id(self) -> int:
-        if not self.state_path.exists():
-            return time.time_ns()
+        """Return the next durable attempt id, starting at one on a fresh tree."""
+
+        prior = 0
         try:
-            prior = _parse_state(_read_regular_file(self.state_path)).run_id
+            if self.state_path.exists():
+                prior = _parse_state(_read_regular_file(self.state_path)).run_id
         except ValueError:
             prior = 0
-        return max(time.time_ns(), prior + 1)
+        attempts_root = self.output_root / "vivado" / "connected_rfdc_shell_attempts"
+        highest_on_disk = 0
+        if attempts_root.is_dir() and not attempts_root.is_symlink():
+            for child in attempts_root.iterdir():
+                if not child.is_dir() or child.is_symlink():
+                    continue
+                match = re.fullmatch(r"run_([1-9][0-9]*)", child.name)
+                if match is not None:
+                    highest_on_disk = max(highest_on_disk, int(match.group(1)))
+        return max(prior, highest_on_disk) + 1
 
     def _prepare_attempt(self, run_id: int, artifacts: ConnectedTclArtifacts) -> ConnectedShellAttempt:
         runs = self.output_root / "vivado" / "connected_rfdc_shell_attempts"
@@ -351,8 +396,11 @@ def build_candidate_evidence(
     if dict(raw["MTS"]) != expected_mts: raise ValueError("readback MTS configuration mismatch")
     report_safety = _validate_report_safety(attempt)
     reports = tuple(sorted((name, _sha256(_read_regular_file(path))) for name, path in attempt.report_paths.items()))
+    # An environment-bound request must publish schema 2 so the evidence
+    # carries the same Phase-0 environment provenance as the request.
     return ConnectedShellEvidence(
-        1, artifacts.request_sha256, request.model_config_sha256, request.architecture_config_sha256,
+        2 if request.environment_manifest_sha256 else 1,
+        artifacts.request_sha256, request.model_config_sha256, request.architecture_config_sha256,
         request.ps_platform_config_sha256, request.production_lock_sha256,
         artifacts.realization_tcl_sha256, artifacts.verification_tcl_sha256,
         request.vivado_version, request.device_part, request.cells, request.interfaces,
@@ -362,6 +410,7 @@ def build_candidate_evidence(
         True, booleans["mts_runtime_verified"],
         booleans["validate_bd_design_passed"], booleans["synthesis_completed"],
         report_safety["cdc_safe"], report_safety["clock_safety_verified"], reports,
+        request.environment_manifest_sha256,
     )
 
 
@@ -410,20 +459,201 @@ def _parse_readback(raw: bytes) -> dict[str, object]:
 
 
 def _validate_report_safety(attempt: ConnectedShellAttempt) -> dict[str, bool]:
-    """Bound report grammar: any warning/unsafe/unconstrained marker fails closed."""
+    """Parse only the measured Vivado 2025.2 synthesized-report grammar."""
     reports = {
         name: _read_attempt_report(attempt, path).decode("utf-8", "strict")
         for name, path in attempt.report_paths.items()
     }
-    cdc = reports["cdc"].upper()
-    clock = reports["clock_interaction"].upper()
-    timing = reports["timing_summary"].upper()
-    forbidden = ("CRITICAL WARNING", "ERROR", "UNSAFE", "UNCONSTRAINED")
-    if any(token in cdc for token in forbidden): raise ValueError("CDC report is unsafe")
-    if any(token in clock for token in forbidden) or any(token in timing for token in forbidden): raise ValueError("clock/timing report is unsafe or unconstrained")
-    if "CDC_SAFE" not in cdc or "CLOCK_SAFE" not in clock or "TIMING_CONSTRAINED" not in timing:
-        raise ValueError("reports lack bounded clean proof markers")
+    cdc_pairs = _parse_cdc_report(reports["cdc"])
+    _parse_clock_interaction_report(reports["clock_interaction"], cdc_pairs)
+    _parse_timing_summary_report(reports["timing_summary"])
+    _parse_utilization_report(reports["utilization"])
     return {"cdc_safe": True, "clock_safety_verified": True}
+
+
+_REPORT_HEADER = re.compile(
+    r"^\| (?P<key>Tool Version|Command|Design|Device|Design State)\s+:\s+(?P<value>.+?)\s*$",
+    re.MULTILINE,
+)
+_CHECK_TIMING_CATEGORIES = (
+    "no_clock", "constant_clock", "pulse_width_clock",
+    "unconstrained_internal_endpoints", "no_input_delay", "no_output_delay",
+    "multiple_clock", "generated_clocks", "loops", "partial_input_delay",
+    "partial_output_delay", "latch_loops",
+)
+
+
+def _validate_report_header(report: str, command_prefix: str) -> None:
+    entries = _REPORT_HEADER.findall(report)
+    if len(entries) != 5 or len({key for key, _ in entries}) != 5:
+        raise ValueError("Vivado report header is incomplete or duplicated")
+    header = dict(entries)
+    if re.fullmatch(r"Vivado v\.2025\.2 \(win64\) Build [0-9]+ .+", header["Tool Version"]) is None:
+        raise ValueError("report is not from the required Vivado 2025.2 grammar")
+    if not header["Command"].startswith(command_prefix + " -file "):
+        raise ValueError("report command does not match the bounded invocation")
+    if re.fullmatch(r"[A-Za-z0-9_.-]+", header["Design"]) is None:
+        raise ValueError("report design name is malformed")
+    if header["Device"] != "xczu27dr-fsve1156" or header["Design State"] != "Synthesized":
+        raise ValueError("report device or design state mismatch")
+
+
+def _normalize_report_newlines(report: str) -> str:
+    """Normalize the measured Windows CRLF grammar without accepting bare CR."""
+    normalized = report.replace("\r\n", "\n")
+    if "\r" in normalized:
+        raise ValueError("Vivado report contains noncanonical line endings")
+    return normalized
+
+
+def _parse_cdc_report(report: str) -> set[tuple[str, str]]:
+    report = _normalize_report_newlines(report)
+    _validate_report_header(report, "report_cdc -details")
+    if "\nCDC Report\n" not in report:
+        raise ValueError("CDC report title is missing")
+    summary_area = report.split("Source Clock:", 1)[0]
+    summary_rows = re.findall(
+        r"^(CDC-[0-9]+)\s+(Info|Warning|Critical)\s+([0-9]+)\s+(.+?)\s*$",
+        summary_area,
+        re.MULTILINE,
+    )
+    summary: dict[str, int] = {}
+    for identifier, severity, count, _description in summary_rows:
+        if identifier in summary or severity != "Info" or int(count) <= 0:
+            raise ValueError("CDC summary contains duplicate or unsafe circuitry")
+        summary[identifier] = int(count)
+    blocks = list(re.finditer(
+        r"^Source Clock:\s*(\S+)\s*$\n^Destination Clock:\s*(\S+)\s*$\n"
+        r"^CDC Type:\s*.+?$\n(?P<body>.*?)(?=^Source Clock:|\Z)",
+        report,
+        re.MULTILINE | re.DOTALL,
+    ))
+    pairs: set[tuple[str, str]] = set()
+    observed: dict[str, int] = {}
+    for block in blocks:
+        pair = (block.group(1), block.group(2))
+        if pair in pairs: raise ValueError("duplicate CDC clock-pair block")
+        pairs.add(pair)
+        details = re.findall(
+            r"^\s*[0-9]+\s+(CDC-[0-9]+)\s+(Info|Warning|Critical)\s+",
+            block.group("body"),
+            re.MULTILINE,
+        )
+        if not details: raise ValueError("CDC clock-pair block lacks detail rows")
+        for identifier, severity in details:
+            if severity != "Info": raise ValueError("CDC detail contains unsafe circuitry")
+            observed[identifier] = observed.get(identifier, 0) + 1
+    if observed != summary or bool(blocks) != bool(summary):
+        raise ValueError("CDC summary/detail counts do not match")
+    return pairs
+
+
+def _parse_clock_interaction_report(
+    report: str, cdc_pairs: set[tuple[str, str]],
+) -> None:
+    report = _normalize_report_newlines(report)
+    _validate_report_header(report, "report_clock_interaction")
+    if "\nClock Interaction Report\n" not in report or "\nClock Interaction Table\n" not in report:
+        raise ValueError("clock-interaction report title is missing")
+    lines = report.splitlines()
+    try:
+        separator = next(
+            index for index, line in enumerate(lines)
+            if line.lstrip().startswith("------------") and "  ------------" in line
+        )
+    except StopIteration as error:
+        raise ValueError("clock-interaction table separator is missing") from error
+    data_lines: list[str] = []
+    for line in lines[separator + 1:]:
+        if not line.strip():
+            if data_lines: break
+            continue
+        data_lines.append(line)
+    if not data_lines: raise ValueError("clock-interaction table has no rows")
+    pairs: set[tuple[str, str]] = set()
+    for line in data_lines:
+        match = re.fullmatch(
+            r"\s*(\S+)\s+(\S+)\s+.*?(Clean|Ignored)\s+(Timed|Asynchronous Groups)\s*",
+            line,
+        )
+        if match is None: raise ValueError("unknown clock-interaction row grammar")
+        source, destination, classification, constraint = match.groups()
+        pair = (source, destination)
+        if pair in pairs: raise ValueError("duplicate clock-interaction pair")
+        pairs.add(pair)
+        if classification == "Clean" and constraint == "Timed":
+            continue
+        if classification != "Ignored" or constraint != "Asynchronous Groups" or pair not in cdc_pairs:
+            raise ValueError("ignored clock pair lacks correlated safe CDC detail")
+    if not cdc_pairs.issubset(pairs):
+        raise ValueError("CDC clock pair is absent from clock-interaction table")
+
+
+def _parse_timing_summary_report(report: str) -> None:
+    report = _normalize_report_newlines(report)
+    _validate_report_header(
+        report, "report_timing_summary -report_unconstrained -no_detailed_paths",
+    )
+    if "\nTiming Summary Report\n" not in report or "\ncheck_timing report\n" not in report:
+        raise ValueError("timing-summary structural sections are missing")
+    checks = tuple(
+        (name, int(count)) for name, count in re.findall(
+            r"^[0-9]+\. checking ([a-z_]+) \(([0-9]+)\)\s*$", report, re.MULTILINE,
+        )
+    )
+    expected = tuple((name, 0) for name in _CHECK_TIMING_CATEGORIES)
+    if checks != expected + expected:
+        raise ValueError("check_timing categories are missing, reordered, or nonzero")
+    marker = "| Unconstrained Path Table"
+    if report.count(marker) != 1: raise ValueError("unconstrained-path table is missing or duplicated")
+    tail = report.split(marker, 1)[1].splitlines()
+    try:
+        header_index = next(index for index, line in enumerate(tail) if line.strip().startswith("Path Group"))
+        underline_index = next(
+            index for index in range(header_index + 1, len(tail))
+            if tail[index].strip().startswith("----------")
+        )
+    except StopIteration as error:
+        raise ValueError("unconstrained-path table grammar is incomplete") from error
+    if any(line.strip() for line in tail[underline_index + 1:]):
+        raise ValueError("timing report contains unconstrained paths")
+
+
+def _parse_utilization_report(report: str) -> None:
+    """Require the measured Vivado utilization table, not a placeholder token."""
+    report = _normalize_report_newlines(report)
+    _validate_report_header(report, "report_utilization")
+    if "\nUtilization Estimates\n" not in report:
+        raise ValueError("utilization report title is missing")
+    if re.search(
+        r"^\|\s*Site Type\s*\|\s*Used\s*\|\s*Fixed\s*\|\s*Available\s*\|\s*Util%\s*\|\s*$",
+        report,
+        re.MULTILINE,
+    ) is None:
+        raise ValueError("utilization table header is missing")
+    rows = re.findall(
+        r"^\|\s*(?P<site>[^|]+?)\s*\|\s*"
+        r"(?P<used>[0-9][0-9,]*)\s*\|\s*"
+        r"(?P<fixed>[0-9][0-9,]*)\s*\|\s*"
+        r"(?P<available>[0-9][0-9,]*)\s*\|\s*"
+        r"(?P<util>[0-9]+(?:\.[0-9]+)?%?)\s*\|\s*$",
+        report,
+        re.MULTILINE,
+    )
+    if not rows:
+        raise ValueError("utilization table has no measured rows")
+    seen: set[str] = set()
+    for site, used_text, fixed_text, available_text, util_text in rows:
+        site = site.strip()
+        if not site or site in seen:
+            raise ValueError("utilization table contains duplicate or empty site rows")
+        seen.add(site)
+        used = int(used_text.replace(",", ""))
+        fixed = int(fixed_text.replace(",", ""))
+        available = int(available_text.replace(",", ""))
+        utilization = float(util_text.rstrip("%"))
+        if fixed > used or used > available or utilization < 0.0 or utilization > 100.0:
+            raise ValueError("utilization table contains impossible measured values")
 
 
 def _read_attempt_report(attempt: ConnectedShellAttempt, path: Path) -> bytes:
