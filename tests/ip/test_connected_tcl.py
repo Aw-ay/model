@@ -50,6 +50,7 @@ class ConnectedTclTest(unittest.TestCase):
         self.assertIn("rx_reset_0/ext_reset_in", text)
         self.assertIn("tx_reset_0/ext_reset_in", text)
         self.assertIn("CONFIG.C_OPERATION", text)
+        self.assertIn("{CONFIG.PSU__USE__M_AXI_GP2} {0}", text)
         self.assertIn("create_project connected_rfdc_shell $::env(CONNECTED_PROJECT_DIR)", text)
         self.assertIn("validate_bd_design", text)
         self.assertIn("save_bd_design", text)
@@ -87,6 +88,11 @@ class ConnectedTclTest(unittest.TestCase):
             "report_timing_summary -report_unconstrained -no_detailed_paths -file",
             verification,
         )
+        self.assertIn(
+            "connected_emit PS_CONFIG CONFIG.PSU__USE__M_AXI_GP2",
+            verification,
+        )
+        self.assertIn(("CONFIG.PSU__USE__M_AXI_GP2", "0"), first.ps_properties)
 
     def test_emitter_rejects_tcl_metacharacters_in_authority_values(self) -> None:
         """Removing Tcl-token validation would make generated commands injectable."""

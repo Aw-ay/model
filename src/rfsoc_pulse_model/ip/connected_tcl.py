@@ -174,6 +174,12 @@ def emit_connected_tcl(
         if not isinstance(name, str) or not _RF_PROPERTY.fullmatch(name): raise ValueError("RFDC property is unsafe")
         _value(value, "RFDC property value")
     effective_rfdc_properties, mts_properties = _apply_required_mts(request, probe)
+    effective_ps_properties = dict(platform.properties)
+    if effective_ps_properties.get("CONFIG.PSU__USE__M_AXI_GP2", "0") != "0":
+        raise ValueError("connected RFDC shell requires the unused HPM0_LPD master to be disabled")
+    # The reviewed shell owns HPM0_FPD only. Vivado's PS default also
+    # exposes HPM0_LPD, so make that non-owned path explicitly unavailable.
+    effective_ps_properties["CONFIG.PSU__USE__M_AXI_GP2"] = "0"
     external_rf = _external_rf_interfaces(probe.interfaces)
     ps = next(name for name, vlnv in cells.items() if vlnv == platform.ps_vlnv)
     smart = next(name for name, vlnv in cells.items() if ":smartconnect:" in vlnv)
@@ -194,7 +200,7 @@ def emit_connected_tcl(
     ]
     for name in sorted(cells): lines.append(f"create_bd_cell -type ip -vlnv {{{cells[name]}}} {{{name}}}")
     lines += ["set_property -dict [list \\"]
-    lines += [f"  {{{name}}} {{{value}}} \\" for name, value in sorted(platform.properties.items())]
+    lines += [f"  {{{name}}} {{{value}}} \\" for name, value in sorted(effective_ps_properties.items())]
     lines += [f"] [get_bd_cells {{{ps}}}]", "set_property -dict [list \\"]
     lines += [f"  {{CONFIG.{name}}} {{{value}}} \\" for name, value in effective_rfdc_properties]
     lines += [f"] [get_bd_cells {{{rfdc}}}]", f"set_property -dict [list {{CONFIG.C_OPERATION}} {{not}} {{CONFIG.C_SIZE}} {{1}}] [get_bd_cells {{{inverter}}}]"]
@@ -216,8 +222,9 @@ def emit_connected_tcl(
     for interface in external_rf: lines.append(f"make_bd_intf_pins_external [get_bd_intf_pins {{{rfdc}/{interface.name}}}]")
     lines += [f"assign_bd_address [get_bd_addr_segs {{{rfdc}/s_axi/Reg}}]", "validate_bd_design", "save_bd_design", ""]
     realization = "\n".join(lines).encode("utf-8")
-    verification = _emit_verification(request, rfdc, effective_rfdc_properties, tuple(sorted(platform.properties.items())), external_rf, mts_properties, _sha(realization))
-    return ConnectedTclArtifacts(canonical_connected_json_bytes(request), realization, verification, effective_rfdc_properties, probe.interfaces, tuple(sorted(platform.properties.items())), external_rf, mts_properties)
+    effective_ps_properties_tuple = tuple(sorted(effective_ps_properties.items()))
+    verification = _emit_verification(request, rfdc, effective_rfdc_properties, effective_ps_properties_tuple, external_rf, mts_properties, _sha(realization))
+    return ConnectedTclArtifacts(canonical_connected_json_bytes(request), realization, verification, effective_rfdc_properties, probe.interfaces, effective_ps_properties_tuple, external_rf, mts_properties)
 
 
 def _emit_verification(request: ConnectedShellRequest, rfdc: str, properties: tuple[tuple[str, str], ...], ps_properties: tuple[tuple[str, str], ...], external_rf: tuple[RfdcProbeInterface, ...], mts_properties: tuple[tuple[str, str], ...], realization_sha: str) -> bytes:
