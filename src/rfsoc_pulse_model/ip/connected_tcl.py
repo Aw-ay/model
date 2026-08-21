@@ -278,6 +278,6 @@ def _emit_verification(request: ConnectedShellRequest, rfdc: str, properties: tu
         lines.append(f"connected_emit LOCK {reset.domain} {reset.dcm_locked_pin} [get_property NAME [get_bd_nets -of_objects [get_bd_pins {{{reset.dcm_locked_members[-1]}}}]]]")
     lines += [
         "connected_emit ADDRESS rfdc_0/s_axi/Reg [get_bd_addr_segs rfdc_0/s_axi/Reg]", "connected_emit IRQ rfdc_0/irq irq_concat_0/In0 irq_concat_0/dout zynq_ultra_ps_e_0/pl_ps_irq0",
-        "connected_emit BOOL validate_bd_design_passed [expr {[llength $validate_result] == 0}]", "connected_emit BOOL synthesis_completed [expr {$synth_status eq {synth_design Complete!}}]", "connected_emit BOOL mts_runtime_verified false", "connected_emit END", "close $connected_out", "",
+        "connected_emit BOOL validate_bd_design_passed [expr {[llength $validate_result] == 0 ? \"true\" : \"false\"}]", "connected_emit BOOL synthesis_completed [expr {$synth_status eq {synth_design Complete!} ? \"true\" : \"false\"}]", "connected_emit BOOL mts_runtime_verified false", "connected_emit END", "close $connected_out", "",
     ]
     return "\n".join(lines).encode("utf-8")
