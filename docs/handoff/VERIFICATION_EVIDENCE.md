@@ -1,5 +1,24 @@
 # Verification Evidence
 
+## Migration Checkout Supplement (2026-08-21)
+
+The current portable-migration checkout is `commit:73904b8` on
+`connected-bd-rfdc-shell-20260813`. Its fresh environment record is
+`build/metadata/environment_manifest.json`, with manifest SHA-256
+`f5cb7846ba673fbc4caaf5993dddee93c3cbe09586067584abe002f3a1753229`.
+The record correctly binds this checkout to Python 3.12.13 and the absolute
+repository path as environment-only data, while
+`build/metadata/environment_ready.json` is `ready:false` because this machine
+currently exposes only Vivado 2025.1 build `6140274`; the required Vivado
+2025.2 build `6299465` is not verified here.
+
+The four authority SHA-256 values below are unchanged. The fresh `build/`
+contains only environment metadata: no copied catalog, RFDC probe, connected
+request, report, or Task 6 evidence. The full Python regression for the
+migration gates passed 298 tests with 8 host-dependent Windows symbolic-link
+capability skips. That result does not upgrade the historical Vivado evidence
+or clear the Task 5/6 gates.
+
 This record separates mathematical, cycle/RTL, catalog, RFDC-probe, connected-shell, and board evidence. A passing result at one layer is not evidence for a later layer.
 
 ## Reproduction Environment
@@ -88,7 +107,7 @@ This RFDC-only probe does **not** prove common-clock legality, connected-shell C
 | 2: schema-v3 platform IP/lock | `commit:23d957c`, `commit:c9dd242`, `commit:b06f80e`, `commit:bb28c36`, `commit:059fb97` | CLEAN | Real 18-family discovery/lock; protected owners and exact shell cells fail closed; controller run reported 243 full tests with 8 skips. |
 | 3: pure request/evidence/readiness | `commit:cd0ce18`, `commit:2403c5b`, `commit:79ca1dd` | CLEAN | Pure data boundary, explicit authority bytes and lock provenance; 54 focused with 2 skips and 251 full with 8 skips. |
 | 4: RFDC-only probe | `commit:67b2106`, `commit:84166e9`, `commit:85780f7`, `commit:9a28daa` | CLEAN | Real attempt-6 readback above; 47 focused and 262 full tests with 8 skips. |
-| 5: connected Tcl/runner | `commit:86af2d5`, `commit:ed8933f`, `commit:89a2362` | **BLOCKED** | Latest Python suite: 274 passed, 8 host-dependent symlink skips. Green tests do not close the impossible report-marker protocol or unprobed MTS-property authority. |
+| 5: connected Tcl/runner | `commit:86af2d5`, `commit:ed8933f`, `commit:89a2362` | **BLOCKED** | Historical implementation-anchor suite: 274 passed, 8 host-dependent symlink skips. Current migration-gate suite is 298 passed with 8 skips, but neither result closes the real-report protocol or current-machine MTS-property authority. |
 
 At the implementation anchor, Task 5 remains structurally blocked even though its focused and full Python tests pass. Task 6 real connected-shell execution was therefore not started.
 
