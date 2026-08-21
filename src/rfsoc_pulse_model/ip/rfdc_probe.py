@@ -346,6 +346,9 @@ foreach property $rfdc_probe_mts_properties {{
     if {{!$metadata_found}} {{ error "missing RFDC MTS property metadata: $property" }}
 }}
 set rfdc_probe_mts_tile_targets [list {mts_target_tcl}]
+set rfdc_probe_mts_true_dict [list]
+set rfdc_probe_mts_false_dict [list]
+set rfdc_probe_mts_canonical_properties [list]
 foreach target $rfdc_probe_mts_tile_targets {{
     set converter [lindex $target 0]
     set tile [lindex $target 1]
@@ -361,9 +364,16 @@ foreach target $rfdc_probe_mts_tile_targets {{
     }}
     set property [lindex $matches 0]
     rfdc_probe_emit MTS_BINDING $converter $tile [string range $property 7 end]
-    set_property $property true $rfdc_0
+    lappend rfdc_probe_mts_canonical_properties $property
+    lappend rfdc_probe_mts_true_dict $property true
+    lappend rfdc_probe_mts_false_dict $property false
+}}
+set_property -dict $rfdc_probe_mts_true_dict $rfdc_0
+foreach property $rfdc_probe_mts_canonical_properties {{
     rfdc_probe_emit MTS_VALUE [string range $property 7 end] true [get_property $property $rfdc_0]
-    set_property $property false $rfdc_0
+}}
+set_property -dict $rfdc_probe_mts_false_dict $rfdc_0
+foreach property $rfdc_probe_mts_canonical_properties {{
     rfdc_probe_emit MTS_VALUE [string range $property 7 end] false [get_property $property $rfdc_0]
 }}
 foreach property [lsort [list_property $rfdc_0]] {{
