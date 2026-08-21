@@ -256,6 +256,64 @@ class ConnectedRunnerTest(unittest.TestCase):
         self.assertEqual(evidence.evidence_schema_version, 2)
         self.assertEqual(evidence.environment_manifest_sha256, manifest.sha256)
 
+    def test_tcl_hash_binding_is_checked_after_launcher_and_on_resume(self) -> None:
+        """A replaced attempt Tcl cannot be authorized by copied readback text."""
+        from rfsoc_pulse_model.ip.connected_runner import ConnectedShellRunner
+
+        artifacts, context = self._artifacts_context()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runner = ConnectedShellRunner(root, root / "build", require_environment=False)
+
+            def tampered(attempt):
+                write_clean_reports(attempt)
+                attempt.verification_tcl_path.write_bytes(
+                    attempt.verification_tcl_path.read_bytes() + b"\n# tampered\n"
+                )
+                attempt.readback_path.write_bytes(readback_bytes(artifacts))
+                return 0
+
+            with self.assertRaisesRegex(RuntimeError, "file hash mismatch"):
+                runner.run(artifacts, *context, launcher=tampered)
+
+            observed = []
+
+            def clean(attempt):
+                observed.append(attempt)
+                write_clean_reports(attempt)
+                attempt.readback_path.write_bytes(readback_bytes(artifacts))
+                return 0
+
+            runner.run(artifacts, *context, launcher=clean)
+            observed[0].realization_tcl_path.write_bytes(
+                observed[0].realization_tcl_path.read_bytes() + b"\n# tampered\n"
+            )
+            with self.assertRaisesRegex(ValueError, "file hash mismatch"):
+                runner.load_validated_success(*context)
+
+    def test_report_bytes_are_immutable_after_success_publication(self) -> None:
+        """Changing a report after publication invalidates the success state."""
+        from rfsoc_pulse_model.ip.connected_runner import ConnectedShellRunner
+
+        artifacts, context = self._artifacts_context()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runner = ConnectedShellRunner(root, root / "build", require_environment=False)
+            observed = []
+
+            def clean(attempt):
+                observed.append(attempt)
+                write_clean_reports(attempt)
+                attempt.readback_path.write_bytes(readback_bytes(artifacts))
+                return 0
+
+            runner.run(artifacts, *context, launcher=clean)
+            observed[0].report_paths["cdc"].write_bytes(
+                observed[0].report_paths["cdc"].read_bytes() + b"\npost-publication mutation\n"
+            )
+            with self.assertRaisesRegex(ValueError, "report hashes"):
+                runner.load_validated_success(*context)
+
     @staticmethod
     def _successful_fake(artifacts, *, mutate_readback=None, mutate_reports=None):
         def fake(attempt):

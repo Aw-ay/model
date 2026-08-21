@@ -47,6 +47,10 @@ _STATE_KEYS = frozenset({
 _REPORT_NAMES = ("cdc", "clock_interaction", "timing_summary", "utilization")
 _SHA256_LENGTH = 64
 _MAX_REPORT_BYTES = 1_000_000
+_LAUNCH_TCL_BYTES = (
+    b"source $::env(CONNECTED_REALIZATION_TCL)\n"
+    b"source $::env(CONNECTED_VERIFICATION_TCL)\n"
+)
 
 
 def _sha256(data: bytes) -> str:
@@ -194,9 +198,21 @@ class ConnectedShellRunner:
             )
             _atomic_write(self.state_path, in_progress.bytes())
             try:
+                _assert_attempt_bindings(
+                    attempt.root,
+                    artifacts.request_sha256,
+                    artifacts.realization_tcl_sha256,
+                    artifacts.verification_tcl_sha256,
+                )
                 result = launcher(attempt)
                 if not isinstance(result, int) or isinstance(result, bool) or result != 0:
                     raise RuntimeError(f"launcher failed with exit status {result!r}")
+                _assert_attempt_bindings(
+                    attempt.root,
+                    artifacts.request_sha256,
+                    artifacts.realization_tcl_sha256,
+                    artifacts.verification_tcl_sha256,
+                )
                 readback_bytes = _read_regular_file(attempt.readback_path)
                 evidence = build_candidate_evidence(artifacts, readback_bytes, attempt)
                 evidence_bytes = canonical_connected_json_bytes(evidence)
@@ -251,6 +267,12 @@ class ConnectedShellRunner:
                 raise ValueError("connected shell request hash does not match success state")
             if request.probe_provenance != probe_provenance:
                 raise ValueError("connected shell probe provenance is stale")
+            _assert_attempt_bindings(
+                attempt_root,
+                evidence.connected_request_sha256,
+                evidence.realization_tcl_sha256,
+                evidence.verification_tcl_sha256,
+            )
             expected_reports = _validated_report_hashes_from_root(attempt_root, evidence)
             if expected_reports != state.report_hashes:
                 raise ValueError("connected shell report hashes do not match success state")
@@ -323,11 +345,7 @@ class ConnectedShellRunner:
         _atomic_write(attempt.request_path, artifacts.request_bytes)
         _atomic_write(attempt.realization_tcl_path, artifacts.realization_tcl)
         _atomic_write(attempt.verification_tcl_path, artifacts.verification_tcl)
-        _atomic_write(
-            attempt.launch_tcl_path,
-            b"source $::env(CONNECTED_REALIZATION_TCL)\n"
-            b"source $::env(CONNECTED_VERIFICATION_TCL)\n",
-        )
+        _atomic_write(attempt.launch_tcl_path, _LAUNCH_TCL_BYTES)
         return attempt
 
 
@@ -766,6 +784,38 @@ def _read_regular_file(path: Path) -> bytes:
         except OSError as error:
             raise ValueError(f"unable to read regular non-reparse file: {path}") from error
     raise ValueError(f"unsupported no-follow filesystem platform: {os.name}")
+
+
+def _assert_attempt_bindings(
+    root: Path,
+    request_sha256: str,
+    realization_tcl_sha256: str,
+    verification_tcl_sha256: str,
+) -> None:
+    """Prove that the files actually present in an attempt are the bound inputs.
+
+    Readback Tcl contains declared hashes, but those declarations are not
+    self-authenticating.  Check the attempt files before and after the launcher
+    and again when consuming success, so replacing a Tcl or request file cannot
+    preserve an otherwise valid-looking evidence record.
+    """
+
+    root = Path(os.path.abspath(root))
+    _assert_safe_directory_chain(root, root)
+    bindings = (
+        ("connected_request.json", _sha(request_sha256, "request_sha256")),
+        ("realize_connected_rfdc_shell.tcl", _sha(realization_tcl_sha256, "realization_tcl_sha256")),
+        ("verify_connected_rfdc_shell.tcl", _sha(verification_tcl_sha256, "verification_tcl_sha256")),
+    )
+    for name, expected in bindings:
+        path = root / name
+        _assert_safe_directory_chain(root, path.parent)
+        if _sha256(_read_regular_file(path)) != expected:
+            raise ValueError(f"connected attempt file hash mismatch: {name}")
+    launch_path = root / "run_connected_rfdc_shell.tcl"
+    _assert_safe_directory_chain(root, launch_path.parent)
+    if _read_regular_file(launch_path) != _LAUNCH_TCL_BYTES:
+        raise ValueError("connected launch Tcl binding mismatch")
 
 
 def _assert_regular_no_reparse(path: Path) -> None:
