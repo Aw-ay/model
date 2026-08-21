@@ -3,8 +3,8 @@
 ## Snapshot Semantics
 
 The live migration checkout is identified by the `git_commit` field in
-`build/metadata/environment_manifest.json`; the current provenance checkout
-is `commit:eea14aa` (`Canonicalize Windows catalog evidence`). It preserves
+`build/metadata/environment_manifest.json`; the provenance implementation
+checkpoint is `commit:eea14aa` (`Canonicalize Windows catalog evidence`). It preserves
 the connected-attempt provenance hardening from `commit:47c251f` and the
 earlier connected-shell implementation anchor `commit:89a2362`; it does not
 make Task 5 complete or prove additional hardware readiness.

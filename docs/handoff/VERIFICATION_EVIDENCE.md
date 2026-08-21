@@ -28,7 +28,7 @@ This record separates mathematical, cycle/RTL, catalog, RFDC-probe, connected-sh
 - Vivado evidence version: AMD Vivado 2025.2, SW build 6299465 and IP build 6300035 where recorded by the tracked normalization acceptance.
 - Main accepted normalization checkpoint: `commit:dc31c5c` on `model-update-20260811`.
 - Connected-shell implementation anchor: `commit:89a2362` on `connected-bd-rfdc-shell-20260813`.
-- Current migration-provenance checkout: `commit:eea14aa` on `connected-bd-rfdc-shell-20260813`.
+- Provenance implementation checkpoint: `commit:eea14aa` on `connected-bd-rfdc-shell-20260813`; the live checkout is the manifest's `git_commit`.
 - Current authority hashes:
 
 | Authority | SHA-256 |
