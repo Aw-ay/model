@@ -234,6 +234,24 @@ class CatalogEvidenceTest(unittest.TestCase):
                 generate_ip_architecture(root)
             self.assertFalse(candidate.exists())
 
+    def test_generation_canonicalizes_windows_vivado_line_endings(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, _, _, evidence = make_evidence_fixture()
+            metadata = root / "metadata"
+            metadata.mkdir(parents=True)
+            evidence_path = metadata / "catalog_evidence.tsv"
+            canonical = evidence_tsv(evidence).encode("utf-8")
+            evidence_path.write_bytes(canonical.replace(b"\n", b"\r\n"))
+
+            resolved = generate_ip_architecture(root)
+
+            self.assertEqual(
+                resolved["catalog_resolution_status"],
+                "all_required_ip_resolved",
+            )
+            self.assertEqual(evidence_path.read_bytes(), canonical)
+
     def test_generation_ignores_legacy_schema_v1_tsv(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

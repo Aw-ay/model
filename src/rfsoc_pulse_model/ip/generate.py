@@ -39,6 +39,19 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _canonicalize_catalog_evidence(path: Path) -> bytes:
+    """Normalize Vivado's Windows line endings at the attempt-local boundary."""
+
+    raw = path.read_bytes()
+    if b"\r" not in raw:
+        return raw
+    normalized = raw.replace(b"\r\n", b"\n")
+    if b"\r" in normalized:
+        raise ValueError("catalog evidence contains unsupported bare carriage return")
+    path.write_bytes(normalized)
+    return normalized
+
+
 def _bind_generation_environment(
     root: Path, environment_manifest_bytes: bytes | None,
 ) -> bytes | None:
@@ -117,11 +130,12 @@ def generate_ip_architecture(
         provenance_path.unlink()
     evidence_path = metadata_root / "catalog_evidence.tsv"
     if evidence_path.is_file():
+        evidence_bytes = _canonicalize_catalog_evidence(evidence_path)
         validated_evidence = validate_catalog_evidence(
             config,
             request_bytes,
             discovery_bytes,
-            parse_catalog_evidence(evidence_path.read_text(encoding="utf-8")),
+            parse_catalog_evidence(evidence_bytes.decode("utf-8")),
             environment_manifest_sha256,
         )
     else:
@@ -136,7 +150,6 @@ def generate_ip_architecture(
             canonical_json_bytes(build_candidate_lock(config, validated_evidence))
         )
         if environment_manifest_sha256 is not None:
-            evidence_bytes = evidence_path.read_bytes()
             provenance_path.write_bytes(
                 canonical_json_bytes(
                     build_catalog_provenance(
@@ -268,7 +281,7 @@ def generate_connected_rfdc_shell(
             raise ValueError(
                 "current environment-bound catalog evidence is required before connected generation"
             )
-        catalog_evidence_bytes = evidence_path.read_bytes()
+        catalog_evidence_bytes = _canonicalize_catalog_evidence(evidence_path)
         catalog_evidence = parse_catalog_evidence(
             catalog_evidence_bytes.decode("utf-8")
         )
