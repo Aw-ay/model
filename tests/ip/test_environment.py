@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -20,6 +21,7 @@ from rfsoc_pulse_model.ip.environment import (
     python_package_audit,
     vivado_identity,
 )
+from rfsoc_pulse_model.ip.environment import _assert_fresh_build_root
 
 
 class EnvironmentProvenanceTests(unittest.TestCase):
@@ -201,6 +203,29 @@ SW Build 6140274 on Thu May 22 00:12:29 MDT 2025
             "C:\\Xilinx\\2025.2\\Vivado\\bin\\vivado.bat",
         )
         self.assertEqual(parse_environment_manifest(manifest.bytes()), manifest)
+
+    def test_fresh_migration_removes_root_attempt_local_artifacts(self) -> None:
+        with TemporaryDirectory(dir=Path.cwd()) as temporary:
+            repository_root = Path(temporary)
+            (repository_root / "build" / "old").mkdir(parents=True)
+            (repository_root / "build" / "old" / "evidence.json").write_text("old")
+            for dirname in (".Xil", ".runs", ".gen"):
+                (repository_root / dirname).mkdir()
+            for filename in ("project.xpr", "old_shell.xpr", "journal.log", "vivado.jou"):
+                (repository_root / filename).write_text("machine-local")
+            (repository_root / "source.txt").write_text("keep")
+
+            fresh_build = _assert_fresh_build_root(
+                repository_root, repository_root / "build"
+            )
+
+            self.assertEqual(fresh_build, repository_root / "build")
+            self.assertEqual(list(fresh_build.iterdir()), [])
+            for dirname in (".Xil", ".runs", ".gen"):
+                self.assertFalse((repository_root / dirname).exists())
+            for filename in ("project.xpr", "old_shell.xpr", "journal.log", "vivado.jou"):
+                self.assertFalse((repository_root / filename).exists())
+            self.assertEqual((repository_root / "source.txt").read_text(), "keep")
 
 
 if __name__ == "__main__":

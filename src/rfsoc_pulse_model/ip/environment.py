@@ -20,6 +20,7 @@ from pathlib import Path
 import platform as host_platform
 import re
 import shutil
+import stat
 import subprocess
 import sys
 from typing import Mapping
@@ -45,6 +46,9 @@ _VIVADO_BUILD_RE = re.compile(
 _WINDOWS_ABSOLUTE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 PYTHON_PACKAGE_NAMES = ("numpy", "scipy", "pytest", "unittest")
 PYTHON_REQUIRED_PACKAGE_NAMES = ("numpy", "scipy", "unittest")
+_ATTEMPT_LOCAL_DIRNAMES = (".Xil", ".runs", ".gen")
+_ATTEMPT_LOCAL_FILE_NAMES = {"journal.log", "vivado.jou"}
+_ATTEMPT_LOCAL_FILE_SUFFIXES = (".xpr", ".jou")
 
 
 def _sha256(value: bytes) -> str:
@@ -413,15 +417,70 @@ def parse_environment_ready(raw: bytes) -> EnvironmentReady:
     return ready
 
 
+def _is_reparse_point(path: Path) -> bool:
+    """Return whether a path is a link/reparse point that must not be followed."""
+
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return False
+    attributes = getattr(metadata, "st_file_attributes", 0)
+    reparse_attribute = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return path.is_symlink() or bool(attributes & reparse_attribute)
+
+
+def _remove_attempt_local_path(path: Path, *, directory: bool) -> None:
+    """Remove one validated generated artifact without following links."""
+
+    if not os.path.lexists(path):
+        return
+    if _is_reparse_point(path):
+        raise ValueError(f"attempt-local artifact is an unsafe link: {path}")
+    if directory:
+        if not path.is_dir():
+            raise ValueError(f"attempt-local directory is not a directory: {path}")
+        shutil.rmtree(path)
+        return
+    if not path.is_file():
+        raise ValueError(f"attempt-local file is not a regular file: {path}")
+    path.unlink()
+
+
+def _remove_root_attempt_local_artifacts(repository_root: Path) -> None:
+    """Delete only known Vivado attempt-local artifacts at repository root.
+
+    Generated state under ``build/`` is removed separately.  This deliberately
+    does not recurse through the checkout: source-controlled files and nested
+    workspaces are outside the migration cleanup boundary.
+    """
+
+    root = _absolute(repository_root)
+    for dirname in _ATTEMPT_LOCAL_DIRNAMES:
+        _remove_attempt_local_path(root / dirname, directory=True)
+
+    for child in root.iterdir():
+        if not os.path.lexists(child):
+            continue
+        lowered = child.name.lower()
+        if (
+            lowered in _ATTEMPT_LOCAL_FILE_NAMES
+            or lowered.endswith(_ATTEMPT_LOCAL_FILE_SUFFIXES)
+        ):
+            _remove_attempt_local_path(child, directory=False)
+
+
 def _assert_fresh_build_root(repository_root: Path, output_root: Path) -> Path:
     repository = _absolute(repository_root)
     output = _absolute(output_root)
+    if not repository.is_dir() or _is_reparse_point(repository):
+        raise ValueError("migration repository root is not a real directory")
     if output != repository / "build":
         raise ValueError("migration output_root must be the repository build directory")
-    if output.exists():
-        if output.is_symlink() or not output.is_dir():
+    if os.path.lexists(output):
+        if _is_reparse_point(output) or not output.is_dir():
             raise ValueError("migration build directory is not a real directory")
         shutil.rmtree(output)
+    _remove_root_attempt_local_artifacts(repository)
     output.mkdir(parents=True, exist_ok=False)
     return output
 

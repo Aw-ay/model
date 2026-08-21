@@ -25,7 +25,7 @@ From a clean checkout, run:
 $env:PYTHONPATH=(Join-Path (Get-Location) 'src')
 python -m rfsoc_pulse_model.ip.environment `
   --repo-root (Get-Location) `
-  --timezone Asia/Hong_Kong `
+  --timezone Asia/Shanghai `
   --vivado-executable '<VIVADO_2025_2_EXECUTABLE>'
 ```
 
@@ -33,8 +33,10 @@ The explicit Vivado option is optional when `vivado` is already on `PATH`.
 When supplied, its absolute path is persisted in the environment manifest so a
 later evidence validation probes the same installation rather than depending
 on a transient shell `PATH` or environment variable.
-The command first removes only the repository `build/` directory and creates a
-new one. It then writes:
+The command first removes the repository `build/` directory plus the exact
+repository-root Vivado attempt-local artifacts (`.Xil/`, `.runs/`, `.gen/`,
+`*.xpr`, `*.jou`, and `journal.log`) and creates a new `build/`. It refuses to
+follow links or reparse points during this cleanup. It then writes:
 
 - `build/metadata/environment_manifest.json`
 - `build/metadata/environment_ready.json`
