@@ -4,8 +4,8 @@
 
 The current portable-migration checkout is `commit:73904b8` on
 `connected-bd-rfdc-shell-20260813`. Its fresh environment record is
-`build/metadata/environment_manifest.json`, with manifest SHA-256
-`f5cb7846ba673fbc4caaf5993dddee93c3cbe09586067584abe002f3a1753229`.
+`build/metadata/environment_manifest.json`; its current canonical SHA-256 is
+the `environment_manifest_sha256` value in the matching readiness record.
 The record correctly binds this checkout to Python 3.12.13 and the absolute
 repository path as environment-only data, while
 `build/metadata/environment_ready.json` is `ready:false` because this machine
