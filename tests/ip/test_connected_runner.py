@@ -420,6 +420,7 @@ class ConnectedRunnerTest(unittest.TestCase):
             "unconstrained_timing": lambda attempt: attempt.report_paths["timing_summary"].write_bytes(clean_timing_report().rstrip() + b"\nclk_a         clk_a         clk_b\n"),
             "synthetic_utilization": lambda attempt: attempt.report_paths["utilization"].write_bytes(b"UTILIZATION_OK\n"),
             "wrong_version": lambda attempt: attempt.report_paths["cdc"].write_bytes(clean_cdc_report().replace(b"Vivado v.2025.2", b"Vivado v.2025.1")),
+            "wrong_build": lambda attempt: attempt.report_paths["cdc"].write_bytes(clean_cdc_report().replace(b"Build 6299465", b"Build 6299464")),
             "oversized_report": lambda attempt: attempt.report_paths["cdc"].write_bytes(clean_cdc_report() + b"x" * 1_000_000),
             "missing_mts": lambda raw: raw.replace(b"CONNECTED_READBACK\tMTS\tADC0_Multi_Tile_Sync\ttrue\n", b""),
             "wrong_mts": lambda raw: raw.replace(b"CONNECTED_READBACK\tMTS\tDAC0_Multi_Tile_Sync\ttrue", b"CONNECTED_READBACK\tMTS\tDAC0_Multi_Tile_Sync\tfalse"),

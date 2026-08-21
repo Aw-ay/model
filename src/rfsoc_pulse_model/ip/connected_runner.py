@@ -493,6 +493,7 @@ _REPORT_HEADER = re.compile(
     r"^\| (?P<key>Tool Version|Command|Design|Device|Design State)\s+:\s+(?P<value>.+?)\s*$",
     re.MULTILINE,
 )
+_REQUIRED_VIVADO_BUILD = "6299465"
 _CHECK_TIMING_CATEGORIES = (
     "no_clock", "constant_clock", "pulse_width_clock",
     "unconstrained_internal_endpoints", "no_input_delay", "no_output_delay",
@@ -506,8 +507,11 @@ def _validate_report_header(report: str, command_prefix: str) -> None:
     if len(entries) != 5 or len({key for key, _ in entries}) != 5:
         raise ValueError("Vivado report header is incomplete or duplicated")
     header = dict(entries)
-    if re.fullmatch(r"Vivado v\.2025\.2 \(win64\) Build [0-9]+ .+", header["Tool Version"]) is None:
-        raise ValueError("report is not from the required Vivado 2025.2 grammar")
+    if re.fullmatch(
+        rf"Vivado v\.2025\.2 \(win64\) Build {_REQUIRED_VIVADO_BUILD} .+",
+        header["Tool Version"],
+    ) is None:
+        raise ValueError("report is not from the required Vivado 2025.2 build 6299465 grammar")
     if not header["Command"].startswith(command_prefix + " -file "):
         raise ValueError("report command does not match the bounded invocation")
     if re.fullmatch(r"[A-Za-z0-9_.-]+", header["Design"]) is None:
