@@ -93,6 +93,11 @@ class ConnectedShellAttempt:
     def launch_tcl_path(self) -> Path:
         return self.root / "run_connected_rfdc_shell.tcl"
 
+    @property
+    def verification_tcl_sha256(self) -> str:
+        """Hash the exact attempt Tcl that the launcher is about to source."""
+        return _sha256(_read_regular_file(self.verification_tcl_path))
+
     def vivado_environment(self, verification_tcl_sha256: str) -> dict[str, str]:
         return {
             "CONNECTED_PROJECT_DIR": str(self.project_dir),

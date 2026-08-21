@@ -193,6 +193,34 @@ class ConnectedRunnerTest(unittest.TestCase):
             (attempts / "run_notes").mkdir()
             self.assertEqual(runner._next_run_id(), 8)
 
+    def test_vivado_launcher_binds_attempt_verification_tcl_hash(self) -> None:
+        """The real launcher must pass the attempt's verified Tcl hash to Vivado."""
+        from types import SimpleNamespace
+
+        from rfsoc_pulse_model.ip.connected_runner import (
+            ConnectedShellRunner,
+            make_vivado_launcher,
+        )
+
+        artifacts, _ = self._artifacts_context()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runner = ConnectedShellRunner(root, root / "build", require_environment=False)
+            attempt = runner._prepare_attempt(1, artifacts)
+            with patch(
+                "rfsoc_pulse_model.ip.connected_runner.subprocess.run",
+                return_value=SimpleNamespace(returncode=0),
+            ) as launch:
+                result = make_vivado_launcher(Path("C:/AMDDesignTools/2025.2/Vivado/bin/vivado.bat"))(attempt)
+
+            self.assertEqual(result, 0)
+            launch.assert_called_once()
+            environment = launch.call_args.kwargs["env"]
+            self.assertEqual(
+                environment["CONNECTED_VERIFICATION_TCL_SHA256"],
+                artifacts.verification_tcl_sha256,
+            )
+
     def test_task6_default_rejects_legacy_authority_without_phase0(self) -> None:
         from rfsoc_pulse_model.ip.connected_runner import ConnectedShellRunner
 
