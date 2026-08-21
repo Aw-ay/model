@@ -81,6 +81,8 @@ class ConnectedTclTest(unittest.TestCase):
         )
         self.assertIn("CONNECTED_READBACK_TSV", verification)
         self.assertIn("generate_target all", verification)
+        self.assertIn("set connected_bd_file [get_files -quiet *.bd]", verification)
+        self.assertIn("make_wrapper -files $connected_bd_file -top", verification)
         self.assertIn("open_run synth_1", verification)
         self.assertNotIn("connected_rfdc_shell_state", verification)
         self.assertNotIn("BOOL cdc_safe true", verification)
