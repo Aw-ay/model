@@ -3,12 +3,11 @@
 ## Snapshot Semantics
 
 The live migration checkout is identified by the `git_commit` field in
-`build/metadata/environment_manifest.json`; the latest connected-attempt
-provenance hardening is `commit:47c251f` (`Bind connected attempts to on-disk
-Tcl hashes`). It adds portable environment provenance and fresh-attempt
-cleanup on top of the earlier connected-shell implementation anchor
-`commit:89a2362`; it does not make Task 5 complete or prove additional
-hardware readiness.
+`build/metadata/environment_manifest.json`; the current provenance checkout
+is `commit:eea14aa` (`Canonicalize Windows catalog evidence`). It preserves
+the connected-attempt provenance hardening from `commit:47c251f` and the
+earlier connected-shell implementation anchor `commit:89a2362`; it does not
+make Task 5 complete or prove additional hardware readiness.
 
 Always compare this snapshot with the live checkout before acting. The observed HEAD when the handoff implementation began was `commit:8cd3494`, which already followed the implementation anchor with handoff design and planning commits.
 
@@ -42,7 +41,13 @@ Task 5 is **BLOCKED** after three evidence-driven implementation and review atte
 
 The same third attempt also introduced guessed `ADCn/DACn_Multi_Tile_Sync` property names that were not established by the Task 4 RFDC probe. Green Python tests therefore do not make the real runner protocol executable or authoritative.
 
-The migration gates are now implemented, but Phase 0 is still **NOT READY** on this machine: the readiness record detects only Vivado 2025.1 build `6140274`, while the project gate requires Vivado 2025.2 build `6299465`. No catalog, RFDC probe, connected request, or Task 6 evidence has been accepted for this machine.
+The migration gates are now implemented and Phase 0 is **READY** on this
+machine: `environment_ready.json` records Vivado 2025.2 build `6299465`,
+Python 3.12.13, a clean Git tree, and unchanged authority hashes. A fresh
+Vivado catalog run and fresh RFDC-only probe have also been recorded for this
+environment. The connected request is generated, but its
+`production_integration_ready` value is `false` because the Task 5 report
+protocol still fails its real-report and independent-review exit gate.
 
 ## Work Not Started
 
@@ -54,16 +59,23 @@ The migration gates are now implemented, but Phase 0 is still **NOT READY** on t
 
 ## Verification Boundary
 
-At the current migration checkout, the full Python regression under the bundled Python 3.12.13 runtime reports 300 tests passing and 8 host-dependent Windows symbolic-link capability skips. This proves the tested Python contracts only.
+At the current migration checkout, the full Python regression under the bundled
+Python 3.12.13 runtime reports 303 tests passing and 8 host-dependent Windows
+symbolic-link capability skips. The fresh catalog and RFDC probe evidence are
+also bound to the current environment manifest. These results prove the
+tested Python, catalog, and RFDC-only contracts only.
 
-It does not prove that generated connected-shell Tcl can accept a clean real Vivado report, that the exact MTS properties exist in the required Vivado 2025.2 installation, or that the shell synthesizes and closes CDC/timing. No Task 6 claim may be inferred from this test count.
+It does not prove that generated connected-shell Tcl can accept a clean real
+Vivado report, that Task 5 has passed independent review, or that the shell
+synthesizes and closes CDC/timing. No Task 6 claim may be inferred from this
+test count.
 
 ## Resume Condition
 
 Do not start Task 6 until all of these conditions are met:
 
-1. Phase 0 says `ready: true` with Vivado 2025.2 build `6299465`, a clean Git tree, Python 3.12, and unchanged authority hashes;
-2. a fresh catalog run and real Vivado 2025.2 RFDC probe establish the exact catalog, report grammar, and RFDC MTS configuration properties used by the evidence protocol;
-3. Task 5 is amended so a deliberately unsafe report fails, a real clean report passes, all status records are canonical and measured, and an independent review closes both blockers.
+1. Keep Phase 0 `ready: true` with Vivado 2025.2 build `6299465`, a clean Git tree, Python 3.12, and unchanged authority hashes;
+2. retain the fresh catalog run and real Vivado 2025.2 RFDC probe as the current-machine authority for the exact catalog and RFDC MTS bindings;
+3. Task 5 is amended so a deliberately unsafe report fails, a real clean report passes, all status records are canonical and measured, and an independent review closes the remaining report/MTS gates.
 
 After those gates close, continue in the strict order defined by [NEXT_STEPS.md](NEXT_STEPS.md).

@@ -8,17 +8,16 @@ The current portable-migration checkout is the `git_commit` recorded in
 `build/metadata/environment_manifest.json`; its current canonical SHA-256 is
 the `environment_manifest_sha256` value in the matching readiness record.
 The record correctly binds this checkout to Python 3.12.13 and the absolute
-repository path as environment-only data, while
-`build/metadata/environment_ready.json` is `ready:false` because this machine
-currently exposes only Vivado 2025.1 build `6140274`; the required Vivado
-2025.2 build `6299465` is not verified here.
+repository path as environment-only data. `build/metadata/environment_ready.json`
+is `ready:true` for Vivado 2025.2 build `6299465`, a clean Git tree, and
+unchanged authority hashes.
 
-The four authority SHA-256 values below are unchanged. The fresh `build/`
-contains only environment metadata: no copied catalog, RFDC probe, connected
-request, report, or Task 6 evidence. The full Python regression for the
-migration gates passed 300 tests with 8 host-dependent Windows symbolic-link
-capability skips. That result does not upgrade the historical Vivado evidence
-or clear the Task 5/6 gates.
+The four authority SHA-256 values below are unchanged. The current `build/`
+contains fresh current-machine catalog, RFDC probe, and connected-request
+artifacts; no old attempt-local Vivado project or report outputs were copied.
+The full Python regression for the migration gates passed 303 tests with 8
+host-dependent Windows symbolic-link capability skips. These results do not
+clear the remaining Task 5/6 gates.
 
 This record separates mathematical, cycle/RTL, catalog, RFDC-probe, connected-shell, and board evidence. A passing result at one layer is not evidence for a later layer.
 
@@ -29,6 +28,7 @@ This record separates mathematical, cycle/RTL, catalog, RFDC-probe, connected-sh
 - Vivado evidence version: AMD Vivado 2025.2, SW build 6299465 and IP build 6300035 where recorded by the tracked normalization acceptance.
 - Main accepted normalization checkpoint: `commit:dc31c5c` on `model-update-20260811`.
 - Connected-shell implementation anchor: `commit:89a2362` on `connected-bd-rfdc-shell-20260813`.
+- Current migration-provenance checkout: `commit:eea14aa` on `connected-bd-rfdc-shell-20260813`.
 - Current authority hashes:
 
 | Authority | SHA-256 |
@@ -74,11 +74,17 @@ Current source verification establishes:
 - exact lock hash `0b1c92166b605a0a56c867fb144896d23599ade95538a29b72c9c274437fbe97`;
 - root and installed-package architecture/lock mirrors are byte-identical under tests;
 - discovery provenance is bound separately from realization Tcl;
+- the fresh catalog run is bound to the current environment manifest and has
+  `catalog_status=all_required_ip_resolved` with a valid production lock;
+- current catalog evidence SHA-256:
+  `a0669349b74f0f97a2cd6f2e1ff8738ff8e899caa8f18efb6b8c00323d719721`;
 - catalog completeness and lock validity do not imply connected topology or production integration.
 
 ## RFDC 2.6 Probe
 
-Connected-shell Task 4 ended CLEAN at `commit:9a28daa`. Reviewed real attempt 6 recorded:
+Connected-shell Task 4 ended CLEAN at `commit:9a28daa`. The current migration
+checkout also recorded a fresh real Vivado 2025.2 RFDC-only run `run_id=1`.
+Its measured result is:
 
 | Item | Measured result |
 |---|---|
@@ -96,6 +102,11 @@ Connected-shell Task 4 ended CLEAN at `commit:9a28daa`. Reviewed real attempt 6 
 | `CRITICAL_WARNING` count | 0 |
 | `ERROR` count | 0 |
 
+The current evidence records 13 MTS properties, 12 readback records, and 6
+tile-to-property bindings. Its evidence SHA-256 is
+`084228502c80bdd1256fb8612f2bfbadf14a40653ddb9f4164b479810a0c5b23`, bound to
+the current environment manifest and probe Tcl/raw-output hashes.
+
 The mandatory diagnostic counters were sampled from before the first project/BD/cell/property action and emitted unconditionally. The strict parser rejects missing, duplicate, unknown, malformed, or nonzero diagnostic records and validates exact interface/scalar inventories and authority-derived RFDC properties.
 
 This RFDC-only probe does **not** prove common-clock legality, connected-shell CDC, synthesis/implementation timing, runtime MTS/SYSREF success, DMA/Ethernet integration, or board RF behavior.
@@ -108,14 +119,14 @@ This RFDC-only probe does **not** prove common-clock legality, connected-shell C
 | 2: schema-v3 platform IP/lock | `commit:23d957c`, `commit:c9dd242`, `commit:b06f80e`, `commit:bb28c36`, `commit:059fb97` | CLEAN | Real 18-family discovery/lock; protected owners and exact shell cells fail closed; controller run reported 243 full tests with 8 skips. |
 | 3: pure request/evidence/readiness | `commit:cd0ce18`, `commit:2403c5b`, `commit:79ca1dd` | CLEAN | Pure data boundary, explicit authority bytes and lock provenance; 54 focused with 2 skips and 251 full with 8 skips. |
 | 4: RFDC-only probe | `commit:67b2106`, `commit:84166e9`, `commit:85780f7`, `commit:9a28daa` | CLEAN | Real attempt-6 readback above; 47 focused and 262 full tests with 8 skips. |
-| 5: connected Tcl/runner | `commit:86af2d5`, `commit:ed8933f`, `commit:89a2362`, `commit:47c251f` | **BLOCKED** | Historical implementation-anchor suite: 274 passed, 8 host-dependent symlink skips. Current migration-gate suite is 300 passed with 8 skips; the runner now binds the on-disk request/realization/verification/launch Tcl bytes and report bytes fail closed after publication, but real-report grammar and current-machine MTS-property authority remain unproven. |
+| 5: connected Tcl/runner | `commit:86af2d5`, `commit:ed8933f`, `commit:89a2362`, `commit:47c251f`, `commit:19c55fb`, `commit:eea14aa` | **BLOCKED** | Current migration-gate suite is 303 passed with 8 host-dependent Windows symbolic-link skips. The runner binds the on-disk request/realization/verification/launch Tcl bytes and report bytes fail closed after publication; fresh current-machine catalog/RFDC evidence exists, but real-report grammar and independent review remain open. |
 
 At the implementation anchor, Task 5 remains structurally blocked even though its focused and full Python tests pass. Task 6 real connected-shell execution was therefore not started.
 
 ## Evidence Not Yet Obtained
 
 - A Task 5 protocol whose clean proof is emitted by generated Tcl or derived from validated real Vivado report grammar, rather than synthetic fixture-only markers.
-- RFDC 2.6 MTS properties established by probe authority and exact production readback; no invented property names are acceptable.
+- Independent review of the fresh RFDC 2.6 MTS property/readback bindings; no invented property names are acceptable.
 - A successful real connected-shell runner attempt and canonical published evidence.
 - `validate_bd_design`, synthesis, opened synthesized run, bounded CDC/clock/timing interpretation, implementation, and timing closure for the final connected topology.
 - Runtime RFDC MTS/SYSREF alignment and measured fixed internal delay.
