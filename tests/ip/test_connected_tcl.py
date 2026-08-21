@@ -108,6 +108,28 @@ class ConnectedTclTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Task-4 RfdcProbeResult"):
             emit_connected_tcl(request, platform, object())
 
+    def test_property_lists_use_tcl_line_continuations(self) -> None:
+        """Vivado must parse each generated multi-line property list as one command."""
+
+        from rfsoc_pulse_model.ip.connected import build_connected_request
+        from rfsoc_pulse_model.ip.connected_tcl import emit_connected_tcl
+
+        (model, architecture, platform, lock), bundle, provenance = authority_fixture()
+        request = build_connected_request(model, architecture, platform, lock, provenance, bundle)
+        text = emit_connected_tcl(request, platform, probe_result(model, architecture)).realization_tcl.decode("utf-8")
+        lines = text.splitlines()
+        starts = [
+            index for index, line in enumerate(lines)
+            if line.startswith("set_property -dict [list") and line.endswith("\\")
+        ]
+        self.assertEqual(len(starts), 2)
+        for start in starts:
+            self.assertTrue(lines[start].endswith("\\"))
+            end = next(index for index in range(start + 1, len(lines)) if lines[index].startswith("] [get_bd_cells"))
+            self.assertGreater(end, start + 1)
+            for line in lines[start + 1:end]:
+                self.assertTrue(line.endswith("\\"), line)
+
     def test_emitter_does_not_promote_unrequested_measured_config(self) -> None:
         """Full probe readback is evidence; connected Tcl uses the exact whitelist."""
 

@@ -193,10 +193,10 @@ def emit_connected_tcl(
         "create_bd_design {connected_rfdc_shell}",
     ]
     for name in sorted(cells): lines.append(f"create_bd_cell -type ip -vlnv {{{cells[name]}}} {{{name}}}")
-    lines += ["set_property -dict [list"]
-    lines += [f"  {{{name}}} {{{value}}}" for name, value in sorted(platform.properties.items())]
-    lines += [f"] [get_bd_cells {{{ps}}}]", "set_property -dict [list"]
-    lines += [f"  {{CONFIG.{name}}} {{{value}}}" for name, value in effective_rfdc_properties]
+    lines += ["set_property -dict [list \\"]
+    lines += [f"  {{{name}}} {{{value}}} \\" for name, value in sorted(platform.properties.items())]
+    lines += [f"] [get_bd_cells {{{ps}}}]", "set_property -dict [list \\"]
+    lines += [f"  {{CONFIG.{name}}} {{{value}}} \\" for name, value in effective_rfdc_properties]
     lines += [f"] [get_bd_cells {{{rfdc}}}]", f"set_property -dict [list {{CONFIG.C_OPERATION}} {{not}} {{CONFIG.C_SIZE}} {{1}}] [get_bd_cells {{{inverter}}}]"]
     # Named nets make readback compare names, not Vivado-created aliases.
     lines += [
