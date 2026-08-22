@@ -111,6 +111,10 @@ class ConnectedTclTest(unittest.TestCase):
             "regexp [format {rx%d_u_adc/CONTROL_COMMON\\[12\\]$} $tile]",
             verification,
         )
+        self.assertIn(
+            "create_waiver -user $vendor_waiver_user -type CDC -id CDC-13 -tags $vendor_waiver_tag -description {Passing the MTS FIFO enable from the management to the fabric clock} -from $from_pin -to $to_pin",
+            verification,
+        )
         self.assertIn("AMD RFDC CDC-13 waiver endpoint discovery mismatch", verification)
         self.assertIn("AMD RFDC CDC-15 waiver endpoint inventory mismatch", verification)
         self.assertIn("open_run synth_1", verification)
