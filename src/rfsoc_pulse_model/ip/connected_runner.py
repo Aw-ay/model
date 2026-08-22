@@ -770,7 +770,7 @@ def _parse_clock_interaction_report(
         pair = (source, destination)
         if pair in pairs: raise ValueError("duplicate clock-interaction pair")
         pairs.add(pair)
-        if classification == "Clean" and constraint == "Timed":
+        if classification == "Clean" and constraint in {"Timed", "Partial False Path"}:
             continue
         # Vivado 2025.2 emits both ``Asynchronous Groups`` and ``False Path``
         # for ignored cross-domain pairs.  Either is acceptable only when the
@@ -827,8 +827,28 @@ def _parse_timing_summary_report(
         )
     except StopIteration as error:
         raise ValueError("unconstrained-path table grammar is incomplete") from error
-    if any(line.strip() for line in tail[underline_index + 1:]):
+    data_lines: list[str] = []
+    saw_blank = False
+    for line in tail[underline_index + 1:]:
+        if not line.strip():
+            if data_lines:
+                saw_blank = True
+            continue
+        if saw_blank:
+            raise ValueError("timing report contains trailing unconstrained data")
+        data_lines.append(line)
+    if not data_lines:
+        return
+    if not ooc_boundary:
         raise ValueError("timing report contains unconstrained paths")
+    for line in data_lines:
+        fields = line.split()
+        if (
+            len(fields) not in {2, 3}
+            or fields[0] != "(none)"
+            or any(re.fullmatch(r"[A-Za-z0-9_.-]+", field) is None for field in fields[1:])
+        ):
+            raise ValueError("OOC timing report contains non-boundary unconstrained paths")
 
 
 def _parse_utilization_report(report: str) -> None:

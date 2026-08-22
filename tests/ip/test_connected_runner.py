@@ -272,6 +272,23 @@ clk_a         clk_b         Ignored                    False Path
 """)
         _parse_clock_interaction_report(clock.decode("utf-8"), {("clk_a", "clk_b")})
 
+    def test_clock_interaction_accepts_clean_partial_false_path(self) -> None:
+        from rfsoc_pulse_model.ip.connected_runner import _parse_clock_interaction_report
+
+        clock = vivado_report_bytes(report_header(
+            "report_clock_interaction -file ./clock_interaction.rpt"
+        ) + """Clock Interaction Report
+
+Clock Interaction Table
+-----------------------
+
+From Clock    To Clock      Clock-Pair Classification  Inter-Clock Constraints
+------------  ------------  -------------------------  ----------------------
+clk_a         clk_a         Clean                      Partial False Path
+
+""")
+        _parse_clock_interaction_report(clock.decode("utf-8"), set())
+
     def test_cdc_accepts_only_exact_vendor_waived_internal_paths(self) -> None:
         from rfsoc_pulse_model.ip.connected_runner import _parse_cdc_report
 
@@ -315,6 +332,27 @@ clk_a         clk_b         Ignored                    False Path
                 report.replace("checking no_clock (10)", "checking no_clock (11)"),
                 ooc_boundary=True,
             )
+
+    def test_ooc_timing_accepts_boundary_unconstrained_clock_rows(self) -> None:
+        from rfsoc_pulse_model.ip.connected_runner import _parse_timing_summary_report
+
+        report = clean_timing_report().decode("utf-8").replace("\r\n", "\n")
+        for name, count in (
+            ("no_clock", 10), ("no_input_delay", 515), ("no_output_delay", 536),
+        ):
+            report = report.replace(
+                f"checking {name} (0)", f"checking {name} ({count})",
+            )
+        report = report.replace(
+            "Path Group    From Clock    To Clock\n----------    ----------    --------\n\n",
+            "Path Group    From Clock    To Clock\n----------    ----------    --------\n"
+            "(none)        RFADC0_CLK                  \n"
+            "(none)        RFDAC0_CLK                  \n"
+            "(none)                      RFADC0_CLK    \n"
+            "(none)                      RFDAC0_CLK    \n"
+            "(none)                      clk_pl_0      \n\n",
+        )
+        _parse_timing_summary_report(report, ooc_boundary=True)
 
     def _artifacts_context(self):
         from rfsoc_pulse_model.ip.connected_tcl import emit_connected_tcl
