@@ -103,6 +103,10 @@ class ConnectedTclTest(unittest.TestCase):
         self.assertIn("connected_emit META timing_scope ooc_boundary_only", verification)
         self.assertIn("create_waiver -user $vendor_waiver_user -type CDC -id CDC-13", verification)
         self.assertIn("create_waiver -user $vendor_waiver_user -type CDC -id CDC-15", verification)
+        self.assertIn(
+            "*/rfdc_0/inst/connected_*_rf_wrapper_i/rx%d_u_adc/CONTROL_COMMON\\[12\\]",
+            verification,
+        )
         self.assertIn("AMD RFDC CDC-13 waiver endpoint discovery mismatch", verification)
         self.assertIn("AMD RFDC CDC-15 waiver endpoint inventory mismatch", verification)
         self.assertIn("open_run synth_1", verification)

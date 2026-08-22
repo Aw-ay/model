@@ -263,7 +263,7 @@ def _emit_verification(request: ConnectedShellRequest, rfdc: str, properties: tu
         "set vendor_adc_to {}",
         "foreach tile {0 1 2 3} {",
         "  set from_pin [get_pins -quiet [format {*/adc%d_cmn_control_ff_reg\\[12\\]/C} $tile]]",
-        "  set to_pin [get_pins -quiet [format {*/connected_*_rf_wrapper_i/rx%d_u_adc/CONTROL_COMMON\\[12\\]} $tile]]",
+        "  set to_pin [get_pins -quiet [format {*/rfdc_0/inst/connected_*_rf_wrapper_i/rx%d_u_adc/CONTROL_COMMON\\[12\\]} $tile]]",
         "  if {[llength $from_pin] != 1 || [llength $to_pin] != 1} { error {AMD RFDC CDC-13 waiver endpoint discovery mismatch} }",
         "  lappend vendor_adc_from $from_pin",
         "  lappend vendor_adc_to $to_pin",
