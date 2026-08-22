@@ -94,6 +94,12 @@ class ConnectedTclTest(unittest.TestCase):
             verification,
         )
         self.assertIn("make_wrapper -files $connected_bd_file -top", verification)
+        self.assertIn(
+            "set_property STEPS.SYNTH_DESIGN.ARGS.MORE_OPTIONS {-mode out_of_context} $synth_run",
+            verification,
+        )
+        self.assertIn("connected_emit META synthesis_mode out_of_context", verification)
+        self.assertIn("connected_emit META axis_boundary bd_external_interfaces", verification)
         self.assertIn("open_run synth_1", verification)
         self.assertIn(
             'connected_emit BOOL validate_bd_design_passed [expr {[llength $validate_result] == 0 ? "true" : "false"}]',

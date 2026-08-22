@@ -23,6 +23,8 @@ def readback_bytes(artifacts):
         f"CONNECTED_READBACK\tMETA\tverification_tcl_sha256\t{artifacts.verification_tcl_sha256}",
         f"CONNECTED_READBACK\tMETA\tvivado_version\t{request.vivado_version}",
         f"CONNECTED_READBACK\tMETA\tdevice_part\t{request.device_part}",
+        "CONNECTED_READBACK\tMETA\tsynthesis_mode\tout_of_context",
+        "CONNECTED_READBACK\tMETA\taxis_boundary\tbd_external_interfaces",
     ]
     lines += [f"CONNECTED_READBACK\tCELL\t{x.name}\t{x.vlnv}" for x in request.cells]
     lines += [f"CONNECTED_READBACK\tCONFIG\t{k}\t{v}" for k, v in artifacts.rfdc_properties]

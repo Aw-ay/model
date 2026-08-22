@@ -390,6 +390,8 @@ def build_candidate_evidence(
         "verification_tcl_sha256": artifacts.verification_tcl_sha256,
         "vivado_version": request.vivado_version,
         "device_part": request.device_part,
+        "synthesis_mode": "out_of_context",
+        "axis_boundary": "bd_external_interfaces",
     }
     if meta != expected_meta: raise ValueError("readback META provenance mismatch")
     if dict(raw["CELL"]) != {cell.name: cell.vlnv for cell in request.cells}: raise ValueError("readback cell/VLNV mismatch")
