@@ -103,6 +103,19 @@ class ConnectedTclTest(unittest.TestCase):
         self.assertIn("connected_emit META timing_scope ooc_boundary_only", verification)
         self.assertIn("create_waiver -user $vendor_waiver_user -type CDC -id CDC-13", verification)
         self.assertIn("create_waiver -user $vendor_waiver_user -type CDC -id CDC-15", verification)
+        self.assertIn("create_waiver -user $vendor_waiver_user -type CDC -id CDC-11", verification)
+        self.assertIn(
+            "set vendor_reset_from_candidates [get_pins -hier -quiet -filter {NAME =~ */rx_reset_0/U0/ACTIVE_LOW_PR_OUT_DFF* && REF_PIN_NAME == C}]",
+            verification,
+        )
+        self.assertIn(
+            "set vendor_clk_valid_to_candidates [get_pins -hier -quiet -filter [format {NAME =~ */rfdc_0/inst/cdc_adc%d_clk_valid_i/syncstages_ff_reg*/D} $tile]]",
+            verification,
+        )
+        self.assertIn(
+            "create_waiver -user $vendor_waiver_user -type CDC -id CDC-11 -tags $vendor_waiver_tag",
+            verification,
+        )
         self.assertIn(
             "set vendor_adc_to_candidates [get_pins -hier -quiet -filter [format {NAME =~ */rfdc_0/inst/connected_*_rf_wrapper_i/rx%d_u_adc/CONTROL_COMMON*} $tile]]",
             verification,

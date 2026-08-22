@@ -51,7 +51,7 @@ _LAUNCH_TCL_BYTES = (
     b"source $::env(CONNECTED_REALIZATION_TCL)\n"
     b"source $::env(CONNECTED_VERIFICATION_TCL)\n"
 )
-_VENDOR_CDC_WAIVER_IDS = frozenset({"CDC-13", "CDC-15"})
+_VENDOR_CDC_WAIVER_IDS = frozenset({"CDC-11", "CDC-13", "CDC-15"})
 _OOC_BOUNDARY_CHECK_COUNTS = {
     "no_clock": 10,
     "no_input_delay": 515,
@@ -606,6 +606,23 @@ def _normalize_report_newlines(report: str) -> str:
 def _is_exact_vendor_cdc_waiver(
     identifier: str, source: str, destination: str,
 ) -> bool:
+    if identifier == "CDC-11":
+        source_match = re.fullmatch(
+            r".*/(rx|tx)_reset_0/U0/ACTIVE_LOW_PR_OUT_DFF\[0\]\.FDRE_PER_N/C",
+            source,
+        )
+        destination_match = re.fullmatch(
+            r".*/rfdc_0/inst/cdc_(adc|dac)([0-9]+)_clk_valid_i/syncstages_ff_reg\[0\]/D",
+            destination,
+        )
+        if not source_match or not destination_match:
+            return False
+        source_domain, destination_domain = source_match.group(1), destination_match.group(1)
+        tile = int(destination_match.group(2))
+        return (
+            (source_domain == "rx" and destination_domain == "adc" and tile in range(4))
+            or (source_domain == "tx" and destination_domain == "dac" and tile in range(2))
+        )
     if identifier == "CDC-13":
         source_match = re.fullmatch(
             r".*/rfdc_0/inst/adc([0-3])_cmn_control_ff_reg\[12\]/C", source,
@@ -647,10 +664,12 @@ def _parse_cdc_report(report: str) -> set[tuple[str, str]]:
         re.MULTILINE,
     )
     summary: dict[str, int] = {}
+    summary_severity: dict[str, str] = {}
     for identifier, severity, count, _description in summary_rows:
-        if identifier in summary or severity != "Info" or int(count) <= 0:
+        if identifier in summary or int(count) <= 0:
             raise ValueError("CDC summary contains duplicate or unsafe circuitry")
         summary[identifier] = int(count)
+        summary_severity[identifier] = severity
     waived_summary: dict[str, int] = {}
     if re.search(r"^ID\s+Waived Endpoints\s*$", report, re.MULTILINE):
         waived_area = report.split("Source Clock:", 1)[0].split(
@@ -695,8 +714,21 @@ def _parse_cdc_report(report: str) -> set[tuple[str, str]]:
             else:
                 if severity != "Info": raise ValueError("CDC detail contains unsafe circuitry")
                 observed[identifier] = observed.get(identifier, 0) + 1
+    expected_unwaived: dict[str, int] = {}
+    for identifier, count in summary.items():
+        severity = summary_severity[identifier]
+        if severity == "Info":
+            expected_unwaived[identifier] = count
+            if observed_waived.get(identifier, 0) != 0:
+                raise ValueError("CDC Info circuitry cannot be vendor-waived")
+        elif (
+            identifier not in _VENDOR_CDC_WAIVER_IDS
+            or observed.get(identifier, 0) != 0
+            or observed_waived.get(identifier, 0) != count
+        ):
+            raise ValueError("CDC summary contains duplicate or unsafe circuitry")
     if (
-        observed != summary
+        observed != expected_unwaived
         or observed_waived != waived_summary
         or bool(blocks) != bool(summary or waived_summary)
     ):

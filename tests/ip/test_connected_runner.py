@@ -133,6 +133,31 @@ Row  ID     Severity  Description                                 Depth  Excepti
 """)
 
 
+def waived_vendor_reset_cdc_report() -> bytes:
+    return vivado_report_bytes(report_header(
+        "report_cdc -details -show_waiver -file ./cdc.rpt"
+    ) + """CDC Report
+
+ID     Severity  Count  Description
+-----  --------  -----  ------------------------------------------
+CDC-3  Info          1  1-bit synchronized with ASYNC_REG property
+CDC-11 Critical      1  Fan-out from launch flop to destination clock
+
+ID      Waived Endpoints
+------  ----------------
+CDC-11                 1
+
+Source Clock: RFADC0_CLK
+Destination Clock: clk_pl_0
+CDC Type: No Common Primary Clock
+
+Row  ID     Severity  Description                                 Depth  Exception    Source (From)                                                                 Destination (To)                                                                 Waived
+---  -----  --------  ------------------------------------------  -----  -----------  ----------------------------------------------------------------------------  -----------------------------------------------------------------------------  ------
+  1  CDC-11 Critical  Fan-out from launch flop to destination clock   4  False Path  connected_rfdc_shell_i/rx_reset_0/U0/ACTIVE_LOW_PR_OUT_DFF[0].FDRE_PER_N/C  connected_rfdc_shell_i/rfdc_0/inst/cdc_adc0_clk_valid_i/syncstages_ff_reg[0]/D  Y
+  2  CDC-3  Info      1-bit synchronized with ASYNC_REG property      2  False Path  source_toggle_reg/C                                                     sync_stage_1_reg/D                                                                  N
+""")
+
+
 def clean_clock_report() -> bytes:
     return vivado_report_bytes(report_header("report_clock_interaction -file ./clock_interaction.rpt") + """Clock Interaction Report
 
@@ -261,10 +286,18 @@ clk_a         clk_b         Ignored                    False Path
             "connected_rfdc_shell_i/rfdc_0/inst/connected_rfdc_shell_rfdc_0_0_rf_wrapper_i/rx0_u_adc/CONTROL_COMMON[12]  Y",
             "CDC-11  Critical  Fan-out from launch flop to destination clock       0  False Path  "
             "connected_rfdc_shell_i/rx_reset_0/U0/ACTIVE_LOW_PR_OUT_DFF[0].FDRE_PER_N/C  "
-            "connected_rfdc_shell_i/rfdc_0/inst/cdc_adc0_clk_valid_i/syncstages_ff_reg[0]/D  Y",
+            "connected_rfdc_shell_i/rfdc_0/inst/cdc_adc4_clk_valid_i/syncstages_ff_reg[0]/D  Y",
         ).replace("CDC-13                 1", "CDC-11                 1")
         with self.assertRaisesRegex(ValueError, "vendor waiver"):
             _parse_cdc_report(unsafe)
+
+    def test_cdc_accepts_exact_rfdc_clk_valid_reset_waiver(self) -> None:
+        from rfsoc_pulse_model.ip.connected_runner import _parse_cdc_report
+
+        self.assertEqual(
+            _parse_cdc_report(waived_vendor_reset_cdc_report().decode("utf-8")),
+            {("RFADC0_CLK", "clk_pl_0")},
+        )
 
     def test_ooc_timing_defers_boundary_only_checks(self) -> None:
         from rfsoc_pulse_model.ip.connected_runner import _parse_timing_summary_report
