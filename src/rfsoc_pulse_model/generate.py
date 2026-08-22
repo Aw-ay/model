@@ -15,7 +15,10 @@ from .common.types import SampleTimeReference
 from .cycle.dsl.emitter import VerilogEmitter
 from .cycle.registry import HARDWARE_MODULES
 from .ip.evidence import canonical_json_bytes
-from .ip.generate import generate_ip_architecture
+from .ip.generate import (
+    consume_connected_shell_readiness,
+    generate_ip_architecture,
+)
 from .ip.lock import GenerationMode
 from .ip.registry import ArchitectureRegistry
 from .ip.types import ImplementationKind
@@ -307,6 +310,8 @@ def generate(
     _inspect_regular_target(root, root_identity, "manifest.json", "output root")
     config = ModelConfig.load_default()
     ip_architecture = generate_ip_architecture(root, ip_mode)
+    connected_shell = consume_connected_shell_readiness(root)
+    ip_architecture["connected_shell"] = connected_shell
     _assert_directory_identity(root, root_identity, "output root")
     _assert_directory_identity(rtl_root, rtl_identity, "rtl")
     _assert_directory_identity(reference_rtl_root, reference_rtl_identity, "reference_rtl")
@@ -477,6 +482,7 @@ def generate(
         "numeric_formats_sha256": _sha256(numeric_bytes),
         "ip_architecture": ip_architecture,
         "ip_architecture_sha256": _sha256(ip_architecture_bytes),
+        "connected_shell": connected_shell,
         "production_rtl": production_rtl,
         "reference_rtl": reference_rtl,
         "modules": modules,

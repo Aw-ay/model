@@ -31,6 +31,29 @@ class GenerateIpArchitectureTest(unittest.TestCase):
         self.assertFalse(status["production_integration_ready"])
         self.assertEqual(status["blocking_reasons"], ["environment_manifest_missing"])
 
+    def test_top_level_manifest_publishes_connected_shell_status_separately(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            self.assertEqual(
+                generate_main(
+                    ["--output", temporary, "--ip-mode", "development"]
+                ),
+                0,
+            )
+            manifest = json.loads(
+                (Path(temporary) / "manifest.json").read_text(encoding="utf-8")
+            )
+            architecture = json.loads(
+                (Path(temporary) / "metadata/ip_architecture.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+        self.assertEqual(manifest["connected_shell"]["status"], "not_bound")
+        self.assertFalse(manifest["connected_shell"]["rfdc_shell_structural_ready"])
+        self.assertFalse(manifest["connected_shell"]["production_integration_ready"])
+        self.assertEqual(architecture["connected_shell"], manifest["connected_shell"])
+        self.assertFalse(architecture["production_integration_ready"])
+
     def test_connected_generation_binds_probe_bytes_and_is_byte_deterministic(self) -> None:
         """Dropping probe provenance or nondeterministic paths must break this."""
 
