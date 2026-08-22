@@ -47,7 +47,7 @@ _WINDOWS_ABSOLUTE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 PYTHON_PACKAGE_NAMES = ("numpy", "scipy", "pytest", "unittest")
 PYTHON_REQUIRED_PACKAGE_NAMES = ("numpy", "scipy", "unittest")
 _ATTEMPT_LOCAL_DIRNAMES = (".Xil", ".runs", ".gen")
-_ATTEMPT_LOCAL_FILE_NAMES = {"journal.log", "vivado.jou"}
+_ATTEMPT_LOCAL_FILE_NAMES = {"journal.log", "vivado.jou", "dfx_runtime.txt"}
 _ATTEMPT_LOCAL_FILE_SUFFIXES = (".xpr", ".jou")
 
 

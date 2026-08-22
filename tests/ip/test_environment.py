@@ -211,7 +211,7 @@ SW Build 6140274 on Thu May 22 00:12:29 MDT 2025
             (repository_root / "build" / "old" / "evidence.json").write_text("old")
             for dirname in (".Xil", ".runs", ".gen"):
                 (repository_root / dirname).mkdir()
-            for filename in ("project.xpr", "old_shell.xpr", "journal.log", "vivado.jou"):
+            for filename in ("project.xpr", "old_shell.xpr", "journal.log", "vivado.jou", "dfx_runtime.txt"):
                 (repository_root / filename).write_text("machine-local")
             (repository_root / "source.txt").write_text("keep")
 
@@ -223,7 +223,7 @@ SW Build 6140274 on Thu May 22 00:12:29 MDT 2025
             self.assertEqual(list(fresh_build.iterdir()), [])
             for dirname in (".Xil", ".runs", ".gen"):
                 self.assertFalse((repository_root / dirname).exists())
-            for filename in ("project.xpr", "old_shell.xpr", "journal.log", "vivado.jou"):
+            for filename in ("project.xpr", "old_shell.xpr", "journal.log", "vivado.jou", "dfx_runtime.txt"):
                 self.assertFalse((repository_root / filename).exists())
             self.assertEqual((repository_root / "source.txt").read_text(), "keep")
 
