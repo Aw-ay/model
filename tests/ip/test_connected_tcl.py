@@ -104,7 +104,11 @@ class ConnectedTclTest(unittest.TestCase):
         self.assertIn("create_waiver -user $vendor_waiver_user -type CDC -id CDC-13", verification)
         self.assertIn("create_waiver -user $vendor_waiver_user -type CDC -id CDC-15", verification)
         self.assertIn(
-            "*/rfdc_0/inst/connected_*_rf_wrapper_i/rx%d_u_adc/CONTROL_COMMON\\[12\\]",
+            "set vendor_adc_to_candidates [get_pins -hier -quiet -filter [format {NAME =~ */rfdc_0/inst/connected_*_rf_wrapper_i/rx%d_u_adc/CONTROL_COMMON*} $tile]]",
+            verification,
+        )
+        self.assertIn(
+            "regexp [format {rx%d_u_adc/CONTROL_COMMON\\[12\\]$} $tile]",
             verification,
         )
         self.assertIn("AMD RFDC CDC-13 waiver endpoint discovery mismatch", verification)
