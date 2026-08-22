@@ -100,6 +100,11 @@ class ConnectedTclTest(unittest.TestCase):
         )
         self.assertIn("connected_emit META synthesis_mode out_of_context", verification)
         self.assertIn("connected_emit META axis_boundary bd_external_interfaces", verification)
+        self.assertIn("connected_emit META timing_scope ooc_boundary_only", verification)
+        self.assertIn("create_waiver -user $vendor_waiver_user -type CDC -id CDC-13", verification)
+        self.assertIn("create_waiver -user $vendor_waiver_user -type CDC -id CDC-15", verification)
+        self.assertIn("AMD RFDC CDC-13 waiver endpoint discovery mismatch", verification)
+        self.assertIn("AMD RFDC CDC-15 waiver endpoint inventory mismatch", verification)
         self.assertIn("open_run synth_1", verification)
         self.assertIn(
             'connected_emit BOOL validate_bd_design_passed [expr {[llength $validate_result] == 0 ? "true" : "false"}]',
@@ -127,7 +132,7 @@ class ConnectedTclTest(unittest.TestCase):
                 )
             ),
         )
-        self.assertIn("report_cdc -details -file", verification)
+        self.assertIn("report_cdc -details -show_waiver -file", verification)
         self.assertIn(
             "report_timing_summary -report_unconstrained -no_detailed_paths -file",
             verification,

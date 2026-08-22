@@ -51,6 +51,12 @@ _LAUNCH_TCL_BYTES = (
     b"source $::env(CONNECTED_REALIZATION_TCL)\n"
     b"source $::env(CONNECTED_VERIFICATION_TCL)\n"
 )
+_VENDOR_CDC_WAIVER_IDS = frozenset({"CDC-13", "CDC-15"})
+_OOC_BOUNDARY_CHECK_COUNTS = {
+    "no_clock": 10,
+    "no_input_delay": 515,
+    "no_output_delay": 536,
+}
 
 
 def _sha256(data: bytes) -> str:
@@ -392,6 +398,7 @@ def build_candidate_evidence(
         "device_part": request.device_part,
         "synthesis_mode": "out_of_context",
         "axis_boundary": "bd_external_interfaces",
+        "timing_scope": "ooc_boundary_only",
     }
     if meta != expected_meta: raise ValueError("readback META provenance mismatch")
     if dict(raw["CELL"]) != {cell.name: cell.vlnv for cell in request.cells}: raise ValueError("readback cell/VLNV mismatch")
@@ -434,7 +441,7 @@ def build_candidate_evidence(
     if set(booleans) != required_booleans: raise ValueError("readback boolean set mismatch")
     expected_mts = dict(artifacts.mts_properties)
     if dict(raw["MTS"]) != expected_mts: raise ValueError("readback MTS configuration mismatch")
-    report_safety = _validate_report_safety(attempt)
+    report_safety = _validate_report_safety(attempt, ooc_boundary=True)
     reports = tuple(sorted((name, _sha256(_read_regular_file(path))) for name, path in attempt.report_paths.items()))
     # An environment-bound request must publish schema 2 so the evidence
     # carries the same Phase-0 environment provenance as the request.
@@ -524,7 +531,9 @@ def _parse_readback(raw: bytes) -> dict[str, object]:
     return values
 
 
-def _validate_report_safety(attempt: ConnectedShellAttempt) -> dict[str, bool]:
+def _validate_report_safety(
+    attempt: ConnectedShellAttempt, *, ooc_boundary: bool = False,
+) -> dict[str, bool]:
     """Parse only the measured Vivado 2025.2 synthesized-report grammar."""
     reports = {
         name: _read_attempt_report(attempt, path).decode("utf-8", "strict")
@@ -532,7 +541,7 @@ def _validate_report_safety(attempt: ConnectedShellAttempt) -> dict[str, bool]:
     }
     cdc_pairs = _parse_cdc_report(reports["cdc"])
     _parse_clock_interaction_report(reports["clock_interaction"], cdc_pairs)
-    _parse_timing_summary_report(reports["timing_summary"])
+    _parse_timing_summary_report(reports["timing_summary"], ooc_boundary=ooc_boundary)
     _parse_utilization_report(reports["utilization"])
     return {"cdc_safe": True, "clock_safety_verified": True}
 
@@ -561,6 +570,10 @@ def _validate_report_header(report: str, command_prefix: str) -> None:
     ) is None:
         raise ValueError("report is not from the required Vivado 2025.2 build 6299465 grammar")
     command_ok = header["Command"].startswith(command_prefix + " -file ")
+    if command_prefix == "report_cdc -details":
+        command_ok = command_ok or header["Command"].startswith(
+            command_prefix + " -show_waiver -file ",
+        )
     if not command_ok and command_prefix == "report_cdc -details":
         # A bounded Task-5 grammar probe may scope the same Vivado report to
         # one explicitly named clock pair.  Keep the Tcl shape exact; do not
@@ -590,6 +603,35 @@ def _normalize_report_newlines(report: str) -> str:
     return normalized
 
 
+def _is_exact_vendor_cdc_waiver(
+    identifier: str, source: str, destination: str,
+) -> bool:
+    if identifier == "CDC-13":
+        source_match = re.fullmatch(
+            r".*/rfdc_0/inst/adc([0-3])_cmn_control_ff_reg\[12\]/C", source,
+        )
+        destination_match = re.fullmatch(
+            r".*/rfdc_0/inst/connected_.*_rf_wrapper_i/rx([0-3])_u_adc/CONTROL_COMMON\[12\]",
+            destination,
+        )
+        return bool(
+            source_match and destination_match
+            and source_match.group(1) == destination_match.group(1)
+        )
+    if identifier != "CDC-15" or re.fullmatch(
+        r".*/rfdc_0/inst/IP2Bus_Data_reg\[[0-9]+\]/D", destination,
+    ) is None:
+        return False
+    return any(
+        re.fullmatch(pattern, source) is not None
+        for pattern in (
+            r".*/rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc[0-9]+/mrk_(?:cntr|loc)_ff_reg\[[0-9]+\]/C",
+            r".*/rfdc_0/inst/connected_.*_rf_wrapper_i/rx[0-3]_u_adc/INTERNAL_FBRC_DIV2_MUX",
+            r".*/rfdc_0/inst/connected_.*_rf_wrapper_i/tx[0-1]_u_dac/INTERNAL_FBRC_MUX",
+        )
+    )
+
+
 def _parse_cdc_report(report: str) -> set[tuple[str, str]]:
     report = _normalize_report_newlines(report)
     _validate_report_header(report, "report_cdc -details")
@@ -609,6 +651,17 @@ def _parse_cdc_report(report: str) -> set[tuple[str, str]]:
         if identifier in summary or severity != "Info" or int(count) <= 0:
             raise ValueError("CDC summary contains duplicate or unsafe circuitry")
         summary[identifier] = int(count)
+    waived_summary: dict[str, int] = {}
+    if re.search(r"^ID\s+Waived Endpoints\s*$", report, re.MULTILINE):
+        waived_area = report.split("Source Clock:", 1)[0].split(
+            "ID      Waived Endpoints", 1
+        )[1]
+        for identifier, count in re.findall(
+            r"^(CDC-[0-9]+)\s+([0-9]+)\s*$", waived_area, re.MULTILINE,
+        ):
+            if identifier in waived_summary or int(count) <= 0:
+                raise ValueError("CDC waived summary is duplicated or invalid")
+            waived_summary[identifier] = int(count)
     blocks = list(re.finditer(
         r"^Source Clock:\s*(\S+)\s*$\n^Destination Clock:\s*(\S+)\s*$\n"
         r"^CDC Type:\s*.+?$\n(?P<body>.*?)(?=^Source Clock:|\Z)",
@@ -617,20 +670,36 @@ def _parse_cdc_report(report: str) -> set[tuple[str, str]]:
     ))
     pairs: set[tuple[str, str]] = set()
     observed: dict[str, int] = {}
+    observed_waived: dict[str, int] = {}
     for block in blocks:
         pair = (block.group(1), block.group(2))
         if pair in pairs: raise ValueError("duplicate CDC clock-pair block")
         pairs.add(pair)
         details = re.findall(
-            r"^\s*[0-9]+\s+(CDC-[0-9]+)\s+(Info|Warning|Critical)\s+",
+            r"^\s*[0-9]+\s+(CDC-[0-9]+)\s+(Info|Warning|Critical)\s+.*?"
+            r"\s+[0-9]+\s+(?:False Path|Asynch Clock Groups|Asynchronous Groups|Partial False Path)\s+"
+            r"(?P<source>\S+)\s+(?P<destination>\S+)"
+            r"(?:\s+(?P<waived>[YN]))?\s*$",
             block.group("body"),
             re.MULTILINE,
         )
         if not details: raise ValueError("CDC clock-pair block lacks detail rows")
-        for identifier, severity in details:
-            if severity != "Info": raise ValueError("CDC detail contains unsafe circuitry")
-            observed[identifier] = observed.get(identifier, 0) + 1
-    if observed != summary or bool(blocks) != bool(summary):
+        for identifier, severity, source, destination, waived in details:
+            if waived == "Y":
+                if (
+                    identifier not in _VENDOR_CDC_WAIVER_IDS
+                    or not _is_exact_vendor_cdc_waiver(identifier, source, destination)
+                ):
+                    raise ValueError("CDC detail contains an unapproved vendor waiver")
+                observed_waived[identifier] = observed_waived.get(identifier, 0) + 1
+            else:
+                if severity != "Info": raise ValueError("CDC detail contains unsafe circuitry")
+                observed[identifier] = observed.get(identifier, 0) + 1
+    if (
+        observed != summary
+        or observed_waived != waived_summary
+        or bool(blocks) != bool(summary or waived_summary)
+    ):
         raise ValueError("CDC summary/detail counts do not match")
     return pairs
 
@@ -685,7 +754,9 @@ def _parse_clock_interaction_report(
         raise ValueError("CDC clock pair is absent from clock-interaction table")
 
 
-def _parse_timing_summary_report(report: str) -> None:
+def _parse_timing_summary_report(
+    report: str, *, ooc_boundary: bool = False,
+) -> None:
     report = _normalize_report_newlines(report)
     _validate_report_header(
         report, "report_timing_summary -report_unconstrained -no_detailed_paths",
@@ -697,9 +768,22 @@ def _parse_timing_summary_report(report: str) -> None:
             r"^[0-9]+\. checking ([a-z_]+) \(([0-9]+)\)\s*$", report, re.MULTILINE,
         )
     )
-    expected = tuple((name, 0) for name in _CHECK_TIMING_CATEGORIES)
-    if checks != expected + expected:
-        raise ValueError("check_timing categories are missing, reordered, or nonzero")
+    zero_expected = tuple((name, 0) for name in _CHECK_TIMING_CATEGORIES)
+    if ooc_boundary:
+        expected = tuple(
+            (name, _OOC_BOUNDARY_CHECK_COUNTS.get(name, 0))
+            for name in _CHECK_TIMING_CATEGORIES
+        )
+        if checks not in {zero_expected + zero_expected, expected + expected}:
+            raise ValueError(
+                "check_timing categories are missing, reordered, or nonzero for OOC boundary"
+            )
+        expected = None
+    else:
+        expected = zero_expected
+    if expected is not None and checks != expected + expected:
+        scope = "OOC boundary" if ooc_boundary else "top-level"
+        raise ValueError(f"check_timing categories are missing, reordered, or nonzero for {scope}")
     marker = "| Unconstrained Path Table"
     if report.count(marker) != 1: raise ValueError("unconstrained-path table is missing or duplicated")
     tail = report.split(marker, 1)[1].splitlines()

@@ -255,6 +255,33 @@ def _emit_verification(request: ConnectedShellRequest, rfdc: str, properties: tu
         "set validate_result [validate_bd_design -quiet]", "if {[llength $validate_result] != 0} { error {validate_bd_design returned violations} }", "set connected_bd_design [get_bd_designs -quiet connected_rfdc_shell]", "if {[llength $connected_bd_design] != 1} { error {connected BD design is not unique} }", "set connected_bd_file [get_files -quiet [get_property FILE_NAME $connected_bd_design]]", "if {[llength $connected_bd_file] != 1} { error {connected BD file is not unique} }", "generate_target all $connected_bd_file", "set wrapper [make_wrapper -files $connected_bd_file -top]", "add_files -norecurse $wrapper", "set_property top connected_rfdc_shell_wrapper [current_fileset]", "set synth_run [get_runs -quiet synth_1]", "if {[llength $synth_run] != 1} { error {synth_1 run is not unique} }", "set_property -name {STEPS.SYNTH_DESIGN.ARGS.MORE OPTIONS} -value {-mode out_of_context} -objects $synth_run", "connected_emit META synthesis_mode out_of_context", "connected_emit META axis_boundary bd_external_interfaces", "launch_runs synth_1 -jobs 1", "wait_on_run synth_1", "set synth_status [get_property STATUS [get_runs synth_1]]", "if {$synth_status ne {synth_design Complete!}} { error {synthesis incomplete} }", "open_run synth_1",
         "report_cdc -details -file [file join $::env(CONNECTED_REPORT_DIR) {cdc.rpt}]", "report_clock_interaction -file [file join $::env(CONNECTED_REPORT_DIR) {clock_interaction.rpt}]", "report_timing_summary -report_unconstrained -no_detailed_paths -file [file join $::env(CONNECTED_REPORT_DIR) {timing_summary.rpt}]", "report_utilization -file [file join $::env(CONNECTED_REPORT_DIR) {utilization.rpt}]",
     ]
+    lines += [
+        "connected_emit META timing_scope ooc_boundary_only",
+        "set vendor_waiver_user {USP_RF_DATA_CONVERTER}",
+        "set vendor_waiver_tag {1033132}",
+        "set vendor_adc_from {}",
+        "set vendor_adc_to {}",
+        "foreach tile {0 1 2 3} {",
+        "  set from_pin [get_pins -quiet [format {*/adc%d_cmn_control_ff_reg\\[12\\]/C} $tile]]",
+        "  set to_pin [get_pins -quiet [format {*/connected_*_rf_wrapper_i/rx%d_u_adc/CONTROL_COMMON\\[12\\]} $tile]]",
+        "  if {[llength $from_pin] != 1 || [llength $to_pin] != 1} { error {AMD RFDC CDC-13 waiver endpoint discovery mismatch} }",
+        "  lappend vendor_adc_from $from_pin",
+        "  lappend vendor_adc_to $to_pin",
+        "}",
+        "create_waiver -user $vendor_waiver_user -type CDC -id CDC-13 -tags $vendor_waiver_tag -description {Passing the MTS FIFO enable from the management to the fabric clock} -from $vendor_adc_from -to $vendor_adc_to",
+        "set vendor_ipif_to [get_pins -hier -filter {NAME =~ */IP2Bus_Data_reg* && REF_PIN_NAME == D}]",
+        "if {[llength $vendor_ipif_to] != 32} { error {AMD RFDC CDC waiver IPIF endpoint inventory mismatch} }",
+        "set vendor_marker_cntr_from [get_pins -hier -filter {NAME =~ */i_rf_conv_mt_mrk_counter_adc*/*mrk_cntr_ff_reg* && REF_PIN_NAME == C}]",
+        "set vendor_marker_loc_from [get_pins -hier -filter {NAME =~ */i_rf_conv_mt_mrk_counter_adc*/*mrk_loc_ff_reg* && REF_PIN_NAME == C}]",
+        "set vendor_adc_internal_from [get_pins -hier -filter {NAME =~ */connected_*_rf_wrapper_i/rx*_u_adc/INTERNAL_FBRC_DIV2_MUX}]",
+        "set vendor_dac_internal_from [get_pins -hier -filter {NAME =~ */connected_*_rf_wrapper_i/tx*_u_dac/INTERNAL_FBRC_MUX}]",
+        "if {[llength $vendor_marker_cntr_from] == 0 || [llength $vendor_marker_loc_from] == 0 || [llength $vendor_adc_internal_from] != 4 || [llength $vendor_dac_internal_from] != 2} { error {AMD RFDC CDC-15 waiver endpoint inventory mismatch} }",
+        "create_waiver -user $vendor_waiver_user -type CDC -id CDC-15 -tags $vendor_waiver_tag -description {Passing the marker counter signals from the fabric to the management clock} -from $vendor_marker_cntr_from -to $vendor_ipif_to",
+        "create_waiver -user $vendor_waiver_user -type CDC -id CDC-15 -tags $vendor_waiver_tag -description {Passing the marker counter signals from the fabric to the management clock} -from $vendor_marker_loc_from -to $vendor_ipif_to",
+        "create_waiver -user $vendor_waiver_user -type CDC -id CDC-15 -tags $vendor_waiver_tag -description {Passing DAC and ADC outputs to the status registers} -from $vendor_adc_internal_from -to $vendor_ipif_to",
+        "create_waiver -user $vendor_waiver_user -type CDC -id CDC-15 -tags $vendor_waiver_tag -description {Passing DAC and ADC outputs to the status registers} -from $vendor_dac_internal_from -to $vendor_ipif_to",
+        "report_cdc -details -show_waiver -file [file join $::env(CONNECTED_REPORT_DIR) {cdc.rpt}]",
+    ]
     for cell in request.cells: lines.append(f"connected_emit CELL {cell.name} [get_property VLNV [get_bd_cells {{{cell.name}}}]]")
     ps = next(cell.name for cell in request.cells if cell.vlnv == "xilinx.com:ip:zynq_ultra_ps_e:3.5")
     inverter = next(cell.name for cell in request.cells if ":util_vector_logic:" in cell.vlnv)

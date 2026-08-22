@@ -25,6 +25,7 @@ def readback_bytes(artifacts):
         f"CONNECTED_READBACK\tMETA\tdevice_part\t{request.device_part}",
         "CONNECTED_READBACK\tMETA\tsynthesis_mode\tout_of_context",
         "CONNECTED_READBACK\tMETA\taxis_boundary\tbd_external_interfaces",
+        "CONNECTED_READBACK\tMETA\ttiming_scope\tooc_boundary_only",
     ]
     lines += [f"CONNECTED_READBACK\tCELL\t{x.name}\t{x.vlnv}" for x in request.cells]
     lines += [f"CONNECTED_READBACK\tCONFIG\t{k}\t{v}" for k, v in artifacts.rfdc_properties]
@@ -106,6 +107,30 @@ def unsafe_cdc_report() -> bytes:
         b"CDC-3  Info      1-bit synchronized with ASYNC_REG property      2",
         b"CDC-1  Critical  1-bit unknown CDC circuitry                         0",
     )
+
+
+def waived_vendor_cdc_report() -> bytes:
+    return vivado_report_bytes(report_header(
+        "report_cdc -details -show_waiver -file ./cdc.rpt"
+    ) + """CDC Report
+
+ID     Severity  Count  Description
+-----  --------  -----  ------------------------------------------
+CDC-3  Info          1  1-bit synchronized with ASYNC_REG property
+
+ID      Waived Endpoints
+------  ----------------
+CDC-13                 1
+
+Source Clock: clk_pl_0
+Destination Clock: RFADC0_CLK
+CDC Type: No Common Primary Clock
+
+Row  ID     Severity  Description                                 Depth  Exception    Source (From)                                                                 Destination (To)                                                                 Waived
+---  -----  --------  ------------------------------------------  -----  -----------  ----------------------------------------------------------------------------  -----------------------------------------------------------------------------  ------
+  1  CDC-13  Critical  1-bit CDC path on a non-FD primitive            0  False Path  connected_rfdc_shell_i/rfdc_0/inst/adc0_cmn_control_ff_reg[12]/C  connected_rfdc_shell_i/rfdc_0/inst/connected_rfdc_shell_rfdc_0_0_rf_wrapper_i/rx0_u_adc/CONTROL_COMMON[12]  Y
+  2  CDC-3   Info      1-bit synchronized with ASYNC_REG property      2  False Path  source_toggle_reg/C                                                     sync_stage_1_reg/D                                                                  N
+""")
 
 
 def clean_clock_report() -> bytes:
@@ -221,6 +246,42 @@ clk_a         clk_b         Ignored                    False Path
 
 """)
         _parse_clock_interaction_report(clock.decode("utf-8"), {("clk_a", "clk_b")})
+
+    def test_cdc_accepts_only_exact_vendor_waived_internal_paths(self) -> None:
+        from rfsoc_pulse_model.ip.connected_runner import _parse_cdc_report
+
+        self.assertEqual(
+            _parse_cdc_report(waived_vendor_cdc_report().decode("utf-8")),
+            {("clk_pl_0", "RFADC0_CLK")},
+        )
+
+        unsafe = waived_vendor_cdc_report().decode("utf-8").replace(
+            "CDC-13  Critical  1-bit CDC path on a non-FD primitive            0  False Path  "
+            "connected_rfdc_shell_i/rfdc_0/inst/adc0_cmn_control_ff_reg[12]/C  "
+            "connected_rfdc_shell_i/rfdc_0/inst/connected_rfdc_shell_rfdc_0_0_rf_wrapper_i/rx0_u_adc/CONTROL_COMMON[12]  Y",
+            "CDC-11  Critical  Fan-out from launch flop to destination clock       0  False Path  "
+            "connected_rfdc_shell_i/rx_reset_0/U0/ACTIVE_LOW_PR_OUT_DFF[0].FDRE_PER_N/C  "
+            "connected_rfdc_shell_i/rfdc_0/inst/cdc_adc0_clk_valid_i/syncstages_ff_reg[0]/D  Y",
+        ).replace("CDC-13                 1", "CDC-11                 1")
+        with self.assertRaisesRegex(ValueError, "vendor waiver"):
+            _parse_cdc_report(unsafe)
+
+    def test_ooc_timing_defers_boundary_only_checks(self) -> None:
+        from rfsoc_pulse_model.ip.connected_runner import _parse_timing_summary_report
+
+        report = clean_timing_report().decode("utf-8")
+        for name, count in (
+            ("no_clock", 10), ("no_input_delay", 515), ("no_output_delay", 536),
+        ):
+            report = report.replace(
+                f"checking {name} (0)", f"checking {name} ({count})",
+            )
+        _parse_timing_summary_report(report, ooc_boundary=True)
+        with self.assertRaisesRegex(ValueError, "OOC boundary"):
+            _parse_timing_summary_report(
+                report.replace("checking no_clock (10)", "checking no_clock (11)"),
+                ooc_boundary=True,
+            )
 
     def _artifacts_context(self):
         from rfsoc_pulse_model.ip.connected_tcl import emit_connected_tcl
