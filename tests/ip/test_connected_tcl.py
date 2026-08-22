@@ -95,7 +95,7 @@ class ConnectedTclTest(unittest.TestCase):
         )
         self.assertIn("make_wrapper -files $connected_bd_file -top", verification)
         self.assertIn(
-            "set_property STEPS.SYNTH_DESIGN.ARGS.MORE_OPTIONS {-mode out_of_context} $synth_run",
+            "set_property -name {STEPS.SYNTH_DESIGN.ARGS.MORE OPTIONS} -value {-mode out_of_context} -objects $synth_run",
             verification,
         )
         self.assertIn("connected_emit META synthesis_mode out_of_context", verification)
