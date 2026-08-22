@@ -1,6 +1,6 @@
 # Verification Evidence
 
-## Migration Checkout Supplement (2026-08-21)
+## Migration Checkout Supplement (2026-08-22)
 
 The current portable-migration checkout is the `git_commit` recorded in
 `build/metadata/environment_manifest.json` on
@@ -18,11 +18,12 @@ The current environment manifest SHA-256 is recorded canonically in
 in this handoff text.
 
 The four authority SHA-256 values below are unchanged. The current `build/`
-contains fresh current-machine catalog, RFDC probe, and connected-request
-artifacts; no old attempt-local Vivado project or report outputs were copied.
-The full Python regression for the migration gates passed 303 tests with 8
-host-dependent Windows symbolic-link capability skips. These results do not
-clear the remaining Task 5/6 gates.
+contains fresh current-machine catalog, RFDC probe, connected request, and
+real connected-shell attempt artifacts; no old attempt-local Vivado project
+or report outputs were copied. The full Python regression passed 314 tests
+with 8 host-dependent Windows symbolic-link capability skips. The latest real
+OOC attempt passed the bounded connected-shell gate; production integration
+remains explicitly false.
 
 This record separates mathematical, cycle/RTL, catalog, RFDC-probe, connected-shell, and board evidence. A passing result at one layer is not evidence for a later layer.
 
@@ -32,8 +33,8 @@ This record separates mathematical, cycle/RTL, catalog, RFDC-probe, connected-sh
 - Model/test interpreter: the project-pinned Python 3.12 runtime with `PYTHONPATH` set to the repository `src` directory.
 - Vivado evidence version: AMD Vivado 2025.2, SW build 6299465 and IP build 6300035 where recorded by the tracked normalization acceptance.
 - Main accepted normalization checkpoint: `commit:dc31c5c` on `model-update-20260811`.
-- Connected-shell implementation anchor: `commit:89a2362` on `connected-bd-rfdc-shell-20260813`.
-- Provenance implementation checkpoint: `commit:eea14aa` on `connected-bd-rfdc-shell-20260813`; the live checkout is the manifest's `git_commit`.
+- Connected-shell source identity: the live checkout is the manifest's
+  `git_commit`; any tracked change requires a new Phase-0 freeze.
 - Current authority hashes:
 
 | Authority | SHA-256 |
@@ -121,7 +122,7 @@ The mandatory diagnostic counters were sampled from before the first project/BD/
 
 This RFDC-only probe does **not** prove common-clock legality, connected-shell CDC, synthesis/implementation timing, runtime MTS/SYSREF success, DMA/Ethernet integration, or board RF behavior.
 
-## Connected-Shell Tasks 1-5
+## Connected-Shell Tasks 1-6
 
 | Task | Implementation lineage | Final bounded state | Evidence |
 |---|---|---|---|
@@ -129,16 +130,24 @@ This RFDC-only probe does **not** prove common-clock legality, connected-shell C
 | 2: schema-v3 platform IP/lock | `commit:23d957c`, `commit:c9dd242`, `commit:b06f80e`, `commit:bb28c36`, `commit:059fb97` | CLEAN | Real 18-family discovery/lock; protected owners and exact shell cells fail closed; controller run reported 243 full tests with 8 skips. |
 | 3: pure request/evidence/readiness | `commit:cd0ce18`, `commit:2403c5b`, `commit:79ca1dd` | CLEAN | Pure data boundary, explicit authority bytes and lock provenance; 54 focused with 2 skips and 251 full with 8 skips. |
 | 4: RFDC-only probe | `commit:67b2106`, `commit:84166e9`, `commit:85780f7`, `commit:9a28daa` | CLEAN | Real attempt-6 readback above; 47 focused and 262 full tests with 8 skips. |
-| 5: connected Tcl/runner | `commit:86af2d5`, `commit:ed8933f`, `commit:89a2362`, `commit:47c251f`, `commit:19c55fb`, `commit:eea14aa` | **BLOCKED** | Current migration-gate suite is 303 passed with 8 host-dependent Windows symbolic-link skips. The runner binds the on-disk request/realization/verification/launch Tcl bytes and report bytes fail closed after publication; fresh current-machine catalog/RFDC evidence exists, but real-report grammar and independent review remain open. |
+| 5: connected Tcl/runner | Current live checkout, identified by the environment manifest | CLEAN | Real Vivado report grammar is accepted only through bounded parsers; request/Tcl/readback/report hashes are bound; unsafe, stale, and mismatched attempts fail closed. |
+| 6: connected shell OOC | Latest fresh environment-bound attempt | CLEAN, OOC scope only | Vivado 2025.2 validates the BD and synthesizes `synth_1` with 0 errors, 0 critical warnings, and 0 synthesis warnings. All 24 AXIS interfaces remain BD boundary interfaces; utilization reports 0 bonded IOBs. CDC-11/13/15 waiver endpoint sets are exact and present. |
 
-At the implementation anchor, Task 5 remains structurally blocked even though its focused and full Python tests pass. Task 6 real connected-shell execution was therefore not started.
+The connected-shell readiness record intentionally keeps
+`production_integration_ready=false`. Its timing scope is
+`ooc_boundary_only`; the 515 missing input delays and 536 missing output
+delays belong to the external BD boundary and are deferred to the real
+top-level data-path integration.
+
+The latest report contains exact vendor waiver counts of CDC-11: 6,
+CDC-13: 4, and CDC-15: 60. These are endpoint-specific AMD RFDC waivers,
+not a broad CDC waiver.
 
 ## Evidence Not Yet Obtained
 
-- A Task 5 protocol whose clean proof is emitted by generated Tcl or derived from validated real Vivado report grammar, rather than synthetic fixture-only markers.
-- Independent review of the fresh RFDC 2.6 MTS property/readback bindings; no invented property names are acceptable.
-- A successful real connected-shell runner attempt and canonical published evidence.
-- `validate_bd_design`, synthesis, opened synthesized run, bounded CDC/clock/timing interpretation, implementation, and timing closure for the final connected topology.
+## Evidence Not Yet Obtained
+
+- Post-route/full-top-level timing closure and final data-path CDC; the OOC boundary result is not an implementation result.
 - Runtime RFDC MTS/SYSREF alignment and measured fixed internal delay.
 - Production Cycle and generated-Verilog implementations for RX/TX 2SPC, continuous reflection, and monitor events.
 - DMA/DDR/GEM3 event-only transfer, packet-loss accounting, and host reception.

@@ -3,11 +3,11 @@
 ## Snapshot Semantics
 
 The live migration checkout is identified by the `git_commit` field in
-`build/metadata/environment_manifest.json`; the provenance implementation
-checkpoint is `commit:eea14aa` (`Canonicalize Windows catalog evidence`). It preserves
-the connected-attempt provenance hardening from `commit:47c251f` and the
-earlier connected-shell implementation anchor `commit:89a2362`; it does not
-make Task 5 complete or prove additional hardware readiness.
+`build/metadata/environment_manifest.json`. The manifest is regenerated after
+any tracked change and is the only machine-specific identity for the current
+evidence. The current source line preserves the connected-attempt provenance
+hardening and the OOC-boundary timing interpretation; it does not claim
+post-route timing, runtime MTS, or production data-path readiness.
 
 Always compare this snapshot with the live checkout before acting. The observed HEAD when the handoff implementation began was `commit:8cd3494`, which already followed the implementation anchor with handoff design and planning commits.
 
@@ -22,60 +22,72 @@ The two branches were observed as separate linked worktrees. Their old absolute 
 
 ## Completed Gates
 
-Connected-shell Tasks 1 through 4 are complete and independently reviewed within their stated boundaries:
+Connected-shell Tasks 1 through 6 are complete within their stated bounded
+scope:
 
 1. Task 1 froze the PS 3.5 control platform, DDR/MIO source provenance, 100 MHz PS control clock, HPM0, IRQ, and fail-closed GEM3 board-I/O responsibility.
 2. Task 2 froze architecture revision 3, exact connected-shell AMD IP families and instances, and a production lock derived from real Vivado 2025.2 catalog discovery.
 3. Task 3 implemented the pure canonical connected request/evidence/readiness layer without runner, Tcl launch, or lifecycle ownership.
 4. Task 4 established the RFDC 2.6 probe authority with real Vivado readback and strict CONFIG/interface/scalar/diagnostic grammar.
 
-These completions do not include a connected RFDC shell synthesis, CDC closure, timing closure, MTS runtime verification, DMA, Ethernet, or board validation.
+5. Task 5 now consumes bounded real Vivado reports, binds report/Tcl hashes,
+   proves exact AMD RFDC CDC waiver endpoints, and publishes success only
+   after atomic validation.
+6. Task 6 has a fresh real Vivado 2025.2 OOC run: BD validation and synthesis
+   pass, all 24 AXIS interfaces remain BD boundary interfaces, utilization
+   reports zero bonded IOBs, and the exact vendor CDC waivers are present.
 
-## Current Blocker
+These completions do not include post-route timing closure, runtime MTS/SYSREF
+verification, DMA, Ethernet, board validation, or production reflection/event
+data-path integration.
 
-Task 5 is **BLOCKED** after three evidence-driven implementation and review attempts:
+## Current Boundary
 
-1. `commit:86af2d5` lacked a complete candidate-evidence and synthesis/readback protocol.
-2. `commit:ed8933f` completed much of the protocol but hard-coded CDC, clock-safety, and MTS readiness to true.
-3. `commit:89a2362` added fail-closed parsing and structural readback, but required synthetic `CDC_SAFE`, `CLOCK_SAFE`, and `TIMING_CONSTRAINED` strings that neither its generated Tcl nor standard Vivado reports emit.
+The current OOC connected shell is structurally ready, not production-ready.
+Its top-level readiness record deliberately reports:
 
-The same third attempt also introduced guessed `ADCn/DACn_Multi_Tile_Sync` property names that were not established by the Task 4 RFDC probe. Green Python tests therefore do not make the real runner protocol executable or authoritative.
+- `rfdc_shell_structural_ready=true`;
+- `production_integration_ready=false` with blocker
+  `production_integration_pending`;
+- `mts_runtime_verified=false`;
+- timing scope `ooc_boundary_only`.
 
-The migration gates are now implemented and Phase 0 is **READY** on this
-machine: `environment_ready.json` records Vivado 2025.2 build `6299465`,
-Python 3.12.13, a clean Git tree, and unchanged authority hashes. A fresh
-Vivado catalog run and fresh RFDC-only probe have also been recorded for this
-environment. The connected request is generated, but its
-`production_integration_ready` value is `false` because the Task 5 report
-protocol still fails its real-report and independent-review exit gate.
+The migration gates are **READY** on this machine: the current environment
+manifest records Vivado 2025.2 build `6299465`, Python 3.12.13, a clean Git
+tree, and unchanged authority hashes. Fresh catalog, RFDC probe, and real
+connected-shell evidence are all bound to that manifest.
 
 ## Work Not Started
 
-- Task 6 real Vivado connected-shell execution through the runner;
 - production 2SPC continuous dual-polarization reflection chain integration;
 - monitor pulse detection, hit-IQ capture, and coarse-PDW event integration;
 - event DMA buffering and GEM3 data-plane integration;
-- full CDC, implementation timing, MTS runtime, 24-hour stability, and board-loopback acceptance.
+- post-route/full-top-level timing, MTS runtime, 24-hour stability, and
+  board-loopback acceptance.
 
 ## Verification Boundary
 
 At the current migration checkout, the full Python regression under the bundled
-Python 3.12.13 runtime reports 303 tests passing and 8 host-dependent Windows
-symbolic-link capability skips. The fresh catalog and RFDC probe evidence are
-also bound to the current environment manifest. These results prove the
-tested Python, catalog, and RFDC-only contracts only.
+Python 3.12.13 runtime reports 314 tests passing and 8 host-dependent Windows
+symbolic-link capability skips. Fresh catalog, RFDC probe, and connected-shell
+evidence are bound to the current environment manifest. The real OOC run
+reported 0 synthesis errors, 0 critical warnings, 0 synthesis warnings, and
+0 bonded IOBs.
 
-It does not prove that generated connected-shell Tcl can accept a clean real
-Vivado report, that Task 5 has passed independent review, or that the shell
-synthesizes and closes CDC/timing. No Task 6 claim may be inferred from this
-test count.
+These results prove the bounded OOC shell contract. They do not prove
+post-route timing, runtime MTS/SYSREF behavior, or production data-path and
+board acceptance.
 
 ## Resume Condition
 
-Do not start Task 6 until all of these conditions are met:
+Before starting production integration, all of these conditions must remain
+true:
 
 1. Keep Phase 0 `ready: true` with Vivado 2025.2 build `6299465`, a clean Git tree, Python 3.12, and unchanged authority hashes;
 2. retain the fresh catalog run and real Vivado 2025.2 RFDC probe as the current-machine authority for the exact catalog and RFDC MTS bindings;
-3. Task 5 is amended so a deliberately unsafe report fails, a real clean report passes, all status records are canonical and measured, and an independent review closes the remaining report/MTS gates.
+3. Preserve the OOC boundary: AXIS remains in the BD interface contract and
+   is not turned into package IOBs until a real top-level wrapper is supplied.
+4. Keep post-route timing and runtime MTS as later gates; do not upgrade this
+   OOC success record into a production claim.
 
-After those gates close, continue in the strict order defined by [NEXT_STEPS.md](NEXT_STEPS.md).
+Continue in the strict order defined by [NEXT_STEPS.md](NEXT_STEPS.md).
