@@ -33,9 +33,12 @@ def readback_bytes(artifacts):
     lines += [f"CONNECTED_READBACK\tPORT\t{x.name}\t{x.name}_0" for x in request.interfaces]
     lines += [f"CONNECTED_READBACK\tPORT\t{x.name}\t{x.name}_0" for x in artifacts.external_rf_interfaces]
     lines += ["CONNECTED_READBACK\tINVERTER\tC_OPERATION\tnot\tC_SIZE\t1", "CONNECTED_READBACK\tCONCAT\tNUM_PORTS\t1"]
-    lines += [f"CONNECTED_READBACK\tCLOCK\t{x.domain}\t{member}\t{x.net}" for x in request.clocks for member in x.members]
-    lines += [f"CONNECTED_READBACK\tRESET\t{x.domain}\t{member}\t{x.reset_net}" for x in request.resets for member in x.members]
-    lines += [f"CONNECTED_READBACK\tLOCK\t{x.domain}\t{x.dcm_locked_pin}\t{x.dcm_locked_pin}" for x in request.resets]
+    # Vivado 2025.2 canonicalizes the realized net names from their source
+    # pins/cells.  Keep the fake protocol aligned with the measured machine
+    # readback instead of masking that normalization in the runner.
+    lines += [f"CONNECTED_READBACK\tCLOCK\t{x.domain}\t{member}\t{x.members[0].replace('/', '_')}" for x in request.clocks for member in x.members]
+    lines += [f"CONNECTED_READBACK\tRESET\t{x.domain}\t{member}\t{x.dcm_locked_members[-1].split('/')[0]}_peripheral_aresetn" for x in request.resets for member in x.members]
+    lines += [f"CONNECTED_READBACK\tLOCK\t{x.domain}\t{x.dcm_locked_pin}\t{x.dcm_locked_pin}_1" for x in request.resets]
     lines += ["CONNECTED_READBACK\tADDRESS\trfdc_0/s_axi/Reg\tsegment", "CONNECTED_READBACK\tIRQ\trfdc_0/irq\tirq_concat_0/In0\tirq_concat_0/dout\tzynq_ultra_ps_e_0/pl_ps_irq0"]
     lines += [f"CONNECTED_READBACK\tMTS\t{k}\t{v}" for k, v in artifacts.mts_properties]
     lines += [f"CONNECTED_READBACK\tBOOL\t{name}\t{value}" for name, value in (("validate_bd_design_passed","true"),("synthesis_completed","true"),("mts_runtime_verified","false"))]

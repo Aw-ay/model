@@ -405,11 +405,25 @@ def build_candidate_evidence(
     expected_ports = {name for name in data_expected} | set(rf_expected)
     expected_port_names = {name: f"{name}_0" for name in expected_ports}
     if dict(raw["PORT"]) != expected_port_names: raise ValueError("readback external interface port inventory mismatch")
-    expected_clock = {(clock.domain, member): clock.net for clock in request.clocks for member in clock.members}
+    # Vivado 2025.2 does not preserve the requested logical net label when a
+    # source-driven BD net is saved.  Its deterministic realization is based
+    # on the first source pin (for example ``rfdc_0/clk_adc0`` becomes
+    # ``rfdc_0_clk_adc0``).  Compare the measured canonical name explicitly;
+    # accepting arbitrary aliases here would make the readback non-authoritative.
+    expected_clock = {
+        (clock.domain, member): _vivado_source_net_name(clock.members[0])
+        for clock in request.clocks for member in clock.members
+    }
     if dict(raw["CLOCK"]) != expected_clock: raise ValueError("readback clock-net membership mismatch")
-    expected_reset = {(reset.domain, member): reset.reset_net for reset in request.resets for member in reset.members}
+    expected_reset = {
+        (reset.domain, member): _vivado_reset_net_name(reset.dcm_locked_members[-1])
+        for reset in request.resets for member in reset.members
+    }
     if dict(raw["RESET"]) != expected_reset: raise ValueError("readback reset-net membership mismatch")
-    expected_lock = {(reset.domain, reset.dcm_locked_pin): reset.dcm_locked_pin for reset in request.resets}
+    expected_lock = {
+        (reset.domain, reset.dcm_locked_pin): _vivado_lock_net_name(reset.dcm_locked_pin)
+        for reset in request.resets
+    }
     if dict(raw["LOCK"]) != expected_lock: raise ValueError("readback dcm_locked mismatch")
     address = raw["ADDRESS"]
     if not isinstance(address, list) or len(address) != 1 or len(address[0]) != 2 or address[0][0] != "rfdc_0/s_axi/Reg" or not address[0][1] or raw["IRQ"] != [("rfdc_0/irq", "irq_concat_0/In0", "irq_concat_0/dout", "zynq_ultra_ps_e_0/pl_ps_irq0")]: raise ValueError("readback address/IRQ mismatch")
@@ -436,6 +450,32 @@ def build_candidate_evidence(
         report_safety["cdc_safe"], report_safety["clock_safety_verified"], reports,
         request.environment_manifest_sha256,
     )
+
+
+def _vivado_source_net_name(source_pin: str) -> str:
+    """Return the measured Vivado 2025.2 name for a source-driven BD net."""
+
+    owner, separator, pin = source_pin.partition("/")
+    if not separator or not owner or not pin or "/" in pin:
+        raise ValueError("connected request source pin is not a canonical cell/pin path")
+    return f"{owner}_{pin}"
+
+
+def _vivado_reset_net_name(dcm_locked_member: str) -> str:
+    """Return the measured reset-generator output net name."""
+
+    reset_cell, separator, pin = dcm_locked_member.partition("/")
+    if not separator or not reset_cell or pin != "dcm_locked":
+        raise ValueError("connected request reset source is not a canonical dcm_locked path")
+    return f"{reset_cell}_peripheral_aresetn"
+
+
+def _vivado_lock_net_name(dcm_locked_port: str) -> str:
+    """Return the measured net name created for an external lock port."""
+
+    if not dcm_locked_port or dcm_locked_port.endswith("_1"):
+        raise ValueError("connected request lock port is not canonical")
+    return f"{dcm_locked_port}_1"
 
 
 def _parse_readback(raw: bytes) -> dict[str, object]:
