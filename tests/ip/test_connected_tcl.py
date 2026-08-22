@@ -50,6 +50,10 @@ class ConnectedTclTest(unittest.TestCase):
         self.assertIn("rx_reset_0/ext_reset_in", text)
         self.assertIn("tx_reset_0/ext_reset_in", text)
         self.assertIn("CONFIG.C_OPERATION", text)
+        self.assertIn(
+            "set_property -dict [list {CONFIG.NUM_PORTS} {1}] [get_bd_cells {irq_concat_0}]",
+            text,
+        )
         self.assertIn("{CONFIG.PSU__USE__M_AXI_GP2} {0}", text)
         self.assertIn("maxihpm0_fpd_aclk", text)
         self.assertIn(

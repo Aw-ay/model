@@ -203,7 +203,7 @@ def emit_connected_tcl(
     lines += [f"  {{{name}}} {{{value}}} \\" for name, value in sorted(effective_ps_properties.items())]
     lines += [f"] [get_bd_cells {{{ps}}}]", "set_property -dict [list \\"]
     lines += [f"  {{CONFIG.{name}}} {{{value}}} \\" for name, value in effective_rfdc_properties]
-    lines += [f"] [get_bd_cells {{{rfdc}}}]", f"set_property -dict [list {{CONFIG.C_OPERATION}} {{not}} {{CONFIG.C_SIZE}} {{1}}] [get_bd_cells {{{inverter}}}]"]
+    lines += [f"] [get_bd_cells {{{rfdc}}}]", f"set_property -dict [list {{CONFIG.C_OPERATION}} {{not}} {{CONFIG.C_SIZE}} {{1}}] [get_bd_cells {{{inverter}}}]", f"set_property -dict [list {{CONFIG.NUM_PORTS}} {{1}}] [get_bd_cells {{{irq}}}]"]
     # Named nets make readback compare names, not Vivado-created aliases.
     lines += [
         "create_bd_net {ctrl_axis_clk}", f"connect_bd_net [get_bd_nets {{ctrl_axis_clk}}] [get_bd_pins {{{ps}/pl_clk0}}] [get_bd_pins {{{ps}/maxihpm0_fpd_aclk}}] [get_bd_pins {{{smart}/aclk}}] [get_bd_pins {{{rfdc}/s_axi_aclk}}] [get_bd_pins {{{reset_cells['ctrl']}/slowest_sync_clk}}]",
