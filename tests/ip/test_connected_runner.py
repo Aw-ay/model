@@ -30,8 +30,8 @@ def readback_bytes(artifacts):
     lines += [f"CONNECTED_READBACK\tDATA\t{x.name}\t{'Master' if x.direction == 'master' else 'Slave'}\txilinx.com:interface:axis_rtl:1.0\t{x.width_bits // 8}" for x in request.interfaces]
     names = {x.name for x in request.interfaces}
     lines += [f"CONNECTED_READBACK\tRF\t{x.name}\t{x.mode}\t{x.vlnv}" for x in artifacts.rfdc_interfaces if x.name not in names and (x.name in {'adc0_clk','adc1_clk','adc2_clk','adc3_clk','dac0_clk','dac1_clk','sysref_in'} or x.name.startswith(('vin','vout')))]
-    lines += [f"CONNECTED_READBACK\tPORT\t{x.name}\t{x.name}" for x in request.interfaces]
-    lines += [f"CONNECTED_READBACK\tPORT\t{x.name}\t{x.name}" for x in artifacts.external_rf_interfaces]
+    lines += [f"CONNECTED_READBACK\tPORT\t{x.name}\t{x.name}_0" for x in request.interfaces]
+    lines += [f"CONNECTED_READBACK\tPORT\t{x.name}\t{x.name}_0" for x in artifacts.external_rf_interfaces]
     lines += ["CONNECTED_READBACK\tINVERTER\tC_OPERATION\tnot\tC_SIZE\t1", "CONNECTED_READBACK\tCONCAT\tNUM_PORTS\t1"]
     lines += [f"CONNECTED_READBACK\tCLOCK\t{x.domain}\t{member}\t{x.net}" for x in request.clocks for member in x.members]
     lines += [f"CONNECTED_READBACK\tRESET\t{x.domain}\t{member}\t{x.reset_net}" for x in request.resets for member in x.members]
@@ -479,7 +479,7 @@ class ConnectedRunnerTest(unittest.TestCase):
             ),
             "inverter": lambda raw: raw.replace(b"C_OPERATION\tnot", b"C_OPERATION\tor"),
             "concat": lambda raw: raw.replace(b"CONCAT\tNUM_PORTS\t1", b"CONCAT\tNUM_PORTS\t2"),
-            "port": lambda raw: raw.replace(b"PORT\tvin0_01\tvin0_01", b"PORT\tvin0_01\twrong_port"),
+            "port": lambda raw: raw.replace(b"PORT\tvin0_01\tvin0_01_0", b"PORT\tvin0_01\twrong_port"),
         }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

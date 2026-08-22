@@ -403,7 +403,8 @@ def build_candidate_evidence(
     rf_expected = {name: value for name, value in rf_expected.items() if name in {"adc0_clk", "adc1_clk", "adc2_clk", "adc3_clk", "dac0_clk", "dac1_clk", "sysref_in"} or name.startswith(("vin", "vout"))}
     if dict(raw["RF"]) != rf_expected: raise ValueError("readback RF external interface mismatch")
     expected_ports = {name for name in data_expected} | set(rf_expected)
-    if dict(raw["PORT"]) != {name: name for name in expected_ports}: raise ValueError("readback external interface port inventory mismatch")
+    expected_port_names = {name: f"{name}_0" for name in expected_ports}
+    if dict(raw["PORT"]) != expected_port_names: raise ValueError("readback external interface port inventory mismatch")
     expected_clock = {(clock.domain, member): clock.net for clock in request.clocks for member in clock.members}
     if dict(raw["CLOCK"]) != expected_clock: raise ValueError("readback clock-net membership mismatch")
     expected_reset = {(reset.domain, member): reset.reset_net for reset in request.resets for member in reset.members}
