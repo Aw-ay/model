@@ -17,6 +17,7 @@ from rfsoc_pulse_model.ip.connected import (
     canonical_connected_json_bytes,
     parse_connected_request,
     parse_connected_evidence,
+    summarize_connected_shell_evidence,
     validate_connected_evidence,
 )
 from rfsoc_pulse_model.ip.environment import EnvironmentManifest
@@ -216,6 +217,23 @@ class ConnectedShellContractTest(unittest.TestCase):
         self.assertTrue(result.rfdc_shell_structural_ready)
         self.assertFalse(result.production_integration_ready)
         self.assertEqual(result.blocking_reasons, ())
+
+    def test_evidence_summary_keeps_ooc_shell_separate(self) -> None:
+        _, evidence, _ = fixture()
+
+        summary = summarize_connected_shell_evidence(evidence)
+
+        self.assertEqual(summary["status"], "success")
+        self.assertTrue(summary["rfdc_shell_structural_ready"])
+        self.assertFalse(summary["production_integration_ready"])
+        self.assertEqual(summary["interfaces"], 24)
+        self.assertTrue(summary["validate_bd_design_passed"])
+        self.assertTrue(summary["synthesis_completed"])
+        self.assertTrue(summary["cdc_safe"])
+        self.assertTrue(summary["clock_safety_verified"])
+        self.assertTrue(summary["mts_configuration_verified"])
+        self.assertFalse(summary["mts_runtime_verified"])
+        self.assertEqual(summary["blocking_reasons"], ["production_integration_pending"])
 
     def test_probe_provenance_is_immutable_and_requires_canonical_values(self) -> None:
         with self.assertRaisesRegex(ValueError, "run_id"):

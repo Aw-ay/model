@@ -361,6 +361,50 @@ class ConnectedShellEvidence:
         object.__setattr__(self, "report_hashes", tuple(sorted(report_hashes)))
 
 
+def summarize_connected_shell_evidence(
+    evidence: ConnectedShellEvidence,
+) -> dict[str, object]:
+    """Project validated OOC evidence into top-level JSON metadata."""
+
+    if not isinstance(evidence, ConnectedShellEvidence):
+        raise ValueError("evidence must be ConnectedShellEvidence")
+    structural_checks = {
+        "validate_bd_design_passed": evidence.validate_bd_design_passed,
+        "synthesis_completed": evidence.synthesis_completed,
+        "cdc_safe": evidence.cdc_safe,
+        "clock_safety_verified": evidence.clock_safety_verified,
+        "mts_configuration_verified": evidence.mts_configuration_verified,
+    }
+    structural_ready = all(structural_checks.values())
+    blocking_reasons = (
+        [name for name, passed in structural_checks.items() if not passed]
+        if not structural_ready
+        else ["production_integration_pending"]
+    )
+    return {
+        "status": "success",
+        "rfdc_shell_structural_ready": structural_ready,
+        "production_integration_ready": False,
+        "production_integration_blocking_reasons": [
+            "production_integration_pending"
+        ],
+        "blocking_reasons": blocking_reasons,
+        "environment_manifest_sha256": evidence.environment_manifest_sha256,
+        "vivado_version": evidence.vivado_version,
+        "device_part": evidence.device_part,
+        "interfaces": len(evidence.interfaces),
+        "validate_bd_design_passed": evidence.validate_bd_design_passed,
+        "synthesis_completed": evidence.synthesis_completed,
+        "cdc_safe": evidence.cdc_safe,
+        "clock_safety_verified": evidence.clock_safety_verified,
+        "mts_configuration_verified": evidence.mts_configuration_verified,
+        "mts_runtime_verified": evidence.mts_runtime_verified,
+        "report_hashes": {
+            name: value for name, value in evidence.report_hashes
+        },
+    }
+
+
 @dataclass(frozen=True)
 class ConnectedShellReadiness:
     rfdc_shell_structural_ready: bool
