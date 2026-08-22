@@ -173,6 +173,53 @@ def clean_utilization_report() -> bytes:
 
 
 class ConnectedRunnerTest(unittest.TestCase):
+    def test_accepts_measured_vivado_report_table_variants(self) -> None:
+        """The parser accepts the real 2025.2 table columns and path class."""
+        from rfsoc_pulse_model.ip.connected_runner import (
+            _parse_cdc_report,
+            _parse_clock_interaction_report,
+            _parse_utilization_report,
+        )
+
+        clean_scope = vivado_report_bytes(report_header(
+            "report_cdc -from [get_clocks -quiet clk_a] -to "
+            "[get_clocks -quiet clk_a] -details -file ./cdc.rpt"
+        ) + """CDC Report
+
+All paths are Safely Timed.
+""")
+        self.assertEqual(_parse_cdc_report(clean_scope.decode("utf-8")), set())
+
+        utilization_header = report_header(
+            "report_utilization -file ./utilization.rpt"
+        ).replace(
+            "| Device            : xczu27dr-fsve1156",
+            "| Device            : xczu27dr-fsve1156-2-i",
+        )
+        utilization = vivado_report_bytes(utilization_header + """Utilization Design Information
+
+|          Site Type         |  Used | Fixed | Prohibited | Available | Util% |
+| CLB LUTs                   |    10 |     0 |          0 |       100 | 10.00 |
+| CLB Registers              |    20 |     0 |          0 |       200 | 10.00 |
+
+""")
+        _parse_utilization_report(utilization.decode("utf-8"))
+
+        clock = vivado_report_bytes(report_header(
+            "report_clock_interaction -file ./clock_interaction.rpt"
+        ) + """Clock Interaction Report
+
+Clock Interaction Table
+-----------------------
+
+From Clock    To Clock      Clock-Pair Classification  Inter-Clock Constraints
+------------  ------------  -------------------------  ----------------------
+clk_a         clk_a         Clean                      Timed
+clk_a         clk_b         Ignored                    False Path
+
+""")
+        _parse_clock_interaction_report(clock.decode("utf-8"), {("clk_a", "clk_b")})
+
     def _artifacts_context(self):
         from rfsoc_pulse_model.ip.connected_tcl import emit_connected_tcl
 

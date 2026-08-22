@@ -558,11 +558,25 @@ def _validate_report_header(report: str, command_prefix: str) -> None:
         header["Tool Version"],
     ) is None:
         raise ValueError("report is not from the required Vivado 2025.2 build 6299465 grammar")
-    if not header["Command"].startswith(command_prefix + " -file "):
+    command_ok = header["Command"].startswith(command_prefix + " -file ")
+    if not command_ok and command_prefix == "report_cdc -details":
+        # A bounded Task-5 grammar probe may scope the same Vivado report to
+        # one explicitly named clock pair.  Keep the Tcl shape exact; do not
+        # accept arbitrary options or hand-written status markers.
+        command_ok = re.fullmatch(
+            r"report_cdc -from \[get_clocks -quiet [A-Za-z0-9_.-]+\] "
+            r"-to \[get_clocks -quiet [A-Za-z0-9_.-]+\] "
+            r"-details -file .+",
+            header["Command"],
+        ) is not None
+    if not command_ok:
         raise ValueError("report command does not match the bounded invocation")
     if re.fullmatch(r"[A-Za-z0-9_.-]+", header["Design"]) is None:
         raise ValueError("report design name is malformed")
-    if header["Device"] != "xczu27dr-fsve1156" or header["Design State"] != "Synthesized":
+    if (
+        re.fullmatch(r"xczu27dr-fsve1156(?:-2-i)?", header["Device"]) is None
+        or header["Design State"] != "Synthesized"
+    ):
         raise ValueError("report device or design state mismatch")
 
 
@@ -579,6 +593,9 @@ def _parse_cdc_report(report: str) -> set[tuple[str, str]]:
     _validate_report_header(report, "report_cdc -details")
     if "\nCDC Report\n" not in report:
         raise ValueError("CDC report title is missing")
+    cdc_body = report.split("\nCDC Report\n", 1)[1].strip()
+    if cdc_body == "All paths are Safely Timed.":
+        return set()
     summary_area = report.split("Source Clock:", 1)[0]
     summary_rows = re.findall(
         r"^(CDC-[0-9]+)\s+(Info|Warning|Critical)\s+([0-9]+)\s+(.+?)\s*$",
@@ -641,7 +658,8 @@ def _parse_clock_interaction_report(
     pairs: set[tuple[str, str]] = set()
     for line in data_lines:
         match = re.fullmatch(
-            r"\s*(\S+)\s+(\S+)\s+.*?(Clean|Ignored)\s+(Timed|Asynchronous Groups)\s*",
+            r"\s*(\S+)\s+(\S+)\s+.*?(Clean|Ignored)\s+"
+            r"(Timed|Asynchronous Groups|False Path|Partial False Path)\s*",
             line,
         )
         if match is None: raise ValueError("unknown clock-interaction row grammar")
@@ -651,7 +669,15 @@ def _parse_clock_interaction_report(
         pairs.add(pair)
         if classification == "Clean" and constraint == "Timed":
             continue
-        if classification != "Ignored" or constraint != "Asynchronous Groups" or pair not in cdc_pairs:
+        # Vivado 2025.2 emits both ``Asynchronous Groups`` and ``False Path``
+        # for ignored cross-domain pairs.  Either is acceptable only when the
+        # same pair has a measured, Info-only CDC block; no uncorrelated path
+        # exception is allowed to hide an unsafe crossing.
+        if (
+            classification != "Ignored"
+            or constraint not in {"Asynchronous Groups", "False Path"}
+            or pair not in cdc_pairs
+        ):
             raise ValueError("ignored clock pair lacks correlated safe CDC detail")
     if not cdc_pairs.issubset(pairs):
         raise ValueError("CDC clock pair is absent from clock-interaction table")
@@ -691,10 +717,14 @@ def _parse_utilization_report(report: str) -> None:
     """Require the measured Vivado utilization table, not a placeholder token."""
     report = _normalize_report_newlines(report)
     _validate_report_header(report, "report_utilization")
-    if "\nUtilization Estimates\n" not in report:
+    if (
+        "\nUtilization Estimates\n" not in report
+        and "\nUtilization Design Information\n" not in report
+    ):
         raise ValueError("utilization report title is missing")
     if re.search(
-        r"^\|\s*Site Type\s*\|\s*Used\s*\|\s*Fixed\s*\|\s*Available\s*\|\s*Util%\s*\|\s*$",
+        r"^\|\s*Site Type\s*\|\s*Used\s*\|\s*Fixed\s*\|\s*"
+        r"(?:Prohibited\s*\|\s*)?Available\s*\|\s*Util%\s*\|\s*$",
         report,
         re.MULTILINE,
     ) is None:
@@ -703,6 +733,7 @@ def _parse_utilization_report(report: str) -> None:
         r"^\|\s*(?P<site>[^|]+?)\s*\|\s*"
         r"(?P<used>[0-9][0-9,]*)\s*\|\s*"
         r"(?P<fixed>[0-9][0-9,]*)\s*\|\s*"
+        r"(?:(?P<prohibited>[0-9][0-9,]*)\s*\|\s*)?"
         r"(?P<available>[0-9][0-9,]*)\s*\|\s*"
         r"(?P<util>[0-9]+(?:\.[0-9]+)?%?)\s*\|\s*$",
         report,
@@ -711,16 +742,23 @@ def _parse_utilization_report(report: str) -> None:
     if not rows:
         raise ValueError("utilization table has no measured rows")
     seen: set[str] = set()
-    for site, used_text, fixed_text, available_text, util_text in rows:
+    for site, used_text, fixed_text, prohibited_text, available_text, util_text in rows:
         site = site.strip()
         if not site or site in seen:
             raise ValueError("utilization table contains duplicate or empty site rows")
         seen.add(site)
         used = int(used_text.replace(",", ""))
         fixed = int(fixed_text.replace(",", ""))
+        prohibited = int(prohibited_text.replace(",", "")) if prohibited_text else 0
         available = int(available_text.replace(",", ""))
         utilization = float(util_text.rstrip("%"))
-        if fixed > used or used > available or utilization < 0.0 or utilization > 100.0:
+        if (
+            fixed > used
+            or prohibited < 0
+            or used > available
+            or utilization < 0.0
+            or utilization > 100.0
+        ):
             raise ValueError("utilization table contains impossible measured values")
 
 
