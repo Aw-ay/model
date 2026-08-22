@@ -58,6 +58,7 @@ from .rfdc_probe import (
     parse_rfdc_probe_evidence,
 )
 from .connected_tcl import ConnectedTclArtifacts, emit_connected_tcl
+from .generate import consume_connected_shell_readiness
 from .connected_runner import (
     ConnectedShellAttempt,
     ConnectedShellRunner,
@@ -88,6 +89,7 @@ __all__ = [
     "ConnectedShellAttempt",
     "ConnectedShellRunner",
     "ConnectedTclArtifacts",
+    "consume_connected_shell_readiness",
     "build_candidate_evidence",
     "build_vivado_command",
     "GenerationMode",

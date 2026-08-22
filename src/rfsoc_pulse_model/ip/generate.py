@@ -24,8 +24,14 @@ from .lock import (
     decode_production_lock_json,
     validate_production_lock,
 )
-from .connected import ConnectedAuthorityBytes, build_connected_request, canonical_connected_json_bytes
+from .connected import (
+    ConnectedAuthorityBytes,
+    build_connected_request,
+    canonical_connected_json_bytes,
+    summarize_connected_shell_evidence,
+)
 from .connected_tcl import emit_connected_tcl
+from .connected_runner import ConnectedShellRunner
 from .platform import PsPlatformConfig
 from .rfdc_probe import parse_rfdc_probe_evidence
 from rfsoc_pulse_model.common.config import ModelConfig
@@ -342,6 +348,99 @@ def generate_connected_rfdc_shell(
         "probe_run_id": probe.provenance.run_id,
         "production_integration_ready": False,
     }
+
+
+def _connected_shell_unavailable_status(
+    status: str, reason: str,
+) -> dict[str, object]:
+    return {
+        "status": status,
+        "rfdc_shell_structural_ready": False,
+        "production_integration_ready": False,
+        "production_integration_blocking_reasons": [
+            "production_integration_pending"
+        ],
+        "blocking_reasons": [reason],
+    }
+
+
+def consume_connected_shell_readiness(output_root: Path) -> dict[str, object]:
+    """Consume current connected-shell success only through the runner API."""
+
+    root = Path(output_root)
+    manifest_path = root / "metadata" / "environment_manifest.json"
+    if not manifest_path.is_file():
+        return _connected_shell_unavailable_status(
+            "not_bound", "environment_manifest_missing"
+        )
+
+    try:
+        _manifest, environment_bytes = require_environment_ready(root)
+        model = ModelConfig.load_default()
+        architecture = HardwareArchitectureConfig.load_default()
+        platform = PsPlatformConfig.load_default()
+        config = resources.files("rfsoc_pulse_model.config")
+        model_bytes = config.joinpath("default.json").read_bytes()
+        architecture_bytes = config.joinpath("ip_architecture.json").read_bytes()
+        platform_bytes = config.joinpath("ps_platform.json").read_bytes()
+        lock_bytes = config.joinpath("ip_lock.json").read_bytes()
+        production_lock = decode_production_lock_json(
+            lock_bytes, "packaged production lock"
+        )
+        discovery_bytes = emit_catalog_discovery_tcl(architecture).encode("utf-8")
+        catalog_request_bytes = canonical_json_bytes(build_catalog_request(
+            architecture,
+            _sha256(architecture_bytes),
+            _sha256(discovery_bytes),
+        ))
+        probe_tcl_bytes = (
+            root / "vivado" / "probe_rfdc_contract.tcl"
+        ).read_bytes()
+        probe = parse_rfdc_probe_evidence(
+            (root / "metadata" / "rfdc_probe_evidence.json").read_bytes(),
+            probe_tcl_bytes,
+            model,
+            architecture,
+            environment_manifest_sha256=(
+                parse_environment_manifest(environment_bytes).sha256
+            ),
+        )
+        authority_bytes = ConnectedAuthorityBytes(
+            model_bytes,
+            architecture_bytes,
+            platform_bytes,
+            lock_bytes,
+            discovery_bytes,
+            catalog_request_bytes,
+            environment_bytes,
+        )
+        evidence = ConnectedShellRunner(
+            root.parent, root, require_environment=True
+        ).load_validated_success(
+            model,
+            architecture,
+            platform,
+            production_lock,
+            probe.provenance,
+            authority_bytes,
+        )
+        return summarize_connected_shell_evidence(evidence)
+    except FileNotFoundError:
+        return _connected_shell_unavailable_status(
+            "missing", "connected_shell_evidence_missing"
+        )
+    except ValueError as error:
+        message = str(error)
+        if "lifecycle is not success" in message:
+            status = "not_success"
+            reason = "connected_shell_lifecycle_not_success"
+        elif "stale" in message or "hash" in message:
+            status = "stale"
+            reason = "connected_shell_evidence_stale"
+        else:
+            status = "invalid"
+            reason = "connected_shell_evidence_invalid"
+        return _connected_shell_unavailable_status(status, reason)
 
 
 def _validate_packaged_lock(

@@ -9,7 +9,11 @@ from rfsoc_pulse_model.ip.evidence import (
     build_catalog_request,
     canonical_json_bytes,
 )
-from rfsoc_pulse_model.ip.generate import generate_connected_rfdc_shell, generate_ip_architecture
+from rfsoc_pulse_model.ip.generate import (
+    consume_connected_shell_readiness,
+    generate_connected_rfdc_shell,
+    generate_ip_architecture,
+)
 from rfsoc_pulse_model.ip.generate import _validate_packaged_lock
 from rfsoc_pulse_model.ip.lock import GenerationMode
 from rfsoc_pulse_model.ip.tcl import emit_catalog_discovery_tcl
@@ -18,6 +22,15 @@ from rfsoc_pulse_model.generate import main as generate_main
 
 
 class GenerateIpArchitectureTest(unittest.TestCase):
+    def test_connected_shell_consumer_is_not_bound_without_phase0(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            status = consume_connected_shell_readiness(Path(temporary))
+
+        self.assertEqual(status["status"], "not_bound")
+        self.assertFalse(status["rfdc_shell_structural_ready"])
+        self.assertFalse(status["production_integration_ready"])
+        self.assertEqual(status["blocking_reasons"], ["environment_manifest_missing"])
+
     def test_connected_generation_binds_probe_bytes_and_is_byte_deterministic(self) -> None:
         """Dropping probe provenance or nondeterministic paths must break this."""
 
