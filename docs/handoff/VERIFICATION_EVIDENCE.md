@@ -20,7 +20,7 @@ in this handoff text.
 The four authority SHA-256 values below are unchanged. The current `build/`
 contains fresh current-machine catalog, RFDC probe, connected request, and
 real connected-shell attempt artifacts; no old attempt-local Vivado project
-or report outputs were copied. The full Python regression passed 314 tests
+or report outputs were copied. The full Python regression passed 327 tests
 with 8 host-dependent Windows symbolic-link capability skips. The latest real
 OOC attempt passed the bounded connected-shell gate; production integration
 remains explicitly false.
@@ -59,6 +59,24 @@ The tracked [polarimetric Golden acceptance](../verification/polarimetric-golden
 The initial Cycle checkpoint verified restricted simultaneous `compute()`/`clock()` commit semantics and the legacy eight-channel RFDC ingress at two samples per clock. It also verified fail-closed startup/gap/format handling and generated metadata. This is a legacy-reference checkpoint only; it is not production coverage of the complete reflection or monitor chains.
 
 ## Generated RTL and Equivalence
+
+### Production 2SPC boundary candidates (2026-08-23)
+
+The current source checkout adds three independent, non-promoted Cycle
+candidates:
+
+| Candidate | Scope | Status |
+|---|---|---|
+| `rx_2spc_continuous_ingress` | 8 ADC component streams, atomic valid, fixed lane/sample order, sticky gap/format fault, sample base +2 | focused Cycle tests pass |
+| `continuous_stream_timebase` | zero-based contiguous sample-base checking, missing/discontinuous beat fault, upstream fault propagation | focused Cycle tests pass |
+| `tx_2spc_continuous_egress` | eight-channel atomic ready, `{Q1,I1,Q0,I0}` packing, sticky fail-closed underrun | focused Cycle tests pass |
+
+The candidate registry marks all three owners `architecture_pending` and keeps
+them out of the production `HARDWARE_MODULES` registry. Their deterministic
+Verilog emission is tested, but no production manifest, connected Vivado
+attempt, synthesis result, or production-integration claim is attached to
+these candidates. The four authority files and MTS configuration remain
+unchanged.
 
 The tracked Golden acceptance records Vivado 2025.2 `xvlog`, `xelab`, and XSim success for the generated legacy 2SPC ingress testbench. Registered generated modules carry port, latency, throughput, and SHA metadata.
 
@@ -149,6 +167,6 @@ not a broad CDC waiver.
 
 - Post-route/full-top-level timing closure and final data-path CDC; the OOC boundary result is not an implementation result.
 - Runtime RFDC MTS/SYSREF alignment and measured fixed internal delay.
-- Production Cycle and generated-Verilog implementations for RX/TX 2SPC, continuous reflection, and monitor events.
+- Production promotion/equivalence/synthesis for the new RX/TX 2SPC candidates; calibration, continuous reflection, and monitor-event Cycle implementations.
 - DMA/DDR/GEM3 event-only transfer, packet-loss accounting, and host reception.
 - Board-level 8 ADC/8 DAC continuity, H/V identity, +20/0/-20 dB range ratios, loopback, phase stability, and 24-hour operation.

@@ -16,9 +16,10 @@ The evidence deliberately leaves `production_integration_ready=false`.
 Post-route timing, runtime MTS/SYSREF, and the complete production data path
 remain later gates.
 
-## 1. Add the Production 2SPC Reflection Chain
+## 1. Add the Production 2SPC Reflection Chain — boundary candidate slice complete
 
 - **Prerequisites:** OOC connected shell structurally ready; RF clocks/resets and MTS configuration contract frozen; Cycle numeric formats unchanged or explicitly versioned.
+- **Current candidate evidence:** New `rx_2spc_continuous_ingress`, `continuous_stream_timebase`, and `tx_2spc_continuous_egress` Cycle candidates pass 13 focused tests and deterministic Verilog emission. They remain outside the production registry and do not alter authority configuration.
 - **Likely files:** `src/rfsoc_pulse_model/cycle/hardware`, Cycle registry/emitter/generator, equivalence and Verilog tests, architecture ownership config.
 - **Required tests/evidence:** Cycle implementations for 2SPC ingress, calibrated H/V selection, delay, polarimetric scattering, Doppler, accumulation, predistortion and egress; generated RTL only; bit/cycle equivalence; continuous throughput and fault tests; synthesis resource/timing evidence.
 - **Independent review checkpoint:** prove legacy reference RTL is not in production sources and every production responsibility has one current owner.

@@ -57,9 +57,31 @@ manifest records Vivado 2025.2 build `6299465`, Python 3.12.13, a clean Git
 tree, and unchanged authority hashes. Fresh catalog, RFDC probe, and real
 connected-shell evidence are all bound to that manifest.
 
+## Production 2SPC Candidate Slice
+
+The first production-boundary candidate slice is now implemented outside the
+production manifest:
+
+- `rx_2spc_continuous_ingress` is a new Cycle/RTL candidate for the eight ADC
+  component streams, atomic valid acceptance, lane unpacking, sticky format/gap
+  faults, and two-sample absolute-index advancement;
+- `continuous_stream_timebase` is a new Cycle/RTL candidate for zero-based,
+  contiguous two-sample index checking and upstream fault propagation;
+- `tx_2spc_continuous_egress` is a new Cycle/RTL candidate for eight-way atomic
+  DAC `{Q1,I1,Q0,I0}` packing and fail-closed underrun handling.
+
+The candidates are registered separately as `architecture_pending` and are not
+included in `HARDWARE_MODULES`, production RTL, or `production_integration_ready`.
+The legacy 2SPC classes remain reference-only and unchanged. Candidate design
+and execution records are in
+[production-2spc-boundary-design.md](../superpowers/specs/2026-08-23-production-2spc-boundary-design.md)
+and [production-2spc-boundary.md](../superpowers/plans/2026-08-23-production-2spc-boundary.md).
+
 ## Work Not Started
 
-- production 2SPC continuous dual-polarization reflection chain integration;
+- promotion of the 2SPC candidates to reviewed production owners;
+- ADC calibration, delay, RCS gain, scattering, Doppler, accumulation,
+  predistortion, and full continuous reflection chain integration;
 - monitor pulse detection, hit-IQ capture, and coarse-PDW event integration;
 - event DMA buffering and GEM3 data-plane integration;
 - post-route/full-top-level timing, MTS runtime, 24-hour stability, and
@@ -68,7 +90,7 @@ connected-shell evidence are all bound to that manifest.
 ## Verification Boundary
 
 At the current migration checkout, the full Python regression under the bundled
-Python 3.12.13 runtime reports 314 tests passing and 8 host-dependent Windows
+Python 3.12.13 runtime reports 327 tests passing and 8 host-dependent Windows
 symbolic-link capability skips. Fresh catalog, RFDC probe, and connected-shell
 evidence are bound to the current environment manifest. The real OOC run
 reported 0 synthesis errors, 0 critical warnings, 0 synthesis warnings, and
