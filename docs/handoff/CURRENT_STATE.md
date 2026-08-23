@@ -16,7 +16,7 @@ Always compare this snapshot with the live checkout before acting. The observed 
 | Role | Branch | Stable reference | Meaning |
 |---|---|---|---|
 | Accepted prior development line | `model-update-20260811` | `commit:dc31c5c` | Last accepted AMD IP normalization documentation state before connected-shell work |
-| Connected-shell isolated line | `connected-bd-rfdc-shell-20260813` | `environment_manifest.git_commit` | Current migration-provenance checkout; hardware implementation anchor remains `commit:89a2362` |
+| Connected-shell isolated line | `connected-bd-rfdc-shell-20260813` | `environment_manifest.git_commit` | Current migration-provenance checkout; current baseline is `commit:a22c877` and the earlier `commit:89a2362` is a superseded blocked Task 5 attempt |
 
 The two branches were observed as separate linked worktrees. Their old absolute locations are intentionally not part of this portable authority.
 

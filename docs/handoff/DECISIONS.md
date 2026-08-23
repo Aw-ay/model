@@ -79,7 +79,7 @@
 | Production RX/TX 2SPC boundaries | architecture pending | Cycle structure, generated RTL, bit/cycle equivalence, continuous-stream fault semantics |
 | Continuous reflection Cycle path | architecture pending | fixed widths, bounded delay memory, scheduling, throughput and equivalence |
 | Monitor event hardware | planned/pending | FIR/detector/refinement/event queues, no-backpressure proof and overflow tests |
-| Connected RFDC shell | Task 5 blocked | real report grammar, authoritative MTS properties, clean/unsafe differential evidence and independent review |
+| Connected RFDC shell | Task 5/6 OOC structural CLEAN | Fresh environment-bound real Vivado reports, immutable report/Tcl/readback hashes, atomic success publication, exact RFDC CDC-11/13/15 waiver endpoints, BD validation, OOC synthesis, 24 BD AXIS boundaries, and 0 bonded IOBs |
 | GEM3 board I/O | pending fail-closed | board-authoritative PHY address, reset ownership/timing, RGMII delay/link mode and enabled PS binding |
 | DMA and Ethernet event transport | pending | S2MM/DDR ring, packet protocol, loss accounting and software validation |
 | CDC and timing | pending | synthesized and implemented reports without broad waivers |

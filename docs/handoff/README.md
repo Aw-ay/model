@@ -54,9 +54,9 @@ git branch --show-current
 git rev-parse HEAD
 git status --short
 git worktree list --porcelain
-git cat-file -t 89a2362
+git cat-file -t a22c877
 $env:PYTHONPATH = "$PWD\src"
 & '<PYTHON_3_12>' -m unittest tests.handoff.test_handoff_docs -v
 ```
 
-The live branch may contain documentation commits after the hardware implementation anchor. That does not change the connected-shell readiness described in [CURRENT_STATE.md](CURRENT_STATE.md).
+The live branch may contain documentation or production-candidate commits after the current migration baseline. That does not change the connected-shell readiness boundary described in [CURRENT_STATE.md](CURRENT_STATE.md).

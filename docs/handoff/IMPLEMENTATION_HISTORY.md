@@ -76,8 +76,16 @@ This lineage records engineering checkpoints and their review outcomes. It inten
 - Attempt 1, `commit:86af2d5`: added connected Tcl/runner. Review found an incomplete two-field candidate, missing RF external interfaces, and no complete synthesis/readback/report protocol.
 - Attempt 2, `commit:ed8933f`: added full TSV, disk-backed project, external RF ports, reset inversion, synthesis and reports. Review showed CDC/clock/MTS readiness was hard-coded and unsafe reports could publish ready.
 - Attempt 3, `commit:89a2362`: added report parsing, exact structural readback, lifecycle faults, path safety, and runner tests. Review found the parser requires synthetic `CDC_SAFE`, `CLOCK_SAFE`, and `TIMING_CONSTRAINED` tokens that neither the generated Tcl nor standard Vivado reports emit. It also uses unprobed RFDC MTS property names.
-- Final review state: **BLOCKED**, not complete. The same report-to-evidence/MTS-authority blocker survived three implementation/review attempts. Task 6 was not started.
-- Bounded evidence: latest fixed-Python suite at this implementation anchor passed 274 tests with 8 host-dependent symlink skips. This only proves the tested Python behavior; it does not make a real connected attempt possible.
+- Final review state at `commit:89a2362`: **BLOCKED**, not complete. The same report-to-evidence/MTS-authority blocker survived three implementation/review attempts. Task 6 was not started at that historical anchor.
+- Bounded evidence at that anchor: latest fixed-Python suite passed 274 tests with 8 host-dependent symlink skips. This historical result did not make a real connected attempt possible.
+
+## Connected RFDC Shell Task 5/6 Closure
+
+- Repairs after the historical blocked anchor bound Vivado report grammar, immutable report bytes, attempt Tcl hashes, exact RFDC CDC waiver endpoints, OOC timing semantics, and atomic success publication through commits `beb6cdb`, `47c251f`, `7542c3c`, `15b15e1`, `df6ae1b`, `7812c9d`, `448b372`, `a3db14b`, `46c2c07`, and `4b22f5e`.
+- `commit:06f8ac3` published the connected-shell readiness path; `commit:9756af0` recorded the fresh OOC readiness handoff; `commit:a22c877` is the current migration baseline.
+- Current Task 5 bounded evidence is CLEAN: the fresh environment-bound Vivado reports, request/realization/verification Tcl hashes, readback, exact CDC-11/13/15 waiver sets, utilization structure, and atomic success state are all validated.
+- Current Task 6 bounded evidence is CLEAN for OOC scope: Vivado 2025.2 validates the BD, synthesizes `synth_1`, preserves 24 AXIS interfaces at the BD boundary, and reports 0 bonded IOBs. Post-route timing, runtime MTS, and production data-path integration remain open.
+- Current validation: full Python regression reports 327 tests passing with 8 host-dependent skips; fresh environment, catalog, RFDC probe, and connected-shell evidence are bound to the current environment manifest.
 
 ## Superseded Conclusions
 
@@ -87,4 +95,4 @@ This lineage records engineering checkpoints and their review outcomes. It inten
 - Legacy 2SPC generated RTL is reference evidence, not production implementation.
 - A resolved catalog or unconnected `rfdc_0` skeleton is not a connected Block Design.
 - Green Python tests for Task 5 are not connected-shell success while its real report protocol is impossible and MTS properties lack probe authority.
-- No documentation-only commit after `commit:89a2362` changes the hardware implementation anchor or clears the blocker.
+- The historical conclusions above are retained for provenance, but they are superseded by the Task 5/6 closure section and current evidence bound to `commit:a22c877`.
