@@ -109,13 +109,13 @@
 
   Re-run the focused front-end test file and confirm the tests cover one-cycle output latency, exact sample-base preservation, reset re-arming, upstream fault propagation, and reserved-code sticky fault behavior.
 
-- [ ] **Step 6: Add failing tests for calibration arithmetic and saturation.**
+- [ ] **Step 6: Add failing tests for calibration arithmetic, overflow fail-closed behavior, and construction-time coefficient rejection.**
 
-  Use coefficients representing unity, positive gain, negative gain, half-way rounding, and values that exceed the 24-bit/4-fraction output range. Assert expected signed H/V outputs and `calibration_error_o` for invalid coefficient construction.
+  Use coefficients representing unity, positive gain, negative gain, half-way rounding, and values that exceed the 24-bit/4-fraction output range. Assert expected signed H/V outputs, `calibration_error_o` plus no valid beat for runtime arithmetic overflow, and `ValueError` for invalid coefficient construction before Verilog emission.
 
-- [ ] **Step 7: Implement coefficient validation and fixed-point correction.**
+- [ ] **Step 7: Implement coefficient validation, fixed-point correction, and fail-closed overflow handling.**
 
-  Add an immutable `HvCalibrationCoefficients` value with six signed quantized coefficients. Multiply each selected signed 16-bit sample by its coefficient, rescale from 20 fractional bits to the `reflection_sample` format using ties-away-from-zero rounding, saturate to signed 24-bit, and set `calibration_error_o` on invalid coefficients or arithmetic contract violations.
+  Add an immutable `HvCalibrationCoefficients` value with six signed quantized coefficients and reject invalid construction-time values before module construction/emission. Multiply each selected signed 16-bit sample by its coefficient, rescale from 20 fractional bits to the `reflection_sample` format using ties-away-from-zero rounding, detect values outside signed 24-bit before saturation, and set `calibration_error_o` while suppressing the valid beat and zeroing data for runtime arithmetic contract violations.
 
 - [ ] **Step 8: Run all focused front-end tests and commit the task.**
 

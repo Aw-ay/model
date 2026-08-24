@@ -20,10 +20,13 @@ in this handoff text.
 The four authority SHA-256 values below are unchanged. The current `build/`
 contains fresh current-machine catalog, RFDC probe, connected request, and
 real connected-shell attempt artifacts; no old attempt-local Vivado project
-or report outputs were copied. The full Python regression passed 327 tests
-with 8 host-dependent Windows symbolic-link capability skips. The latest real
-OOC attempt passed the bounded connected-shell gate; production integration
-remains explicitly false.
+or report outputs were copied. The 327-test result with 8 host-dependent
+Windows symbolic-link capability skips is historical evidence scoped to
+baseline `commit:c118362`. The full Python regression on this branch was
+interrupted with exit 1 before a unittest summary, so that run is unclaimed
+and no branch-wide pass count is asserted. The latest real OOC attempt passed
+the bounded connected-shell gate; production integration remains explicitly
+false.
 
 This record separates mathematical, cycle/RTL, catalog, RFDC-probe, connected-shell, and board evidence. A passing result at one layer is not evidence for a later layer.
 
@@ -70,7 +73,7 @@ candidates:
 | `rx_2spc_continuous_ingress` | 8 ADC component streams, atomic valid, fixed lane/sample order, sticky gap/format fault, sample base +2 | focused Cycle tests pass |
 | `continuous_stream_timebase` | zero-based contiguous sample-base checking, missing/discontinuous beat fault, upstream fault propagation | focused Cycle tests pass |
 | `tx_2spc_continuous_egress` | eight-channel atomic ready, `{Q1,I1,Q0,I0}` packing, sticky fail-closed underrun | focused Cycle tests pass |
-| `rx_2spc_calibrated_hv_frontend` | H/V HIGH/MID/LOW echo selection, scalar fixed-point correction, two-sample registered output, sticky calibration overflow | 13 focused tests pass; normalized Golden boundary equivalence and deterministic Verilog/port-width evidence pass; `architecture_pending` |
+| `rx_2spc_calibrated_hv_frontend` | H/V HIGH/MID/LOW echo selection, scalar fixed-point correction, two-sample registered output, sticky calibration overflow | 14 focused tests pass; normalized Golden boundary equivalence and deterministic Verilog/port-width evidence pass; `architecture_pending` |
 
 The candidate registry marks all four owners `architecture_pending` and keeps
 them out of the production `HARDWARE_MODULES` registry. Their deterministic
@@ -84,7 +87,7 @@ unchanged.
 `rx_2spc_calibrated_hv_frontend` is registered only in
 `CANDIDATE_HARDWARE_MODULES` with owner
 `rx_2spc_calibrated_hv_frontend`, `architecture_pending`, and
-`production=false`. Its focused test file passes 13 tests. The Golden
+`production=false`. Its focused test file passes 14 tests. The Golden
 identity-profile comparison covers all nine H/V HIGH/MID/LOW selector pairs,
 two samples per beat, signed I/Q values, and authority
 `reflection_sample` ties-away-from-zero quantization. The fixture uses an
@@ -99,7 +102,7 @@ with bases `0, 2, 4, 6` produce one registered output per cycle after the
 one-cycle boundary, with no backpressure port. Two fresh candidate instances
 emit byte-identical Verilog; all 26 ports have asserted widths, including
 128-bit packed ADC inputs, 48-bit packed H/V outputs, and the 64-bit sample
-base fields. The full focused Cycle suite after this addition is 50 tests
+base fields. The full focused Cycle suite after this addition is 51 tests
 passing. No Vivado attempt or production manifest was created.
 
 The tracked Golden acceptance records Vivado 2025.2 `xvlog`, `xelab`, and XSim success for the generated legacy 2SPC ingress testbench. Registered generated modules carry port, latency, throughput, and SHA metadata.

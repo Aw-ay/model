@@ -12,6 +12,7 @@ from rfsoc_pulse_model.cycle.dsl.fixed import (
 )
 from rfsoc_pulse_model.cycle.dsl.module import RTLModule
 from rfsoc_pulse_model.cycle.dsl.simulator import CycleSimulator
+from tests.cycle.verilog_eval import evaluate_verilog_expression
 
 
 def _twos_complement(width: int, value: int) -> int:
@@ -173,12 +174,40 @@ class RoundShiftTest(unittest.TestCase):
         self.assertIn("(($signed(32'sd-5) < 0)", negative.verilog())
         self.assertIn("($signed(32'sd-7) < 0)", more_negative.verilog())
 
-    def test_round_shift_emits_an_arithmetic_shift(self) -> None:
-        expr = round_shift_ties_away_from_zero(ConstExpr(-6, 32, signed=True), 2, 24)
+    def test_round_shift_emits_explicit_result_width_for_all_paths(self) -> None:
+        cases = (
+            (ConstExpr((1 << 47) - 1, 48, signed=True), 16, 32),
+            (ConstExpr(-((1 << 47) - 1), 48, signed=True), 16, 32),
+            (ConstExpr(5, 16, signed=True), 0, 24),
+            (ConstExpr(-5, 16, signed=True), 0, 24),
+            (ConstExpr(-(1 << 23), 32, signed=True), 0, 24),
+        )
 
-        self.assertIn(">>> 2", expr.verilog())
-        self.assertTrue(expr.signed)
-        self.assertEqual(expr.width, 24)
+        for value, shift, result_width in cases:
+            expr = round_shift_ties_away_from_zero(value, shift, result_width)
+            emitted = evaluate_verilog_expression(expr.verilog(), {})
+
+            self.assertEqual(emitted.width, result_width)
+            self.assertEqual(emitted.raw, expr.evaluate())
+            self.assertTrue(emitted.signed)
+
+        for source_value, expected_value in (
+            ((1 << 23) - 1, (1 << 23) - 1),
+            (-(1 << 23), -(1 << 23)),
+        ):
+            composed = saturate_signed(
+                round_shift_ties_away_from_zero(
+                    ConstExpr(source_value, 32, signed=True),
+                    0,
+                    24,
+                ),
+                24,
+            )
+            emitted = evaluate_verilog_expression(composed.verilog(), {})
+
+            self.assertEqual(emitted.width, 24)
+            self.assertEqual(emitted.raw, composed.evaluate())
+            self.assertEqual(emitted.raw, _twos_complement(24, expected_value))
 
 
 class SaturateSignedTest(unittest.TestCase):

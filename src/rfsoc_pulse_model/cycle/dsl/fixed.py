@@ -39,6 +39,20 @@ def _truncate_signed_verilog(expr: Expr, target_width: int) -> str:
     return f"$signed(({expr.verilog()})[{target_width - 1}:0])"
 
 
+def _resize_signed_verilog_text(
+    expression: str,
+    source_width: int,
+    target_width: int,
+) -> str:
+    if target_width > source_width:
+        extra = target_width - source_width
+        sign_bit = f"($signed({expression}) < 0)"
+        return f"$signed({{{{{extra}{{{sign_bit}}}}}, {expression}}})"
+    if target_width == source_width:
+        return f"$signed({expression})"
+    return f"$signed(({expression})[{target_width - 1}:0])"
+
+
 @dataclass(frozen=True)
 class SignedMulExpr(Expr):
     left: Expr
@@ -103,11 +117,23 @@ class RoundShiftTiesAwayFromZeroExpr(Expr):
     def verilog(self) -> str:
         signed_value = _signed_expr(self.value)
         if self.shift == 0:
-            return signed_value
+            return _truncate_signed_verilog(self.value, self.result_width)
         extended = _sign_extend_verilog(self.value, self.value.width + 1)
         bias = _signed_literal(self.result_width, 1 << (self.shift - 1))
-        positive = f"(({signed_value} + {bias}) >>> {self.shift})"
-        negative = f"(-(((-{extended}) + {bias}) >>> {self.shift}))"
+        positive_raw_width = max(self.value.width, self.result_width)
+        negative_raw_width = max(self.value.width + 1, self.result_width)
+        positive_raw = f"(({signed_value} + {bias}) >>> {self.shift})"
+        negative_raw = f"(-(((-{extended}) + {bias}) >>> {self.shift}))"
+        positive = _resize_signed_verilog_text(
+            positive_raw,
+            positive_raw_width,
+            self.result_width,
+        )
+        negative = _resize_signed_verilog_text(
+            negative_raw,
+            negative_raw_width,
+            self.result_width,
+        )
         return f"(({signed_value} < 0) ? {negative} : {positive})"
 
 

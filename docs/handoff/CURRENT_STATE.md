@@ -76,7 +76,7 @@ production manifest:
 The four candidates are registered separately as `architecture_pending` and are
 not included in `HARDWARE_MODULES`, production RTL, or
 `production_integration_ready`. The calibrated H/V candidate passes its
-13-test focused file, including Golden identity-profile quantization across
+14-test focused file, including Golden identity-profile quantization across
 all nine H/V range pairs, consecutive-beat throughput, deliberate Golden
 saturation rails, and deterministic Verilog/port-width checks. The equivalence
 fixture uses an in-memory nominal-gain-normalized map to isolate this
@@ -99,12 +99,15 @@ and [production-2spc-boundary.md](../superpowers/plans/2026-08-23-production-2sp
 
 ## Verification Boundary
 
-At the current migration checkout, the full Python regression under the bundled
-Python 3.12.13 runtime reports 327 tests passing and 8 host-dependent Windows
-symbolic-link capability skips. Fresh catalog, RFDC probe, and connected-shell
-evidence are bound to the current environment manifest. The real OOC run
-reported 0 synthesis errors, 0 critical warnings, 0 synthesis warnings, and
-0 bonded IOBs.
+The historical full Python regression result is 327 tests passing and 8
+host-dependent Windows symbolic-link capability skips, scoped to baseline
+`commit:c118362`. The full Python regression on this branch was interrupted
+with exit 1 before a unittest summary, so it is unclaimed and no branch-wide
+pass count is asserted. The current focused calibrated H/V file has 14 tests
+and the current Cycle suite has 51 tests. Fresh catalog, RFDC probe, and
+connected-shell evidence are bound to the current environment manifest. The
+real OOC run reported 0 synthesis errors, 0 critical warnings, 0 synthesis
+warnings, and 0 bonded IOBs.
 
 These results prove the bounded OOC shell contract. They do not prove
 post-route timing, runtime MTS/SYSREF behavior, or production data-path and
