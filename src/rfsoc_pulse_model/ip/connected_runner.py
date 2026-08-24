@@ -650,6 +650,7 @@ def _canonical_cdc15_pair(source: str, destination: str) -> tuple[str, str] | No
 def _parse_cdc_report(report: str) -> set[tuple[str, str]]:
     report = _normalize_report_newlines(report)
     _validate_report_header(report, "report_cdc -details")
+    requires_cdc15_inventory = "report_cdc -details -show_waiver" in report
     if "\nCDC Report\n" not in report:
         raise ValueError("CDC report title is missing")
     cdc_body = report.split("\nCDC Report\n", 1)[1].strip()
@@ -736,7 +737,7 @@ def _parse_cdc_report(report: str) -> set[tuple[str, str]]:
         or bool(blocks) != bool(summary or waived_summary)
     ):
         raise ValueError("CDC summary/detail counts do not match")
-    if observed_waived.get("CDC-15", 0) and observed_cdc15_pairs != set(CDC15_ENDPOINT_PAIRS):
+    if requires_cdc15_inventory and observed_cdc15_pairs != set(CDC15_ENDPOINT_PAIRS):
         raise ValueError("CDC-15 endpoint inventory does not match the measured set")
     return pairs
 

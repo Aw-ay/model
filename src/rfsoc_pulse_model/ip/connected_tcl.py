@@ -33,6 +33,11 @@ def _value(value: str, field: str) -> str:
     return value
 
 
+def _vivado_name_filter(suffix: str) -> str:
+    """Return a literal NAME =~ expression safe for bracketed Vivado pin names."""
+    return "NAME =~ */" + suffix.replace("[", r"\[").replace("]", r"\]")
+
+
 @dataclass(frozen=True)
 class ConnectedTclArtifacts:
     request_bytes: bytes
@@ -315,15 +320,16 @@ def _emit_verification(request: ConnectedShellRequest, rfdc: str, properties: tu
         "proc vendor_cdc15_exact_pins {suffix candidates} { set result {}; foreach candidate $candidates { set name [get_property NAME $candidate]; if {[string equal $suffix [string range $name end-[expr {[string length $suffix] - 1}] end]]} { lappend result $candidate } }; return $result }",
         "set vendor_cdc15_expected_pairs [list "
         + " ".join(
-            f"[list {{{source}}} {{{destination}}}]"
+            f"[list {{{source}}} {{{destination}}} "
+            f"{{{_vivado_name_filter(source)}}} {{{_vivado_name_filter(destination)}}}]"
             for source, destination in CDC15_ENDPOINT_PAIRS
         ) + "]",
         "set vendor_cdc15_discovered_pairs {}",
         "set vendor_cdc15_resolved_pairs {}",
         "foreach vendor_cdc15_pair $vendor_cdc15_expected_pairs {",
-        "  lassign $vendor_cdc15_pair vendor_cdc15_source_suffix vendor_cdc15_destination_suffix",
-        "  set vendor_cdc15_source_candidates [get_pins -hier -quiet -filter [format {NAME =~ */%s} $vendor_cdc15_source_suffix]]",
-        "  set vendor_cdc15_destination_candidates [get_pins -hier -quiet -filter [format {NAME =~ */%s} $vendor_cdc15_destination_suffix]]",
+        "  lassign $vendor_cdc15_pair vendor_cdc15_source_suffix vendor_cdc15_destination_suffix vendor_cdc15_source_filter vendor_cdc15_destination_filter",
+        "  set vendor_cdc15_source_candidates [get_pins -hier -quiet -filter $vendor_cdc15_source_filter]",
+        "  set vendor_cdc15_destination_candidates [get_pins -hier -quiet -filter $vendor_cdc15_destination_filter]",
         "  set vendor_cdc15_source_pin [vendor_cdc15_exact_pins $vendor_cdc15_source_suffix $vendor_cdc15_source_candidates]",
         "  set vendor_cdc15_destination_pin [vendor_cdc15_exact_pins $vendor_cdc15_destination_suffix $vendor_cdc15_destination_candidates]",
         "  if {[llength $vendor_cdc15_source_pin] != 1 || [llength $vendor_cdc15_destination_pin] != 1} { error {AMD RFDC CDC-15 waiver endpoint inventory mismatch} }",

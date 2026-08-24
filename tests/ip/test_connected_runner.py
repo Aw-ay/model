@@ -160,8 +160,34 @@ Row  ID     Severity  Description                                 Depth  Excepti
 
 def measured_cdc15_pairs() -> tuple[tuple[str, str], ...]:
     """The 60 CDC-15 endpoint suffix pairs measured from the RFDC OOC run."""
-    from rfsoc_pulse_model.ip.cdc_inventory import CDC15_ENDPOINT_PAIRS
-    return CDC15_ENDPOINT_PAIRS
+    ipif = lambda index: f"rfdc_0/inst/IP2Bus_Data_reg[{index}]/D"
+    marker_counter = (
+        ("rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc11/mrk_cntr_ff_reg[0]/C", ipif(0)),
+        ("rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc12/mrk_cntr_ff_reg[1]/C", ipif(1)),
+        ("rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc33/mrk_cntr_ff_reg[2]/C", ipif(2)),
+        ("rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc33/mrk_cntr_ff_reg[3]/C", ipif(3)),
+        ("rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc02/mrk_cntr_ff_reg[4]/C", ipif(4)),
+        ("rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc30/mrk_cntr_ff_reg[5]/C", ipif(5)),
+        ("rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc03/mrk_cntr_ff_reg[6]/C", ipif(6)),
+        ("rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc03/mrk_cntr_ff_reg[7]/C", ipif(7)),
+    )
+    marker_location = (
+        ("rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc13/mrk_loc_ff_reg[0]/C", ipif(16)),
+        ("rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc12/mrk_loc_ff_reg[1]/C", ipif(17)),
+        ("rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc12/mrk_loc_ff_reg[2]/C", ipif(18)),
+        ("rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc12/mrk_loc_ff_reg[3]/C", ipif(19)),
+    )
+    internal_destinations = tuple(ipif(index) for index in range(8, 16))
+    adc_internal = tuple(
+        (f"rfdc_0/inst/connected_rfdc_shell_rfdc_0_0_rf_wrapper_i/rx{tile}_u_adc/INTERNAL_FBRC_DIV2_MUX", destination)
+        for tile in range(4) for destination in internal_destinations
+    )
+    dac_internal = tuple(
+        (f"rfdc_0/inst/connected_rfdc_shell_rfdc_0_0_rf_wrapper_i/tx{tile}_u_dac/INTERNAL_FBRC_MUX", destination)
+        for tile in range(2) for destination in internal_destinations
+    )
+    assert tuple(map(len, (marker_counter, marker_location, adc_internal, dac_internal))) == (8, 4, 32, 16)
+    return marker_counter + marker_location + adc_internal + dac_internal
 
 
 def measured_cdc15_report(*, extra_pair: tuple[str, str] | None = None) -> bytes:
@@ -327,7 +353,7 @@ clk_a         clk_a         Clean                      Partial False Path
         from rfsoc_pulse_model.ip.connected_runner import _parse_cdc_report
 
         self.assertEqual(
-            _parse_cdc_report(waived_vendor_cdc_report().decode("utf-8")),
+            _parse_cdc_report(waived_vendor_cdc_report().decode("utf-8").replace(" -show_waiver", "")),
             {("clk_pl_0", "RFADC0_CLK")},
         )
 
@@ -344,10 +370,12 @@ clk_a         clk_a         Clean                      Partial False Path
 
     def test_cdc15_requires_the_measured_exact_endpoint_inventory(self) -> None:
         """A legal-looking extra CDC-15 row must not broaden the vendor waiver."""
+        from rfsoc_pulse_model.ip.cdc_inventory import CDC15_ENDPOINT_PAIRS
         from rfsoc_pulse_model.ip.connected_runner import _parse_cdc_report
 
         canonical = measured_cdc15_pairs()
         self.assertEqual(len(canonical), 60)
+        self.assertEqual(CDC15_ENDPOINT_PAIRS, canonical)
         self.assertEqual(_parse_cdc_report(measured_cdc15_report().decode("utf-8")), {
             ("RFADC0_CLK", "clk_pl_0"),
         })
@@ -357,11 +385,18 @@ clk_a         clk_a         Clean                      Partial False Path
                 "rfdc_0/inst/IP2Bus_Data_reg[20]/D",
             )).decode("utf-8"))
 
+    def test_cdc15_waiver_report_requires_all_measured_rows(self) -> None:
+        """A post-waiver report cannot omit the complete CDC-15 inventory."""
+        from rfsoc_pulse_model.ip.connected_runner import _parse_cdc_report
+
+        with self.assertRaisesRegex(ValueError, "CDC-15.*inventory"):
+            _parse_cdc_report(waived_vendor_cdc_report().decode("utf-8"))
+
     def test_cdc_accepts_exact_rfdc_clk_valid_reset_waiver(self) -> None:
         from rfsoc_pulse_model.ip.connected_runner import _parse_cdc_report
 
         self.assertEqual(
-            _parse_cdc_report(waived_vendor_reset_cdc_report().decode("utf-8")),
+            _parse_cdc_report(waived_vendor_reset_cdc_report().decode("utf-8").replace(" -show_waiver", "")),
             {("RFADC0_CLK", "clk_pl_0")},
         )
 
