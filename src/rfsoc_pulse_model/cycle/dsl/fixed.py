@@ -31,6 +31,12 @@ def _sign_extend_verilog(expr: Expr, target_width: int) -> str:
     return f"{{{{{extra}{{{sign_bit}}}}}, {expr.verilog()}}}"
 
 
+def _truncate_signed_verilog(expr: Expr, target_width: int) -> str:
+    if target_width >= expr.width:
+        return _signed_expr(expr)
+    return f"$signed(({expr.verilog()})[{target_width - 1}:0])"
+
+
 @dataclass(frozen=True)
 class SignedMulExpr(Expr):
     left: Expr
@@ -133,9 +139,10 @@ class SaturateSignedExpr(Expr):
         maximum = (1 << (self.result_width - 1)) - 1
         max_literal = _signed_literal(self.result_width, maximum)
         min_literal = _signed_literal(self.result_width, minimum)
+        in_range = _truncate_signed_verilog(self.value, self.result_width)
         return (
             f"(({signed_value} > {max_literal}) ? {max_literal} : "
-            f"(({signed_value} < {min_literal}) ? {min_literal} : {signed_value}))"
+            f"(({signed_value} < {min_literal}) ? {min_literal} : {in_range}))"
         )
 
 

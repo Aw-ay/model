@@ -1,10 +1,12 @@
 import copy
+import re
 import unittest
 
 from rfsoc_pulse_model.common.config import ModelConfig
 from rfsoc_pulse_model.common.reflection_types import PhysicalChannelMapEntry
 from rfsoc_pulse_model.common.types import ChannelRole, GainRange
 from rfsoc_pulse_model.cycle.dsl.expr import ConstExpr
+from rfsoc_pulse_model.cycle.dsl.emitter import VerilogEmitter
 from rfsoc_pulse_model.cycle.dsl.fixed import signed_out_of_range, saturate_signed
 from rfsoc_pulse_model.cycle.dsl.simulator import CycleSimulator
 from rfsoc_pulse_model.cycle.hardware.production_calibrated_hv import (
@@ -251,6 +253,21 @@ class RxCalibratedHvFrontend2SpcTest(unittest.TestCase):
         self.assertEqual(blocked["calibration_error_o"], 1)
         self.assertEqual(blocked["sample_base_index_o"], 0)
         self.assertEqual(blocked["incident_i_lane1_o"], 0)
+
+    def test_emitted_rtl_preserves_both_h_and_v_24_bit_lane_results(self) -> None:
+        rtl = VerilogEmitter().emit(RxCalibratedHvFrontend2Spc(self.config, self.coefficients))
+
+        self.assertEqual(rtl, VerilogEmitter().emit(RxCalibratedHvFrontend2Spc(self.config, self.coefficients)))
+        self.assertIn("module rx_2spc_calibrated_hv_frontend", rtl)
+
+        for signal_name in (
+            "next_incident_i_lane0",
+            "next_incident_q_lane0",
+            "next_incident_i_lane1",
+            "next_incident_q_lane1",
+        ):
+            assignment = next(line for line in rtl.splitlines() if f"{signal_name} =" in line)
+            self.assertGreaterEqual(len(re.findall(r"\[23:0\]", assignment)), 2)
 
 
 if __name__ == "__main__":

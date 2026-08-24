@@ -1,6 +1,8 @@
 import unittest
+import re
 
 from rfsoc_pulse_model.cycle.dsl.emitter import VerilogEmitter
+from rfsoc_pulse_model.cycle.dsl import concat
 from rfsoc_pulse_model.cycle.dsl.expr import ConstExpr
 from rfsoc_pulse_model.cycle.dsl.fixed import (
     round_shift_ties_away_from_zero,
@@ -198,6 +200,42 @@ class SaturateSignedTest(unittest.TestCase):
         self.assertEqual(expr.width, 24)
         self.assertIn("$signed", expr.verilog())
         self.assertIn("?", expr.verilog())
+
+    def test_saturate_signed_emits_an_explicit_24_bit_result(self) -> None:
+        expr = saturate_signed(ConstExpr((1 << 30) + 3, 48, signed=True), 24)
+
+        self.assertRegex(expr.verilog(), r"\[23:0\]")
+
+    def test_concat_of_saturated_samples_preserves_both_24_bit_lanes_in_emitted_rtl(self) -> None:
+        class SaturateConcatProbe(RTLModule):
+            module_name = "saturate_concat_probe"
+
+            def __init__(self) -> None:
+                super().__init__()
+                self.clk_i = self.input("clk_i")
+                self.rst_i = self.input("rst_i")
+                self.reset_signal = self.rst_i
+                self.packed_o = self.output_reg("packed_o", 48)
+                self.next_packed = self.wire("next_packed", 48)
+
+            def compute(self) -> None:
+                self.drive(
+                    self.next_packed,
+                    concat(
+                        (
+                            saturate_signed(ConstExpr((1 << 30) + 3, 48, signed=True), 24),
+                            saturate_signed(ConstExpr(-((1 << 30) + 5), 48, signed=True), 24),
+                        )
+                    ),
+                )
+
+            def clock(self) -> None:
+                self.update(self.packed_o, self.next_packed, reset=0)
+
+        rtl = VerilogEmitter().emit(SaturateConcatProbe())
+        assignment = next(line for line in rtl.splitlines() if "next_packed =" in line)
+
+        self.assertGreaterEqual(len(re.findall(r"\[23:0\]", assignment)), 2)
 
 
 class SignedOutOfRangeTest(unittest.TestCase):
