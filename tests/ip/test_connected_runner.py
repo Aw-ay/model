@@ -719,6 +719,7 @@ All paths are Safely Timed.
             self.assertFalse(accepted.production_integration_ready)
             loaded = runner.load_validated_success(*context)
             self.assertEqual(loaded.connected_request_sha256, evidence.connected_request_sha256)
+            self.assertEqual(loaded.bonded_iob_used, 0)
             with self.assertRaisesRegex(RuntimeError, "launcher failed"):
                 runner.run(artifacts, *context, launcher=lambda _attempt: 9)
             with self.assertRaisesRegex(ValueError, "success"):

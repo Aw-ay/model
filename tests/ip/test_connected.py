@@ -86,6 +86,7 @@ def fixture() -> tuple[object, ConnectedShellEvidence, tuple[object, ...]]:
         mts_configuration_verified=True, mts_runtime_verified=False,
         validate_bd_design_passed=True, synthesis_completed=True,
         cdc_safe=True, clock_safety_verified=True,
+        bonded_iob_used=0,
         report_hashes=(("cdc", sha("cdc")), ("clock_interaction", sha("clock")),
                        ("timing_summary", sha("timing")), ("utilization", sha("util"))),
     )
@@ -231,6 +232,7 @@ class ConnectedShellContractTest(unittest.TestCase):
         self.assertTrue(summary["synthesis_completed"])
         self.assertTrue(summary["cdc_safe"])
         self.assertTrue(summary["clock_safety_verified"])
+        self.assertEqual(summary["bonded_iob_used"], 0)
         self.assertTrue(summary["mts_configuration_verified"])
         self.assertFalse(summary["mts_runtime_verified"])
         self.assertEqual(summary["blocking_reasons"], ["production_integration_pending"])
@@ -279,6 +281,7 @@ class ConnectedShellContractTest(unittest.TestCase):
             "mts_group": dataclasses.replace(evidence, mts_groups=(dataclasses.replace(evidence.mts_groups[0], tiles=(9,)), evidence.mts_groups[1])),
             "mts_configuration": dataclasses.replace(evidence, mts_configuration_verified=False),
             "clock_safety": dataclasses.replace(evidence, clock_safety_verified=False),
+            "bonded_iob": dataclasses.replace(evidence, bonded_iob_used=1),
         }
         for name, corrupted in faults.items():
             with self.subTest(name=name):
@@ -305,6 +308,10 @@ class ConnectedShellContractTest(unittest.TestCase):
         payload = json.loads(encoded)
         payload["mts_configuration_verified"] = 1
         with self.assertRaisesRegex(ValueError, "boolean"):
+            parse_connected_evidence(canonical_connected_json_bytes(payload))
+        payload = json.loads(encoded)
+        del payload["bonded_iob_used"]
+        with self.assertRaisesRegex(ValueError, "unknown or missing"):
             parse_connected_evidence(canonical_connected_json_bytes(payload))
 
 

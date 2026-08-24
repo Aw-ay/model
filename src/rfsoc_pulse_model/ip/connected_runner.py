@@ -457,7 +457,8 @@ def build_candidate_evidence(
         # This truth is derived only after exact RFDC CONFIG readback above.
         True, booleans["mts_runtime_verified"],
         booleans["validate_bd_design_passed"], booleans["synthesis_completed"],
-        report_safety["cdc_safe"], report_safety["clock_safety_verified"], reports,
+        report_safety["cdc_safe"], report_safety["clock_safety_verified"],
+        report_safety["bonded_iob_used"], reports,
         request.environment_manifest_sha256,
     )
 
