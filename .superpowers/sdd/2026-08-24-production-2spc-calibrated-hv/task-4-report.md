@@ -112,3 +112,55 @@ OK
 The updated candidate file has 14 passing tests; the updated full Cycle suite
 has 51 passing tests. No authority/config/handoff files, plan files, Vivado
 files, or production readiness fields were modified in this fix round.
+
+## Fix Round 2 — source-vector-bound saturation evidence
+
+Re-review identified that the round-1 paired boundary test still used zero
+candidate vectors and that its test-only overflow override did not consume
+`lane_bus`. The test is now explicitly bound to the same representable source
+vector in both branches:
+
+- The selected H HIGH lane uses the signed 16-bit source vector `[32767,
+  -32768]` for both I and Q; every other lane is explicitly zero.
+- Golden derives the positive and negative deliberate boundary responses
+  `[524288.1875, -524288.25]` from that shared source vector and authority
+  quantizes them to `[8388607, -8388608]`, the signed output rails, for both
+  real and imaginary samples.
+- The test-only candidate override selects and sign-decodes the actual H lane
+  expression from `lane_bus` before deriving the corresponding out-of-range
+  rounded codes `[8388611, 8388611, -8388612, -8388612]`. Assertions prove
+  the observed values were `[32767, 32767, -32768, -32768]` and that both
+  candidate samples used the shared source/derived boundary pair.
+- The intentional contract distinction remains explicit: Golden saturates
+  numerically, while candidate runtime overflow sets sticky
+  `calibration_error_o`, suppresses `incident_valid_o`, and zeroes all four
+  packed I/Q data outputs. This is a deliberate fail-closed candidate test,
+  not a claim that the two out-of-contract outputs are numerically equal.
+
+Round-2 focused boundary test:
+
+```text
+python -m unittest tests.cycle.test_production_calibrated_hv.RxCalibratedHvFrontend2SpcTest.test_golden_saturation_boundary_binds_source_vector_to_intentional_candidate_fail_closed_injection -v
+Ran 1 test in 0.011s
+OK
+```
+
+Focused calibrated-H/V file:
+
+```text
+python -m unittest tests.cycle.test_production_calibrated_hv -v
+Ran 14 tests in 0.205s
+OK
+```
+
+Full Cycle suite:
+
+```text
+python -m unittest discover -s tests/cycle -v
+Ran 51 tests in 0.252s
+OK
+```
+
+Only the test and this report were changed for round 2. Authority/config,
+handoff, plan, Task 5/6 evidence, Vivado/build files, and production-readiness
+semantics remain unchanged. No Vivado attempt was created.

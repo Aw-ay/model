@@ -520,7 +520,7 @@ class RxCalibratedHvFrontend2SpcTest(unittest.TestCase):
             reflection_format.minimum,
         )
 
-    def test_golden_saturation_boundary_pairs_with_intentional_candidate_fail_closed_injection(self) -> None:
+    def test_golden_saturation_boundary_binds_source_vector_to_intentional_candidate_fail_closed_injection(self) -> None:
         config = self._normalized_identity_config()
         calibration = CalibrationProfile.identity(
             frequency_hz=2.8e9,
@@ -529,14 +529,28 @@ class RxCalibratedHvFrontend2SpcTest(unittest.TestCase):
             rcs_anchor=None,
         )
         reflection_format = config.numeric_formats["reflection_sample"]
-        boundary_response = reflection_format.to_float(reflection_format.maximum) + 0.25
-        rounded_boundary = round_ties_away_from_zero(
-            boundary_response * (1 << reflection_format.fraction_bits)
+        source_vector = np.array([32767, -32768], dtype=np.int64)
+
+        def boundary_response_for(source_value: int) -> float:
+            if source_value >= 0:
+                return reflection_format.to_float(reflection_format.maximum) + 0.25
+            return reflection_format.to_float(reflection_format.minimum) - 0.25
+
+        boundary_responses = np.array(
+            [boundary_response_for(int(value)) for value in source_vector],
+            dtype=np.float64,
         )
-        self.assertGreater(rounded_boundary, reflection_format.maximum)
+        rounded_boundaries = [
+            round_ties_away_from_zero(
+                response * (1 << reflection_format.fraction_bits)
+            )
+            for response in boundary_responses
+        ]
+        self.assertGreater(rounded_boundaries[0], reflection_format.maximum)
+        self.assertLess(rounded_boundaries[1], reflection_format.minimum)
 
         samples = np.zeros((8, 2), dtype=np.complex128)
-        samples[0, :] = boundary_response
+        samples[0, :] = boundary_responses + 1j * boundary_responses
         golden_result = GoldenEightChannelAdcFrontend(
             config,
             calibration,
@@ -553,18 +567,54 @@ class RxCalibratedHvFrontend2SpcTest(unittest.TestCase):
                 Polarization.V: GainRange.HIGH,
             },
         )
-        self.assertEqual(
-            reflection_format.quantize(golden_result.incident.samples[0, 0].real),
-            reflection_format.maximum,
-        )
-        self.assertEqual(
-            reflection_format.quantize(golden_result.incident.samples[0, 1].real),
-            reflection_format.maximum,
-        )
+        for sample_index, expected_code in enumerate(
+            (reflection_format.maximum, reflection_format.minimum)
+        ):
+            self.assertEqual(
+                reflection_format.quantize(
+                    golden_result.incident.samples[0, sample_index].real
+                ),
+                expected_code,
+            )
+            self.assertEqual(
+                reflection_format.quantize(
+                    golden_result.incident.samples[0, sample_index].imag
+                ),
+                expected_code,
+            )
+
+        i_vectors = np.zeros((8, 2), dtype=np.int64)
+        q_vectors = np.zeros((8, 2), dtype=np.int64)
+        i_vectors[0, :] = source_vector
+        q_vectors[0, :] = source_vector
+        self.assertEqual(i_vectors[0, :].tolist(), source_vector.tolist())
+        self.assertEqual(q_vectors[0, :].tolist(), source_vector.tolist())
+        self.assertTrue(np.array_equal(i_vectors[1:, :], np.zeros((7, 2), dtype=np.int64)))
+        self.assertTrue(np.array_equal(q_vectors[1:, :], np.zeros((7, 2), dtype=np.int64)))
 
         class BoundaryOverflowFrontend(RxCalibratedHvFrontend2Spc):
+            observed_source_values: list[int] = []
+            derived_boundary_codes: list[int] = []
+
             def _calibrate_sample(self, lane_bus, polarization, selected_range):
                 if polarization is Polarization.H and selected_range.eq(0).evaluate():
+                    selected_sample = self._select_sample(
+                        lane_bus,
+                        Polarization.H,
+                        selected_range,
+                    )
+                    observed_source = _signed_code(
+                        selected_sample.evaluate(),
+                        selected_sample.width,
+                    )
+                    self.observed_source_values.append(observed_source)
+                    boundary_response = boundary_response_for(observed_source)
+                    rounded_boundary = round_ties_away_from_zero(
+                        boundary_response
+                        * (1 << reflection_format.fraction_bits)
+                    )
+                    self.derived_boundary_codes.append(rounded_boundary)
+                    self.assert_observed_source = True
                     rounded = ConstExpr(rounded_boundary, 48, signed=True)
                     return saturate_signed(rounded, 24), signed_out_of_range(rounded, 24)
                 return super()._calibrate_sample(lane_bus, polarization, selected_range)
@@ -572,13 +622,25 @@ class RxCalibratedHvFrontend2SpcTest(unittest.TestCase):
         module = BoundaryOverflowFrontend(config, HvCalibrationCoefficients.identity())
         sim = CycleSimulator(module)
         sim.step({"rst_i": 1})
+        module.observed_source_values.clear()
+        module.derived_boundary_codes.clear()
+        module.assert_observed_source = False
         out = sim.step(
             self._beat_from_vectors(
-                np.zeros((8, 2), dtype=np.int64),
-                np.zeros((8, 2), dtype=np.int64),
+                i_vectors,
+                q_vectors,
                 selected_h=0,
                 selected_v=0,
             )
+        )
+        self.assertTrue(module.assert_observed_source)
+        self.assertEqual(
+            module.observed_source_values,
+            [int(source_vector[0]), int(source_vector[0]), int(source_vector[1]), int(source_vector[1])],
+        )
+        self.assertEqual(
+            module.derived_boundary_codes,
+            [rounded_boundaries[0], rounded_boundaries[0], rounded_boundaries[1], rounded_boundaries[1]],
         )
         self.assertEqual(out["calibration_error_o"], 1)
         self.assertEqual(out["incident_valid_o"], 0)
