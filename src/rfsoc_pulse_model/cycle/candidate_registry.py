@@ -12,6 +12,7 @@ from .hardware.production_2spc import (
     RxContinuousIngress2Spc,
     TxContinuousEgress2Spc,
 )
+from .hardware.production_calibrated_hv import RxCalibratedHvFrontend2Spc
 
 
 @dataclass(frozen=True)
@@ -58,5 +59,14 @@ CANDIDATE_HARDWARE_MODULES = (
         production=False,
         accepts_config=True,
         architecture_owner="tx_2spc_continuous_egress",
+    ),
+    CandidateHardwareModuleRegistration(
+        cycle_class=RxCalibratedHvFrontend2Spc,
+        module_name="rx_2spc_calibrated_hv_frontend",
+        verilog_filename="rx_2spc_calibrated_hv_frontend.v",
+        implementation_kind=ImplementationKind.ARCHITECTURE_PENDING,
+        production=False,
+        accepts_config=True,
+        architecture_owner="rx_2spc_calibrated_hv_frontend",
     ),
 )
