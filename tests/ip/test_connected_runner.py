@@ -920,9 +920,45 @@ All paths are Safely Timed.
                 encoding="utf-8"
             )
         )
-        self.assertEqual(bundle["bundle_schema_version"], 1)
-        self.assertRegex(bundle["evidence_checkout"]["git_head"], r"^[0-9a-f]{40}$")
-        self.assertRegex(bundle["environment"]["manifest_sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(bundle["bundle_schema_version"], 2)
+        checkout = bundle["evidence_checkout"]
+        source_head = checkout["source_head"]
+        self.assertRegex(source_head, r"^[0-9a-f]{40}$")
+        environment = bundle["environment"]
+        self.assertRegex(environment["manifest_sha256"], r"^[0-9a-f]{64}$")
+        manifest_path = repository / environment["manifest_path"]
+        self.assertTrue(manifest_path.is_file())
+        manifest_bytes = manifest_path.read_bytes()
+        self.assertEqual(
+            hashlib.sha256(manifest_bytes).hexdigest(), environment["manifest_sha256"]
+        )
+        manifest = json.loads(manifest_bytes)
+        self.assertEqual(manifest["evidence_source_head"], source_head)
+        self.assertEqual(manifest["python"], environment["python"])
+        self.assertEqual(manifest["vivado"], environment["vivado"])
+        self.assertEqual(manifest["vivado_build"], environment["vivado_build"])
+        self.assertEqual(manifest["ready"], environment["ready"])
+        self.assertEqual(manifest["blocking_reasons"], environment["blocking_reasons"])
+        current_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repository, capture_output=True,
+            text=True, check=True,
+        ).stdout.strip()
+        self.assertEqual(
+            subprocess.run(
+                ["git", "merge-base", "--is-ancestor", source_head, current_head],
+                cwd=repository, capture_output=True, text=True, check=False,
+            ).returncode,
+            0,
+            "evidence source HEAD must be an ancestor of the current checkout",
+        )
+        handoff = bundle["handoff_commit"]
+        parent_head = handoff["parent_head"]
+        parent_of_current = subprocess.run(
+            ["git", "rev-parse", f"{current_head}^"], cwd=repository,
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        self.assertIn(parent_head, {current_head, parent_of_current})
+        self.assertIn("cannot self-reference", handoff["bundle_commit_relation"])
         self.assertEqual(bundle["focused_test_counts"], {"calibrated_hv": 14, "cycle": 57})
         connected = bundle["connected"]
         self.assertEqual(connected["timing_scope"], "ooc_boundary_only")
@@ -955,7 +991,7 @@ All paths are Safely Timed.
         else:
             self.assertEqual(connected["bonded_iob_used"], 0)
 
-        handoff = "\n".join(
+        handoff_text = "\n".join(
             (repository / "docs" / "handoff" / name).read_text(encoding="utf-8")
             for name in (
                 "CURRENT_STATE.md",
@@ -963,16 +999,19 @@ All paths are Safely Timed.
                 "IMPLEMENTATION_HISTORY.md",
                 "NEXT_STEPS.md",
                 "OPEN_ISSUES.md",
+                "DECISIONS.md",
+                "NEW_CHAT_PROMPT.md",
             )
         )
-        self.assertIn("connected_evidence_bundle.json", handoff)
-        self.assertIn("ooc_boundary_only", handoff)
-        self.assertIn("production_integration_ready=false", handoff)
-        self.assertIn("baseline `c118362`", handoff)
-        self.assertIn("14 calibrated-H/V tests and 57 Cycle", handoff)
-        self.assertNotIn("51 Cycle", handoff)
-        self.assertNotIn("full Python regression reports 327", handoff)
-        self.assertNotIn("Task 6 forbidden", handoff)
+        self.assertIn("connected_evidence_bundle.json", handoff_text)
+        self.assertIn("ooc_boundary_only", handoff_text)
+        self.assertIn("production_integration_ready=false", handoff_text)
+        self.assertIn("baseline `c118362`", handoff_text)
+        self.assertIn("14 calibrated-H/V tests and 57 Cycle", handoff_text)
+        self.assertNotIn("51 Cycle", handoff_text)
+        self.assertNotIn("full Python regression reports 327", handoff_text)
+        self.assertNotIn("Task 5/6 OOC structural CLEAN", handoff_text)
+        self.assertNotIn("Do not start Task 6 again", handoff_text)
 
 
 if __name__ == "__main__":

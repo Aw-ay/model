@@ -85,7 +85,7 @@ class HandoffDocsTest(unittest.TestCase):
         self.assertIn("NEW_CHAT_PROMPT.md", docs["README.md"])
         self.assertIn("BD-T5-REPORT-PROTOCOL", docs["OPEN_ISSUES.md"])
         self.assertIn("BD-T5-MTS-AUTHORITY", docs["OPEN_ISSUES.md"])
-        self.assertIn("Do not start Task 6", docs["NEW_CHAT_PROMPT.md"])
+        self.assertIn("Install or recreate Python 3.12", docs["NEW_CHAT_PROMPT.md"])
 
 
 if __name__ == "__main__":

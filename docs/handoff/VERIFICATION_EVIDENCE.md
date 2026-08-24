@@ -3,10 +3,14 @@
 ## Current PR-hardening evidence
 
 `docs/handoff/connected_evidence_bundle.json` is the immutable, tracked index
-for the fresh evidence attempt. It is bound to base HEAD
-`e70e774427df1179c6abdef307613c023c0c7013`, Phase-0 manifest SHA-256
-`9569a9a5a9b005169322adc45e12c2220f9a91a4788b8ea57d762fb96c83cec7`, the
+for the fresh evidence attempt. It hashes the exact tracked
+[environment manifest](environment_manifest.json) as
+`e2c3767f8654c5580f593e61577c64970a0a92b633439c753bf4e4f78454f59b`, binds
+the exact clean source HEAD `e70e774427df1179c6abdef307613c023c0c7013`, the
 four unchanged authority hashes, and the exact 60-pair CDC-15 inventory hash.
+The source HEAD is evidence provenance, not a claim that it is the later
+handoff commit: the bundle records the parent-to-descendant relationship
+because a commit cannot self-reference the content hash it contains.
 
 Before writing the bundle, the following command completed with exit 0:
 

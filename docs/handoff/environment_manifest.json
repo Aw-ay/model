@@ -1,0 +1,18 @@
+{
+  "blocking_reasons": [
+    "python_3_12_required"
+  ],
+  "environment_schema_version": 1,
+  "evidence_source_head": "e70e774427df1179c6abdef307613c023c0c7013",
+  "fresh_attempt_status": "blocked_before_catalog",
+  "git_status_clean": true,
+  "host": "DESKTOP-8RB5JS5",
+  "os": "Windows-11-10.0.26200-SP0",
+  "python": "3.13.2",
+  "ready": false,
+  "repo_root": "E:\\AWAY\\RFSOC-model-vivado-e70e774",
+  "timezone": "Asia/Hong_Kong",
+  "vivado": "2025.2",
+  "vivado_build": "6299465",
+  "vivado_executable": "C:\\AMDDesignTools\\2025.2\\Vivado\\bin\\vivado.bat"
+}

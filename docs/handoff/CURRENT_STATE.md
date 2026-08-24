@@ -2,11 +2,15 @@
 
 ## Current Evidence Snapshot
 
-The tracked [connected evidence bundle](connected_evidence_bundle.json) is the
-authoritative handoff record for the PR-review-hardening base checkout
-`e70e774427df1179c6abdef307613c023c0c7013`. It records a fresh detached
-worktree with no pre-existing `build/`, `.Xil/`, `.runs/`, `.gen/`, or
-`project.xpr` artifacts.
+The tracked [connected evidence bundle](connected_evidence_bundle.json) and
+its hashed [environment manifest](environment_manifest.json) are the
+authoritative handoff record. The evidence source HEAD is
+`e70e774427df1179c6abdef307613c023c0c7013`, the exact clean detached worktree
+used for the attempt; it is explicitly distinct from the later handoff commit
+that carries this bundle. A commit cannot self-reference its own content hash,
+so the bundle records its pre-bundle parent relationship and tests require the
+source HEAD to remain an ancestor of the current checkout. The worktree had no
+pre-existing `build/`, `.Xil/`, `.runs/`, `.gen/`, or `project.xpr` artifacts.
 
 Vivado is installed at the measured 2025.2 build 6299465, but the fresh
 Phase-0 environment was not ready because the only available interpreter was

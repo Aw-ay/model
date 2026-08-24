@@ -5,7 +5,7 @@
     "ip_lock.json": "0b1c92166b605a0a56c867fb144896d23599ade95538a29b72c9c274437fbe97",
     "ps_platform.json": "a1243d78a90ccb8e00f34749a8c3f18bf55870130c8f8372402407cf5591d11f"
   },
-  "bundle_schema_version": 1,
+  "bundle_schema_version": 2,
   "connected": {
     "bonded_iob_used": null,
     "cdc15_endpoint_count": 60,
@@ -24,19 +24,24 @@
     "verification_tcl_sha256": null
   },
   "evidence_checkout": {
-    "git_head": "e70e774427df1179c6abdef307613c023c0c7013",
-    "git_status_clean": true
+    "source_head": "e70e774427df1179c6abdef307613c023c0c7013",
+    "source_head_relation": "Exact clean detached checkout used for the fresh environment attempt; it must remain an ancestor of the checkout that carries this bundle."
   },
   "environment": {
     "blocking_reasons": [
       "python_3_12_required"
     ],
-    "manifest_sha256": "9569a9a5a9b005169322adc45e12c2220f9a91a4788b8ea57d762fb96c83cec7",
+    "manifest_path": "docs/handoff/environment_manifest.json",
+    "manifest_sha256": "e2c3767f8654c5580f593e61577c64970a0a92b633439c753bf4e4f78454f59b",
     "python": "3.13.2",
     "ready": false,
     "vivado": "2025.2",
     "vivado_build": "6299465",
     "vivado_executable": "C:\\AMDDesignTools\\2025.2\\Vivado\\bin\\vivado.bat"
+  },
+  "handoff_commit": {
+    "bundle_commit_relation": "The bundle revision is committed in a descendant of parent_head; a Git commit cannot self-reference the hash of the bundle it contains.",
+    "parent_head": "8eb0fea3fefa24f88d4a7cd141a7f3bef59e21b4"
   },
   "focused_test_counts": {
     "calibrated_hv": 14,
