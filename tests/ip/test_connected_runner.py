@@ -279,6 +279,7 @@ def clean_utilization_report() -> bytes:
 +----------------------------+------+-------+-----------+-------+
 | CLB LUTs                   | 10   | 0     | 100       | 10.00%|
 | CLB Registers              | 20   | 0     | 200       | 10.00%|
+| Bonded IOB                 | 0    | 0     | 728       | 0.00% |
 +----------------------------+------+-------+-----------+-------+
 
 """)
@@ -313,9 +314,10 @@ All paths are Safely Timed.
 |          Site Type         |  Used | Fixed | Prohibited | Available | Util% |
 | CLB LUTs                   |    10 |     0 |          0 |       100 | 10.00 |
 | CLB Registers              |    20 |     0 |          0 |       200 | 10.00 |
+| Bonded IOB                 |     0 |     0 |          0 |       728 | 0.00  |
 
 """)
-        _parse_utilization_report(utilization.decode("utf-8"))
+        self.assertEqual(_parse_utilization_report(utilization.decode("utf-8")), 0)
 
         clock = vivado_report_bytes(report_header(
             "report_clock_interaction -file ./clock_interaction.rpt"
@@ -331,6 +333,32 @@ clk_a         clk_b         Ignored                    False Path
 
 """)
         _parse_clock_interaction_report(clock.decode("utf-8"), {("clk_a", "clk_b")})
+
+    def test_utilization_requires_exactly_one_zero_bonded_iob_row(self) -> None:
+        """Omitting or using a package IOB must block structural evidence."""
+        from rfsoc_pulse_model.ip.connected_runner import _parse_utilization_report
+
+        clean = clean_utilization_report().decode("utf-8").replace("\r\n", "\n")
+        missing = clean.replace(
+            "| Bonded IOB                 | 0    | 0     | 728       | 0.00% |\n",
+            "",
+        )
+        used_one = clean.replace(
+            "| Bonded IOB                 | 0    | 0     | 728       | 0.00% |",
+            "| Bonded IOB                 | 1    | 0     | 728       | 0.14% |",
+        )
+        duplicate = clean.replace(
+            "+----------------------------+------+-------+-----------+-------+\n\n",
+            "| Bonded IOB                 | 0    | 0     | 728       | 0.00% |\n"
+            "+----------------------------+------+-------+-----------+-------+\n\n",
+        )
+
+        with self.assertRaisesRegex(ValueError, "Bonded IOB"):
+            _parse_utilization_report(missing)
+        with self.assertRaisesRegex(ValueError, "Bonded IOB"):
+            _parse_utilization_report(used_one)
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            _parse_utilization_report(duplicate)
 
     def test_clock_interaction_accepts_clean_partial_false_path(self) -> None:
         from rfsoc_pulse_model.ip.connected_runner import _parse_clock_interaction_report
@@ -728,6 +756,8 @@ All paths are Safely Timed.
             "unsafe_clock": lambda attempt: attempt.report_paths["clock_interaction"].write_bytes(clean_clock_report().replace(b"clk_a         clk_b", b"clk_a         clk_c")),
             "unconstrained_timing": lambda attempt: attempt.report_paths["timing_summary"].write_bytes(clean_timing_report().rstrip() + b"\nclk_a         clk_a         clk_b\n"),
             "synthetic_utilization": lambda attempt: attempt.report_paths["utilization"].write_bytes(b"UTILIZATION_OK\n"),
+            "missing_bonded_iob": lambda attempt: attempt.report_paths["utilization"].write_bytes(clean_utilization_report().replace(b"| Bonded IOB                 | 0    | 0     | 728       | 0.00% |", b"")),
+            "used_bonded_iob": lambda attempt: attempt.report_paths["utilization"].write_bytes(clean_utilization_report().replace(b"| Bonded IOB                 | 0    | 0     | 728       | 0.00% |", b"| Bonded IOB                 | 1    | 0     | 728       | 0.14% |")),
             "wrong_version": lambda attempt: attempt.report_paths["cdc"].write_bytes(clean_cdc_report().replace(b"Vivado v.2025.2", b"Vivado v.2025.1")),
             "wrong_build": lambda attempt: attempt.report_paths["cdc"].write_bytes(clean_cdc_report().replace(b"Build 6299465", b"Build 6299464")),
             "oversized_report": lambda attempt: attempt.report_paths["cdc"].write_bytes(clean_cdc_report() + b"x" * 1_000_000),

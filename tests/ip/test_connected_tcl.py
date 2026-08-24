@@ -140,6 +140,14 @@ class ConnectedTclTest(unittest.TestCase):
         )
         self.assertIn("open_run synth_1", verification)
         self.assertIn(
+            "set bonded_iob_used [llength [get_sites -quiet -filter {SITE_TYPE == IOB && IS_USED == 1}]]",
+            verification,
+        )
+        self.assertIn(
+            "if {$bonded_iob_used != 0} { error {Bonded IOB utilization must be zero} }",
+            verification,
+        )
+        self.assertIn(
             'connected_emit BOOL validate_bd_design_passed [expr {[llength $validate_result] == 0 ? "true" : "false"}]',
             verification,
         )

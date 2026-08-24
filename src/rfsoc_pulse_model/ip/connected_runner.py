@@ -534,7 +534,7 @@ def _parse_readback(raw: bytes) -> dict[str, object]:
 
 def _validate_report_safety(
     attempt: ConnectedShellAttempt, *, ooc_boundary: bool = False,
-) -> dict[str, bool]:
+) -> dict[str, bool | int]:
     """Parse only the measured Vivado 2025.2 synthesized-report grammar."""
     reports = {
         name: _read_attempt_report(attempt, path).decode("utf-8", "strict")
@@ -543,8 +543,12 @@ def _validate_report_safety(
     cdc_pairs = _parse_cdc_report(reports["cdc"])
     _parse_clock_interaction_report(reports["clock_interaction"], cdc_pairs)
     _parse_timing_summary_report(reports["timing_summary"], ooc_boundary=ooc_boundary)
-    _parse_utilization_report(reports["utilization"])
-    return {"cdc_safe": True, "clock_safety_verified": True}
+    bonded_iob_used = _parse_utilization_report(reports["utilization"])
+    return {
+        "cdc_safe": True,
+        "clock_safety_verified": True,
+        "bonded_iob_used": bonded_iob_used,
+    }
 
 
 _REPORT_HEADER = re.compile(
@@ -859,8 +863,8 @@ def _parse_timing_summary_report(
             raise ValueError("OOC timing report contains non-boundary unconstrained paths")
 
 
-def _parse_utilization_report(report: str) -> None:
-    """Require the measured Vivado utilization table, not a placeholder token."""
+def _parse_utilization_report(report: str) -> int:
+    """Return the measured zero Bonded IOB count from a valid utilization table."""
     report = _normalize_report_newlines(report)
     _validate_report_header(report, "report_utilization")
     if (
@@ -888,6 +892,7 @@ def _parse_utilization_report(report: str) -> None:
     if not rows:
         raise ValueError("utilization table has no measured rows")
     seen: set[str] = set()
+    bonded_iob_used: int | None = None
     for site, used_text, fixed_text, prohibited_text, available_text, util_text in rows:
         site = site.strip()
         if not site or site in seen:
@@ -906,6 +911,13 @@ def _parse_utilization_report(report: str) -> None:
             or utilization > 100.0
         ):
             raise ValueError("utilization table contains impossible measured values")
+        if site == "Bonded IOB":
+            bonded_iob_used = used
+    if bonded_iob_used is None:
+        raise ValueError("utilization table is missing the measured Bonded IOB row")
+    if bonded_iob_used != 0:
+        raise ValueError("Bonded IOB utilization must be zero")
+    return bonded_iob_used
 
 
 def _read_attempt_report(attempt: ConnectedShellAttempt, path: Path) -> bytes:
