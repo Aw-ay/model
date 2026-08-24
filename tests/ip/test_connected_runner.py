@@ -977,11 +977,14 @@ All paths are Safely Timed.
         )
         handoff = bundle["handoff_commit"]
         parent_head = handoff["parent_head"]
-        parent_of_current = subprocess.run(
-            ["git", "rev-parse", f"{current_head}^"], cwd=repository,
-            capture_output=True, text=True, check=True,
-        ).stdout.strip()
-        self.assertIn(parent_head, {current_head, parent_of_current})
+        self.assertEqual(
+            subprocess.run(
+                ["git", "merge-base", "--is-ancestor", parent_head, current_head],
+                cwd=repository, capture_output=True, text=True, check=False,
+            ).returncode,
+            0,
+            "declared pre-bundle parent must remain an ancestor of the current checkout",
+        )
         self.assertIn("cannot self-reference", handoff["bundle_commit_relation"])
         self.assertEqual(bundle["focused_test_counts"], {"calibrated_hv": 14, "cycle": 57})
         connected = bundle["connected"]
