@@ -129,7 +129,11 @@ class ConnectedTclTest(unittest.TestCase):
             verification,
         )
         self.assertIn("AMD RFDC CDC-13 waiver endpoint discovery mismatch", verification)
-        self.assertIn("AMD RFDC CDC-15 waiver endpoint inventory mismatch", verification)
+        self.assertIn("set vendor_cdc15_expected_marker_counter 8", verification)
+        self.assertIn("set vendor_cdc15_expected_marker_location 4", verification)
+        self.assertIn("set vendor_cdc15_expected_adc_internal 32", verification)
+        self.assertIn("set vendor_cdc15_expected_dac_internal 16", verification)
+        self.assertIn("AMD RFDC CDC-15 exact endpoint inventory mismatch", verification)
         self.assertIn("open_run synth_1", verification)
         self.assertIn(
             'connected_emit BOOL validate_bd_design_passed [expr {[llength $validate_result] == 0 ? "true" : "false"}]',

@@ -158,6 +158,40 @@ Row  ID     Severity  Description                                 Depth  Excepti
 """)
 
 
+def measured_cdc15_pairs() -> tuple[tuple[str, str], ...]:
+    """The 60 CDC-15 endpoint suffix pairs measured from the RFDC OOC run."""
+    from rfsoc_pulse_model.ip.cdc_inventory import CDC15_ENDPOINT_PAIRS
+    return CDC15_ENDPOINT_PAIRS
+
+
+def measured_cdc15_report(*, extra_pair: tuple[str, str] | None = None) -> bytes:
+    """A canonical CDC-15 fixture with optional regex-legal inventory drift."""
+    pairs = measured_cdc15_pairs() + (() if extra_pair is None else (extra_pair,))
+    rows = "\n".join(
+        "{row:3d}  CDC-15  Warning   Clock enable controlled CDC structure detected      0  False Path  "
+        "connected_rfdc_shell_i/{source}  connected_rfdc_shell_i/{destination}  Y".format(
+            row=index, source=source, destination=destination,
+        )
+        for index, (source, destination) in enumerate(pairs, 1)
+    )
+    return vivado_report_bytes(report_header(
+        "report_cdc -details -show_waiver -file ./cdc.rpt"
+    ) + f"""CDC Report
+
+ID      Waived Endpoints
+------  ----------------
+CDC-15                {len(pairs)}
+
+Source Clock: RFADC0_CLK
+Destination Clock: clk_pl_0
+CDC Type: No Common Primary Clock
+
+Row  ID      Severity  Description                                     Depth  Exception   Source (From)  Destination (To)  Waived
+---  ------  --------  ----------------------------------------------  -----  ----------  -------------  ----------------  ------
+{rows}
+""")
+
+
 def clean_clock_report() -> bytes:
     return vivado_report_bytes(report_header("report_clock_interaction -file ./clock_interaction.rpt") + """Clock Interaction Report
 
@@ -307,6 +341,21 @@ clk_a         clk_a         Clean                      Partial False Path
         ).replace("CDC-13                 1", "CDC-11                 1")
         with self.assertRaisesRegex(ValueError, "vendor waiver"):
             _parse_cdc_report(unsafe)
+
+    def test_cdc15_requires_the_measured_exact_endpoint_inventory(self) -> None:
+        """A legal-looking extra CDC-15 row must not broaden the vendor waiver."""
+        from rfsoc_pulse_model.ip.connected_runner import _parse_cdc_report
+
+        canonical = measured_cdc15_pairs()
+        self.assertEqual(len(canonical), 60)
+        self.assertEqual(_parse_cdc_report(measured_cdc15_report().decode("utf-8")), {
+            ("RFADC0_CLK", "clk_pl_0"),
+        })
+        with self.assertRaisesRegex(ValueError, "CDC-15.*inventory"):
+            _parse_cdc_report(measured_cdc15_report(extra_pair=(
+                "rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc99/mrk_cntr_ff_reg[8]/C",
+                "rfdc_0/inst/IP2Bus_Data_reg[20]/D",
+            )).decode("utf-8"))
 
     def test_cdc_accepts_exact_rfdc_clk_valid_reset_waiver(self) -> None:
         from rfsoc_pulse_model.ip.connected_runner import _parse_cdc_report

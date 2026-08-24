@@ -22,6 +22,7 @@ import tempfile
 
 from rfsoc_pulse_model.common.config import ModelConfig
 
+from .cdc_inventory import CDC15_ENDPOINT_PAIRS
 from .connected import (
     ConnectedAuthorityBytes,
     ConnectedShellEvidence,
@@ -635,17 +636,14 @@ def _is_exact_vendor_cdc_waiver(
             source_match and destination_match
             and source_match.group(1) == destination_match.group(1)
         )
-    if identifier != "CDC-15" or re.fullmatch(
-        r".*/rfdc_0/inst/IP2Bus_Data_reg\[[0-9]+\]/D", destination,
-    ) is None:
-        return False
-    return any(
-        re.fullmatch(pattern, source) is not None
-        for pattern in (
-            r".*/rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc[0-9]+/mrk_(?:cntr|loc)_ff_reg\[[0-9]+\]/C",
-            r".*/rfdc_0/inst/connected_.*_rf_wrapper_i/rx[0-3]_u_adc/INTERNAL_FBRC_DIV2_MUX",
-            r".*/rfdc_0/inst/connected_.*_rf_wrapper_i/tx[0-1]_u_dac/INTERNAL_FBRC_MUX",
-        )
+    return identifier == "CDC-15" and _canonical_cdc15_pair(source, destination) is not None
+
+
+def _canonical_cdc15_pair(source: str, destination: str) -> tuple[str, str] | None:
+    return next(
+        (pair for pair in CDC15_ENDPOINT_PAIRS
+         if source.endswith(pair[0]) and destination.endswith(pair[1])),
+        None,
     )
 
 
@@ -690,6 +688,7 @@ def _parse_cdc_report(report: str) -> set[tuple[str, str]]:
     pairs: set[tuple[str, str]] = set()
     observed: dict[str, int] = {}
     observed_waived: dict[str, int] = {}
+    observed_cdc15_pairs: set[tuple[str, str]] = set()
     for block in blocks:
         pair = (block.group(1), block.group(2))
         if pair in pairs: raise ValueError("duplicate CDC clock-pair block")
@@ -705,12 +704,16 @@ def _parse_cdc_report(report: str) -> set[tuple[str, str]]:
         if not details: raise ValueError("CDC clock-pair block lacks detail rows")
         for identifier, severity, source, destination, waived in details:
             if waived == "Y":
-                if (
-                    identifier not in _VENDOR_CDC_WAIVER_IDS
-                    or not _is_exact_vendor_cdc_waiver(identifier, source, destination)
-                ):
+                if identifier == "CDC-15" and _canonical_cdc15_pair(source, destination) is None:
+                    raise ValueError("CDC-15 endpoint inventory contains an unapproved vendor waiver")
+                if identifier not in _VENDOR_CDC_WAIVER_IDS or not _is_exact_vendor_cdc_waiver(identifier, source, destination):
                     raise ValueError("CDC detail contains an unapproved vendor waiver")
                 observed_waived[identifier] = observed_waived.get(identifier, 0) + 1
+                if identifier == "CDC-15":
+                    canonical = _canonical_cdc15_pair(source, destination)
+                    if canonical is None or canonical in observed_cdc15_pairs:
+                        raise ValueError("CDC-15 endpoint inventory is invalid")
+                    observed_cdc15_pairs.add(canonical)
             else:
                 if severity != "Info": raise ValueError("CDC detail contains unsafe circuitry")
                 observed[identifier] = observed.get(identifier, 0) + 1
@@ -733,6 +736,8 @@ def _parse_cdc_report(report: str) -> set[tuple[str, str]]:
         or bool(blocks) != bool(summary or waived_summary)
     ):
         raise ValueError("CDC summary/detail counts do not match")
+    if observed_waived.get("CDC-15", 0) and observed_cdc15_pairs != set(CDC15_ENDPOINT_PAIRS):
+        raise ValueError("CDC-15 endpoint inventory does not match the measured set")
     return pairs
 
 
