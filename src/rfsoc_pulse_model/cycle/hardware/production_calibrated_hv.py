@@ -8,7 +8,12 @@ from ...common.reflection_types import PhysicalChannelMapEntry
 from ...common.types import ChannelRole, GainRange, Polarization
 from ..dsl import ConstExpr, RTLModule, concat, mux
 from ..dsl.expr import Expr, _signed_value
-from ..dsl.fixed import round_shift_ties_away_from_zero, saturate_signed, signed_mul
+from ..dsl.fixed import (
+    round_shift_ties_away_from_zero,
+    signed_mul,
+    signed_out_of_range,
+    saturate_signed,
+)
 
 
 CALIBRATION_COEFFICIENT_FORMAT = FixedFormat(
@@ -117,12 +122,7 @@ class RxCalibratedHvFrontend2Spc(RTLModule):
 
         self.config = config
         requested_coefficients = coefficients or HvCalibrationCoefficients.identity()
-        self.coefficients_valid = self._coefficients_are_valid(requested_coefficients)
-        self.coefficients = (
-            requested_coefficients
-            if self.coefficients_valid
-            else HvCalibrationCoefficients.identity()
-        )
+        self.coefficients = HvCalibrationCoefficients(**requested_coefficients.__dict__)
         self.range_indices = self._resolve_echo_indices(config.adc_channel_map)
 
         self.clk_i = self.input("clk_i")
@@ -192,14 +192,6 @@ class RxCalibratedHvFrontend2Spc(RTLModule):
         return indices
 
     @staticmethod
-    def _coefficients_are_valid(coefficients: HvCalibrationCoefficients) -> bool:
-        try:
-            HvCalibrationCoefficients(**coefficients.__dict__)
-        except (TypeError, ValueError):
-            return False
-        return True
-
-    @staticmethod
     def _slice_channel(data: Expr, channel_index: int) -> Expr:
         lsb = channel_index * 16
         return _signed(data.slice(lsb + 15, lsb))
@@ -247,7 +239,7 @@ class RxCalibratedHvFrontend2Spc(RTLModule):
             ),
         )
 
-    def _calibrate_sample(self, lane_bus: Expr, polarization: Polarization, selected_range: Expr) -> Expr:
+    def _calibrate_sample(self, lane_bus: Expr, polarization: Polarization, selected_range: Expr) -> tuple[Expr, Expr]:
         sample = self._select_sample(lane_bus, polarization, selected_range)
         coefficient = self._coefficient_expr(polarization, selected_range)
         product = signed_mul(sample, coefficient, 48)
@@ -256,22 +248,53 @@ class RxCalibratedHvFrontend2Spc(RTLModule):
             CALIBRATION_TO_REFLECTION_SHIFT,
             48,
         )
-        return saturate_signed(rounded, 24)
+        overflow = signed_out_of_range(rounded, 24)
+        return saturate_signed(rounded, 24), overflow
 
-    def _pack_lane_pair(self, lane_bus: Expr, selected_range_h: Expr, selected_range_v: Expr) -> Expr:
+    def _pack_lane_pair(self, lane_bus: Expr, selected_range_h: Expr, selected_range_v: Expr) -> tuple[Expr, Expr]:
+        h_sample, h_overflow = self._calibrate_sample(
+            lane_bus,
+            Polarization.H,
+            selected_range_h,
+        )
+        v_sample, v_overflow = self._calibrate_sample(
+            lane_bus,
+            Polarization.V,
+            selected_range_v,
+        )
         return concat(
             (
-                self._calibrate_sample(lane_bus, Polarization.V, selected_range_v),
-                self._calibrate_sample(lane_bus, Polarization.H, selected_range_h),
+                v_sample,
+                h_sample,
             )
-        )
+        ), h_overflow | v_overflow
 
     def compute(self) -> None:
         prior_fault = self.format_error_o | self.gap_error_o | self.calibration_error_o
         reserved_range = self.selected_range_h_i.eq(3) | self.selected_range_v_i.eq(3)
-        invalid_coefficients = ConstExpr(int(not self.coefficients_valid), 1)
+        i_lane0_data, i_lane0_overflow = self._pack_lane_pair(
+            self.rx_i_lane0_i,
+            self.selected_range_h_i,
+            self.selected_range_v_i,
+        )
+        q_lane0_data, q_lane0_overflow = self._pack_lane_pair(
+            self.rx_q_lane0_i,
+            self.selected_range_h_i,
+            self.selected_range_v_i,
+        )
+        i_lane1_data, i_lane1_overflow = self._pack_lane_pair(
+            self.rx_i_lane1_i,
+            self.selected_range_h_i,
+            self.selected_range_v_i,
+        )
+        q_lane1_data, q_lane1_overflow = self._pack_lane_pair(
+            self.rx_q_lane1_i,
+            self.selected_range_h_i,
+            self.selected_range_v_i,
+        )
+        runtime_overflow = i_lane0_overflow | q_lane0_overflow | i_lane1_overflow | q_lane1_overflow
         fault_now = self.frontend_enable_i & (
-            self.format_error_i | self.gap_error_i | reserved_range | invalid_coefficients
+            self.format_error_i | self.gap_error_i | reserved_range | runtime_overflow
         )
         accepted = self.frontend_enable_i & self.rx_valid_i & (~prior_fault) & (~fault_now)
         zero_lane = ConstExpr(0, 2 * 24)
@@ -281,11 +304,7 @@ class RxCalibratedHvFrontend2Spc(RTLModule):
             self.next_incident_i_lane0,
             mux(
                 accepted,
-                self._pack_lane_pair(
-                    self.rx_i_lane0_i,
-                    self.selected_range_h_i,
-                    self.selected_range_v_i,
-                ),
+                i_lane0_data,
                 zero_lane,
             ),
         )
@@ -293,11 +312,7 @@ class RxCalibratedHvFrontend2Spc(RTLModule):
             self.next_incident_q_lane0,
             mux(
                 accepted,
-                self._pack_lane_pair(
-                    self.rx_q_lane0_i,
-                    self.selected_range_h_i,
-                    self.selected_range_v_i,
-                ),
+                q_lane0_data,
                 zero_lane,
             ),
         )
@@ -305,11 +320,7 @@ class RxCalibratedHvFrontend2Spc(RTLModule):
             self.next_incident_i_lane1,
             mux(
                 accepted,
-                self._pack_lane_pair(
-                    self.rx_i_lane1_i,
-                    self.selected_range_h_i,
-                    self.selected_range_v_i,
-                ),
+                i_lane1_data,
                 zero_lane,
             ),
         )
@@ -317,11 +328,7 @@ class RxCalibratedHvFrontend2Spc(RTLModule):
             self.next_incident_q_lane1,
             mux(
                 accepted,
-                self._pack_lane_pair(
-                    self.rx_q_lane1_i,
-                    self.selected_range_h_i,
-                    self.selected_range_v_i,
-                ),
+                q_lane1_data,
                 zero_lane,
             ),
         )
@@ -347,8 +354,7 @@ class RxCalibratedHvFrontend2Spc(RTLModule):
         )
         self.drive(
             self.next_calibration_error,
-            self.calibration_error_o
-            | (self.frontend_enable_i & (reserved_range | invalid_coefficients)),
+            self.calibration_error_o | (self.frontend_enable_i & (reserved_range | runtime_overflow)),
         )
         self.drive(
             self.next_selected_range_h,

@@ -4,6 +4,7 @@ from rfsoc_pulse_model.cycle.dsl.emitter import VerilogEmitter
 from rfsoc_pulse_model.cycle.dsl.expr import ConstExpr
 from rfsoc_pulse_model.cycle.dsl.fixed import (
     round_shift_ties_away_from_zero,
+    signed_out_of_range,
     saturate_signed,
     signed_mul,
 )
@@ -18,17 +19,25 @@ def _twos_complement(width: int, value: int) -> int:
 class FixedPointProbe(RTLModule):
     module_name = "fixed_point_probe"
 
-    def __init__(self, product: ConstExpr, rounded: ConstExpr, saturated: ConstExpr) -> None:
+    def __init__(
+        self,
+        product: ConstExpr,
+        rounded: ConstExpr,
+        saturated: ConstExpr,
+        out_of_range: ConstExpr,
+    ) -> None:
         super().__init__()
         self.clk_i = self.input("clk_i")
         self.rst_i = self.input("rst_i")
         self.product_o = self.output("product_o", 48)
         self.rounded_o = self.output_reg("rounded_o", 24)
         self.saturated_o = self.output_reg("saturated_o", 24)
+        self.out_of_range_o = self.output_reg("out_of_range_o")
         self.reset_signal = self.rst_i
         self._product = product
         self._rounded = rounded
         self._saturated = saturated
+        self._out_of_range = out_of_range
 
     def compute(self) -> None:
         self.drive(self.product_o, self._product)
@@ -36,6 +45,7 @@ class FixedPointProbe(RTLModule):
     def clock(self) -> None:
         self.update(self.rounded_o, self._rounded, reset=0)
         self.update(self.saturated_o, self._saturated, reset=0)
+        self.update(self.out_of_range_o, self._out_of_range, reset=0)
 
 
 class SignedMultiplyTest(unittest.TestCase):
@@ -73,6 +83,10 @@ class SignedMultiplyTest(unittest.TestCase):
                 ConstExpr((1 << 23) + 1, 32, signed=True),
                 24,
             ),
+            out_of_range=signed_out_of_range(
+                ConstExpr((1 << 23) + 1, 32, signed=True),
+                24,
+            ),
         )
         sim = CycleSimulator(probe)
 
@@ -81,12 +95,14 @@ class SignedMultiplyTest(unittest.TestCase):
         self.assertEqual(outputs["product_o"], _twos_complement(48, -63))
         self.assertEqual(outputs["rounded_o"], _twos_complement(24, -2))
         self.assertEqual(outputs["saturated_o"], _twos_complement(24, (1 << 23) - 1))
+        self.assertEqual(outputs["out_of_range_o"], 1)
 
         rtl = VerilogEmitter().emit(probe)
         self.assertEqual(rtl, VerilogEmitter().emit(probe))
         self.assertIn("output reg [47:0] product_o", rtl)
         self.assertIn("output reg [23:0] rounded_o", rtl)
         self.assertIn("output reg [23:0] saturated_o", rtl)
+        self.assertIn("output reg out_of_range_o", rtl)
         self.assertIn("$signed", rtl)
         self.assertIn(">>> 2", rtl)
         self.assertIn("?", rtl)
@@ -182,6 +198,28 @@ class SaturateSignedTest(unittest.TestCase):
         self.assertEqual(expr.width, 24)
         self.assertIn("$signed", expr.verilog())
         self.assertIn("?", expr.verilog())
+
+
+class SignedOutOfRangeTest(unittest.TestCase):
+    def test_signed_out_of_range_flags_values_beyond_both_rails(self) -> None:
+        positive = signed_out_of_range(ConstExpr((1 << 23), 32, signed=True), 24)
+        negative = signed_out_of_range(ConstExpr(-(1 << 23) - 1, 32, signed=True), 24)
+        high_endpoint = signed_out_of_range(ConstExpr((1 << 23) - 1, 32, signed=True), 24)
+        low_endpoint = signed_out_of_range(ConstExpr(-(1 << 23), 32, signed=True), 24)
+
+        self.assertEqual(positive.evaluate(), 1)
+        self.assertEqual(negative.evaluate(), 1)
+        self.assertEqual(high_endpoint.evaluate(), 0)
+        self.assertEqual(low_endpoint.evaluate(), 0)
+
+    def test_signed_out_of_range_emits_signed_compare_logic(self) -> None:
+        expr = signed_out_of_range(ConstExpr((1 << 23), 32, signed=True), 24)
+
+        self.assertEqual(expr.width, 1)
+        self.assertFalse(expr.signed)
+        self.assertIn("$signed", expr.verilog())
+        self.assertIn(">", expr.verilog())
+        self.assertIn("<", expr.verilog())
 
 
 if __name__ == "__main__":

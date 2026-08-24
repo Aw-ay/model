@@ -139,6 +139,38 @@ class SaturateSignedExpr(Expr):
         )
 
 
+@dataclass(frozen=True)
+class SignedOutOfRangeExpr(Expr):
+    value: Expr
+    result_width: int
+
+    def __post_init__(self) -> None:
+        _require_positive_width(self.result_width)
+        _require_signed_operand("value", self.value)
+
+    @property
+    def width(self) -> int:
+        return 1
+
+    @property
+    def signed(self) -> bool:
+        return False
+
+    def evaluate(self) -> int:
+        signed = _signed_value(self.value.evaluate(), self.value.width)
+        minimum = -(1 << (self.result_width - 1))
+        maximum = (1 << (self.result_width - 1)) - 1
+        return int(signed < minimum or signed > maximum)
+
+    def verilog(self) -> str:
+        signed_value = _signed_expr(self.value)
+        minimum = -(1 << (self.result_width - 1))
+        maximum = (1 << (self.result_width - 1)) - 1
+        max_literal = _signed_literal(self.result_width, maximum)
+        min_literal = _signed_literal(self.result_width, minimum)
+        return f"(({signed_value} > {max_literal}) | ({signed_value} < {min_literal}))"
+
+
 def signed_mul(left: Expr, right: Expr, result_width: int) -> Expr:
     return SignedMulExpr(left, right, result_width)
 
@@ -149,3 +181,7 @@ def round_shift_ties_away_from_zero(value: Expr, shift: int, result_width: int) 
 
 def saturate_signed(value: Expr, result_width: int) -> Expr:
     return SaturateSignedExpr(value, result_width)
+
+
+def signed_out_of_range(value: Expr, result_width: int) -> Expr:
+    return SignedOutOfRangeExpr(value, result_width)
