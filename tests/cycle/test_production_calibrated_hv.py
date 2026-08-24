@@ -1,9 +1,17 @@
 import copy
+import dataclasses
 import unittest
 
+import numpy as np
+
+from rfsoc_pulse_model.common.calibration_types import CalibrationProfile
 from rfsoc_pulse_model.common.config import ModelConfig
-from rfsoc_pulse_model.common.reflection_types import PhysicalChannelMapEntry
+from rfsoc_pulse_model.common.reflection_types import (
+    EightChannelAdcFrame,
+    PhysicalChannelMapEntry,
+)
 from rfsoc_pulse_model.common.types import ChannelRole, GainRange
+from rfsoc_pulse_model.common.types import Polarization, RangeSelectionMode, SampleDomain
 from rfsoc_pulse_model.cycle.dsl.expr import ConstExpr
 from rfsoc_pulse_model.cycle.dsl.emitter import VerilogEmitter
 from rfsoc_pulse_model.cycle.dsl.fixed import signed_out_of_range, saturate_signed
@@ -14,6 +22,7 @@ from rfsoc_pulse_model.cycle.hardware.production_calibrated_hv import (
     REFLECTION_SAMPLE_FORMAT,
     RxCalibratedHvFrontend2Spc,
 )
+from rfsoc_pulse_model.golden.adc_frontend import GoldenEightChannelAdcFrontend
 from tests.cycle.verilog_eval import evaluate_verilog_expression
 
 
@@ -24,6 +33,18 @@ def _pack_channels(values: list[int], width: int) -> int:
 
 def _pack_hv(h_value: int, v_value: int) -> int:
     return _pack_channels([h_value, v_value], 24)
+
+
+def _signed_code(value: int, width: int) -> int:
+    value &= (1 << width) - 1
+    return value - (1 << width) if value & (1 << (width - 1)) else value
+
+
+def _unpack_hv(value: int) -> tuple[int, int]:
+    return (
+        _signed_code(value, 24),
+        _signed_code(value >> 24, 24),
+    )
 
 
 class RxCalibratedHvFrontend2SpcTest(unittest.TestCase):
@@ -70,6 +91,37 @@ class RxCalibratedHvFrontend2SpcTest(unittest.TestCase):
             "selected_range_h_i": selected_h,
             "selected_range_v_i": selected_v,
         }
+
+    def _beat_from_vectors(
+        self,
+        i_vectors: np.ndarray,
+        q_vectors: np.ndarray,
+        *,
+        selected_h: int,
+        selected_v: int,
+        sample_base: int = 0,
+    ) -> dict[str, int]:
+        return {
+            "frontend_enable_i": 1,
+            "rx_valid_i": 1,
+            "rx_i_lane0_i": _pack_channels(i_vectors[:, 0].tolist(), 16),
+            "rx_q_lane0_i": _pack_channels(q_vectors[:, 0].tolist(), 16),
+            "rx_i_lane1_i": _pack_channels(i_vectors[:, 1].tolist(), 16),
+            "rx_q_lane1_i": _pack_channels(q_vectors[:, 1].tolist(), 16),
+            "sample_base_index_i": sample_base,
+            "stream_active_i": 1,
+            "format_error_i": 0,
+            "gap_error_i": 0,
+            "selected_range_h_i": selected_h,
+            "selected_range_v_i": selected_v,
+        }
+
+    def _normalized_identity_config(self) -> ModelConfig:
+        normalized_map = tuple(
+            dataclasses.replace(entry, nominal_gain_db=0.0)
+            for entry in self.config.adc_channel_map
+        )
+        return dataclasses.replace(self.config, adc_channel_map=normalized_map)
 
     def test_selects_only_echo_channels_for_every_valid_h_and_v_selector_pair(self) -> None:
         expected_h_i = {0: 101 << 4, 1: 201 << 4, 2: 301 << 4}
@@ -300,6 +352,221 @@ class RxCalibratedHvFrontend2SpcTest(unittest.TestCase):
         )
         self.assertEqual(emitted_i.raw & ((1 << 24) - 1), 301 << 4)
         self.assertEqual(emitted_i.raw >> 24, 501 << 4)
+
+    def test_golden_identity_profile_matches_quantized_candidate_for_all_hv_ranges(self) -> None:
+        # Normalize the in-memory map so this test isolates the candidate's
+        # fixed-point scalar boundary from the Golden nominal analog gains.
+        config = self._normalized_identity_config()
+        calibration = CalibrationProfile.identity(
+            frequency_hz=2.8e9,
+            temperature_c=25.0,
+            fixed_internal_delay_samples=64.0,
+            rcs_anchor=None,
+        )
+        i_vectors = np.array(
+            [
+                [32767, -32768],
+                [12345, -12345],
+                [-23456, 23456],
+                [1111, -1111],
+                [-30000, 30000],
+                [22222, -22222],
+                [-11111, 11111],
+                [3333, -3333],
+            ],
+            dtype=np.int64,
+        )
+        q_vectors = np.array(
+            [
+                [-1, 1],
+                [2345, -2345],
+                [-3001, 3001],
+                [4444, -4444],
+                [30000, -30000],
+                [-2222, 2222],
+                [11111, -11111],
+                [-5555, 5555],
+            ],
+            dtype=np.int64,
+        )
+        frame = EightChannelAdcFrame(
+            i_vectors.astype(np.complex128) + 1j * q_vectors,
+            np.zeros((8, 2), dtype=np.bool_),
+            SampleDomain.RFDC_COMPLEX_INPUT,
+            500_000_000,
+        )
+        golden = GoldenEightChannelAdcFrontend(config, calibration)
+        module = RxCalibratedHvFrontend2Spc(
+            config,
+            HvCalibrationCoefficients.identity(),
+        )
+        sim = CycleSimulator(module)
+        sim.step({"rst_i": 1})
+        reflection_format = config.numeric_formats["reflection_sample"]
+
+        for selected_h in range(3):
+            for selected_v in range(3):
+                result = golden.reconstruct(
+                    frame,
+                    mode=RangeSelectionMode.FIXED,
+                    fixed_ranges={
+                        Polarization.H: (GainRange.HIGH, GainRange.MID, GainRange.LOW)[selected_h],
+                        Polarization.V: (GainRange.HIGH, GainRange.MID, GainRange.LOW)[selected_v],
+                    },
+                )
+                out = sim.step(
+                    self._beat_from_vectors(
+                        i_vectors,
+                        q_vectors,
+                        selected_h=selected_h,
+                        selected_v=selected_v,
+                        sample_base=2 * (selected_h * 3 + selected_v),
+                    )
+                )
+                self.assertEqual(out["incident_valid_o"], 1)
+                for sample_index, lane_name in enumerate(
+                    ("incident_i_lane0_o", "incident_i_lane1_o")
+                ):
+                    expected_h_i = reflection_format.quantize(
+                        result.incident.samples[0, sample_index].real
+                    )
+                    expected_v_i = reflection_format.quantize(
+                        result.incident.samples[1, sample_index].real
+                    )
+                    self.assertEqual(
+                        _unpack_hv(out[lane_name]),
+                        (expected_h_i, expected_v_i),
+                    )
+                for sample_index, lane_name in enumerate(
+                    ("incident_q_lane0_o", "incident_q_lane1_o")
+                ):
+                    expected_h_q = reflection_format.quantize(
+                        result.incident.samples[0, sample_index].imag
+                    )
+                    expected_v_q = reflection_format.quantize(
+                        result.incident.samples[1, sample_index].imag
+                    )
+                    self.assertEqual(
+                        _unpack_hv(out[lane_name]),
+                        (expected_h_q, expected_v_q),
+                    )
+
+    def test_consecutive_valid_beats_have_registered_latency_and_no_backpressure(self) -> None:
+        module = RxCalibratedHvFrontend2Spc(self.config, self.coefficients)
+        sim = CycleSimulator(module)
+        sim.step({"rst_i": 1})
+        idle = sim.step(self.base_inputs)
+        self.assertEqual(idle["incident_valid_o"], 0)
+        self.assertEqual(module.latency_cycles, 1)
+        self.assertFalse(module.accepts_backpressure)
+        self.assertNotIn("ready", {port.name for port in module.ports})
+
+        outputs = []
+        for beat_index, sample_base in enumerate(range(0, 8, 2)):
+            outputs.append(
+                sim.step(
+                    self._beat(
+                        selected_h=beat_index % 3,
+                        selected_v=(beat_index + 1) % 3,
+                        sample_base=sample_base,
+                    )
+                )
+            )
+
+        self.assertEqual(
+            [out["incident_valid_o"] for out in outputs],
+            [1, 1, 1, 1],
+        )
+        self.assertEqual(
+            [out["sample_base_index_o"] for out in outputs],
+            [0, 2, 4, 6],
+        )
+
+    def test_golden_identity_profile_uses_authority_saturation_on_both_rails(self) -> None:
+        config = self._normalized_identity_config()
+        calibration = CalibrationProfile.identity(
+            frequency_hz=2.8e9,
+            temperature_c=25.0,
+            fixed_internal_delay_samples=64.0,
+            rcs_anchor=None,
+        )
+        reflection_format = config.numeric_formats["reflection_sample"]
+        positive_over = reflection_format.to_float(reflection_format.maximum) + 1.0
+        negative_over = reflection_format.to_float(reflection_format.minimum) - 1.0
+        samples = np.zeros((8, 2), dtype=np.complex128)
+        samples[0, 0] = positive_over
+        samples[4, 1] = negative_over
+        result = GoldenEightChannelAdcFrontend(config, calibration).reconstruct(
+            EightChannelAdcFrame(
+                samples,
+                np.zeros((8, 2), dtype=np.bool_),
+                SampleDomain.RFDC_COMPLEX_INPUT,
+                500_000_000,
+            ),
+            mode=RangeSelectionMode.FIXED,
+            fixed_ranges={
+                Polarization.H: GainRange.HIGH,
+                Polarization.V: GainRange.HIGH,
+            },
+        )
+
+        self.assertEqual(
+            reflection_format.quantize(result.incident.samples[0, 0].real),
+            reflection_format.maximum,
+        )
+        self.assertEqual(
+            reflection_format.quantize(result.incident.samples[1, 1].real),
+            reflection_format.minimum,
+        )
+
+    def test_candidate_verilog_is_byte_deterministic_with_complete_widths(self) -> None:
+        first_module = RxCalibratedHvFrontend2Spc(self.config, self.coefficients)
+        second_module = RxCalibratedHvFrontend2Spc(self.config, self.coefficients)
+        emitter = VerilogEmitter()
+        first = emitter.emit(first_module)
+        second = emitter.emit(second_module)
+        self.assertEqual(first, second)
+
+        expected_widths = {
+            "clk_i": 1,
+            "rst_i": 1,
+            "frontend_enable_i": 1,
+            "rx_valid_i": 1,
+            "rx_i_lane0_i": 128,
+            "rx_q_lane0_i": 128,
+            "rx_i_lane1_i": 128,
+            "rx_q_lane1_i": 128,
+            "sample_base_index_i": 64,
+            "stream_active_i": 1,
+            "format_error_i": 1,
+            "gap_error_i": 1,
+            "selected_range_h_i": 2,
+            "selected_range_v_i": 2,
+            "incident_valid_o": 1,
+            "incident_i_lane0_o": 48,
+            "incident_q_lane0_o": 48,
+            "incident_i_lane1_o": 48,
+            "incident_q_lane1_o": 48,
+            "sample_base_index_o": 64,
+            "stream_active_o": 1,
+            "format_error_o": 1,
+            "gap_error_o": 1,
+            "calibration_error_o": 1,
+            "selected_range_h_o": 2,
+            "selected_range_v_o": 2,
+        }
+        self.assertEqual(
+            {port.name: port.width for port in first_module.ports},
+            expected_widths,
+        )
+        for name, width in expected_widths.items():
+            declaration = f"{('input wire' if name.endswith('_i') or name in {'clk_i', 'rst_i'} else 'output reg')}"
+            if width == 1:
+                self.assertIn(f"{declaration} {name}", first)
+            else:
+                self.assertIn(f"{declaration} [{width - 1}:0] {name}", first)
+        self.assertNotIn("ready", first)
+        self.assertNotIn("backpressure", first)
 
 
 if __name__ == "__main__":

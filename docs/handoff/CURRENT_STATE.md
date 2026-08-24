@@ -69,9 +69,19 @@ production manifest:
   contiguous two-sample index checking and upstream fault propagation;
 - `tx_2spc_continuous_egress` is a new Cycle/RTL candidate for eight-way atomic
   DAC `{Q1,I1,Q0,I0}` packing and fail-closed underrun handling.
+- `rx_2spc_calibrated_hv_frontend` is a new Cycle/RTL candidate for selecting
+  the six configured H/V echo paths, applying construction-time scalar
+  calibration, and emitting two registered H/V samples per beat.
 
-The candidates are registered separately as `architecture_pending` and are not
-included in `HARDWARE_MODULES`, production RTL, or `production_integration_ready`.
+The four candidates are registered separately as `architecture_pending` and are
+not included in `HARDWARE_MODULES`, production RTL, or
+`production_integration_ready`. The calibrated H/V candidate passes its
+13-test focused file, including Golden identity-profile quantization across
+all nine H/V range pairs, consecutive-beat throughput, deliberate Golden
+saturation rails, and deterministic Verilog/port-width checks. The equivalence
+fixture uses an in-memory nominal-gain-normalized map to isolate this
+candidate's scalar fixed-point boundary; it does not claim nominal-gain,
+matrix, delay, or production-chain ownership.
 The legacy 2SPC classes remain reference-only and unchanged. Candidate design
 and execution records are in
 [production-2spc-boundary-design.md](../superpowers/specs/2026-08-23-production-2spc-boundary-design.md)

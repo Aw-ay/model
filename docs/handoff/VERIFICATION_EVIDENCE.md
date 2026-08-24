@@ -70,13 +70,37 @@ candidates:
 | `rx_2spc_continuous_ingress` | 8 ADC component streams, atomic valid, fixed lane/sample order, sticky gap/format fault, sample base +2 | focused Cycle tests pass |
 | `continuous_stream_timebase` | zero-based contiguous sample-base checking, missing/discontinuous beat fault, upstream fault propagation | focused Cycle tests pass |
 | `tx_2spc_continuous_egress` | eight-channel atomic ready, `{Q1,I1,Q0,I0}` packing, sticky fail-closed underrun | focused Cycle tests pass |
+| `rx_2spc_calibrated_hv_frontend` | H/V HIGH/MID/LOW echo selection, scalar fixed-point correction, two-sample registered output, sticky calibration overflow | 13 focused tests pass; normalized Golden boundary equivalence and deterministic Verilog/port-width evidence pass; `architecture_pending` |
 
-The candidate registry marks all three owners `architecture_pending` and keeps
+The candidate registry marks all four owners `architecture_pending` and keeps
 them out of the production `HARDWARE_MODULES` registry. Their deterministic
 Verilog emission is tested, but no production manifest, connected Vivado
 attempt, synthesis result, or production-integration claim is attached to
 these candidates. The four authority files and MTS configuration remain
 unchanged.
+
+### Calibrated H/V candidate (2026-08-24)
+
+`rx_2spc_calibrated_hv_frontend` is registered only in
+`CANDIDATE_HARDWARE_MODULES` with owner
+`rx_2spc_calibrated_hv_frontend`, `architecture_pending`, and
+`production=false`. Its focused test file passes 13 tests. The Golden
+identity-profile comparison covers all nine H/V HIGH/MID/LOW selector pairs,
+two samples per beat, signed I/Q values, and authority
+`reflection_sample` ties-away-from-zero quantization. The fixture uses an
+in-memory nominal-gain-normalized channel map to isolate the candidate's
+scalar fixed-point boundary; it does not claim nominal-gain normalization,
+receive matrix inversion, delay, or production reflection ownership.
+
+The same test file verifies deliberate Golden positive/negative saturation
+rails through the authority format, while the candidate's existing deliberate
+runtime-overflow case remains sticky and fail-closed. Consecutive valid beats
+with bases `0, 2, 4, 6` produce one registered output per cycle after the
+one-cycle boundary, with no backpressure port. Two fresh candidate instances
+emit byte-identical Verilog; all 26 ports have asserted widths, including
+128-bit packed ADC inputs, 48-bit packed H/V outputs, and the 64-bit sample
+base fields. The full focused Cycle suite after this addition is 50 tests
+passing. No Vivado attempt or production manifest was created.
 
 The tracked Golden acceptance records Vivado 2025.2 `xvlog`, `xelab`, and XSim success for the generated legacy 2SPC ingress testbench. Registered generated modules carry port, latency, throughput, and SHA metadata.
 
@@ -84,7 +108,9 @@ The following boundaries remain explicit:
 
 - no complete Cycle implementation exists for the continuous polarimetric reflection chain;
 - no complete Cycle implementation exists for the monitor detector/event chain;
-- bit/cycle equivalence beyond the legacy RFDC ingress has not been established;
+- complete production bit/cycle equivalence beyond the legacy RFDC ingress has
+  not been established; the calibrated H/V result above is limited to its
+  normalized candidate boundary and deterministic emitted-expression checks;
 - legacy `rx_group_ingress_2spc` and `tx_iq_axis_boundary_2spc` artifacts cannot satisfy production responsibilities;
 - zero current production RTL files is an honest state, not an equivalence success.
 
