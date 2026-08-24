@@ -2,6 +2,7 @@
 
 from .emitter import VerilogEmitter
 from .expr import ConstExpr, Expr, concat, mux
+from .fixed import round_shift_ties_away_from_zero, saturate_signed, signed_mul
 from .module import RTLModule, Signal
 from .simulator import CycleSimulator
 
@@ -13,5 +14,8 @@ __all__ = [
     "Signal",
     "VerilogEmitter",
     "concat",
+    "round_shift_ties_away_from_zero",
+    "saturate_signed",
+    "signed_mul",
     "mux",
 ]

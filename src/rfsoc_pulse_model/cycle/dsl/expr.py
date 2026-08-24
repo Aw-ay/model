@@ -8,6 +8,12 @@ def _mask(width: int) -> int:
     return (1 << width) - 1
 
 
+def _signed_value(value: int, width: int) -> int:
+    masked = int(value) & _mask(width)
+    sign_bit = 1 << (width - 1)
+    return masked - (1 << width) if masked & sign_bit else masked
+
+
 class Expr:
     width: int
     signed: bool
