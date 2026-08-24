@@ -392,6 +392,19 @@ clk_a         clk_a         Clean                      Partial False Path
         with self.assertRaisesRegex(ValueError, "CDC-15.*inventory"):
             _parse_cdc_report(waived_vendor_cdc_report().decode("utf-8"))
 
+    def test_cdc15_waiver_report_rejects_empty_safely_timed_report(self) -> None:
+        """The early safely-timed branch must not bypass the CDC-15 gate."""
+        from rfsoc_pulse_model.ip.connected_runner import _parse_cdc_report
+
+        empty_show_waiver = vivado_report_bytes(report_header(
+            "report_cdc -details -show_waiver -file ./cdc.rpt"
+        ) + """CDC Report
+
+All paths are Safely Timed.
+""")
+        with self.assertRaisesRegex(ValueError, "CDC-15.*inventory"):
+            _parse_cdc_report(empty_show_waiver.decode("utf-8"))
+
     def test_cdc_accepts_exact_rfdc_clk_valid_reset_waiver(self) -> None:
         from rfsoc_pulse_model.ip.connected_runner import _parse_cdc_report
 

@@ -655,6 +655,8 @@ def _parse_cdc_report(report: str) -> set[tuple[str, str]]:
         raise ValueError("CDC report title is missing")
     cdc_body = report.split("\nCDC Report\n", 1)[1].strip()
     if cdc_body == "All paths are Safely Timed.":
+        if requires_cdc15_inventory:
+            raise ValueError("CDC-15 endpoint inventory does not match the measured set")
         return set()
     summary_area = report.split("Source Clock:", 1)[0]
     summary_rows = re.findall(
