@@ -126,6 +126,27 @@ class SignedMultiplyTest(unittest.TestCase):
                 -1,
             )
 
+    def test_narrowing_signed_mul_keeps_its_declared_signed_width_in_composition(self) -> None:
+        product = signed_mul(
+            ConstExpr(5, 5, signed=True),
+            ConstExpr(5, 5, signed=True),
+            4,
+        )
+        composed = saturate_signed(product, 4)
+
+        emitted_product = evaluate_verilog_expression(product.verilog(), {})
+        emitted_composed = evaluate_verilog_expression(composed.verilog(), {})
+
+        self.assertEqual(product.evaluate(), 9)
+        self.assertEqual(emitted_product.width, 4)
+        self.assertTrue(emitted_product.signed)
+        self.assertEqual(emitted_product.raw, 9)
+        self.assertEqual(emitted_product.integer, -7)
+        self.assertEqual(composed.evaluate(), 9)
+        self.assertEqual(emitted_composed.width, 4)
+        self.assertTrue(emitted_composed.signed)
+        self.assertEqual(emitted_composed.raw, 9)
+
 
 class RoundShiftTest(unittest.TestCase):
     def test_round_shift_ties_away_from_zero_handles_halfway_values(self) -> None:
@@ -171,8 +192,8 @@ class RoundShiftTest(unittest.TestCase):
         self.assertEqual(more_negative.evaluate(), _twos_complement(24, -2))
         self.assertIn("(($signed(32'sd5) + 24'sd2) >>> 2)", positive.verilog())
         self.assertIn("(-(((-", negative.verilog())
-        self.assertIn("(($signed(32'sd-5) < 0)", negative.verilog())
-        self.assertIn("($signed(32'sd-7) < 0)", more_negative.verilog())
+        self.assertIn("(($signed(-32'sd5) < 0)", negative.verilog())
+        self.assertIn("($signed(-32'sd7) < 0)", more_negative.verilog())
 
     def test_round_shift_emits_explicit_result_width_for_all_paths(self) -> None:
         cases = (
@@ -209,6 +230,28 @@ class RoundShiftTest(unittest.TestCase):
             self.assertEqual(emitted.raw, composed.evaluate())
             self.assertEqual(emitted.raw, _twos_complement(24, expected_value))
 
+    def test_round_shift_rails_match_evaluator_for_zero_and_nonzero_shifts(self) -> None:
+        cases = (
+            (-(1 << 23), 0, 24, -(1 << 23)),
+            ((1 << 23) - 1, 0, 24, (1 << 23) - 1),
+            (-(1 << 24), 1, 24, -(1 << 23)),
+            ((1 << 24) - 1, 1, 24, (1 << 23)),
+        )
+
+        for value, shift, result_width, expected in cases:
+            with self.subTest(value=value, shift=shift):
+                expr = round_shift_ties_away_from_zero(
+                    ConstExpr(value, 32, signed=True),
+                    shift,
+                    result_width,
+                )
+                emitted = evaluate_verilog_expression(expr.verilog(), {})
+
+                self.assertEqual(emitted.width, result_width)
+                self.assertTrue(emitted.signed)
+                self.assertEqual(emitted.raw, expr.evaluate())
+                self.assertEqual(emitted.raw, _twos_complement(result_width, expected))
+
 
 class SaturateSignedTest(unittest.TestCase):
     def test_saturate_signed_clamps_both_rails_and_preserves_endpoints(self) -> None:
@@ -229,6 +272,12 @@ class SaturateSignedTest(unittest.TestCase):
         self.assertEqual(expr.width, 24)
         self.assertIn("$signed", expr.verilog())
         self.assertIn("?", expr.verilog())
+
+    def test_saturate_signed_emits_legal_negative_minimum_literal(self) -> None:
+        rtl = saturate_signed(ConstExpr(-((1 << 23) + 1), 32, signed=True), 24).verilog()
+
+        self.assertIn("-24'sd8388608", rtl)
+        self.assertNotIn("24'sd-8388608", rtl)
 
     def test_saturate_signed_emits_an_explicit_24_bit_result(self) -> None:
         expr = saturate_signed(ConstExpr((1 << 30) + 3, 48, signed=True), 24)
@@ -292,6 +341,21 @@ class SignedOutOfRangeTest(unittest.TestCase):
         self.assertIn("$signed", expr.verilog())
         self.assertIn(">", expr.verilog())
         self.assertIn("<", expr.verilog())
+
+    def test_signed_out_of_range_emits_legal_negative_minimum_literal(self) -> None:
+        rtl = signed_out_of_range(ConstExpr(-((1 << 23) + 1), 32, signed=True), 24).verilog()
+
+        self.assertIn("-24'sd8388608", rtl)
+        self.assertNotIn("24'sd-8388608", rtl)
+
+
+class VerilogEvaluatorLiteralTest(unittest.TestCase):
+    def test_signed_constant_uses_prefix_minus(self) -> None:
+        self.assertEqual(ConstExpr(-5, 24, signed=True).verilog(), "-24'sd5")
+
+    def test_rejects_illegal_inline_minus_sized_literal(self) -> None:
+        with self.assertRaisesRegex(ValueError, "missing literal digits|unexpected token"):
+            evaluate_verilog_expression("24'sd-8388608", {})
 
 
 if __name__ == "__main__":

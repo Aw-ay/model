@@ -16,7 +16,8 @@ def _require_positive_width(result_width: int) -> None:
 
 
 def _signed_literal(width: int, value: int) -> str:
-    return f"{width}'sd{int(value)}"
+    literal = f"{width}'sd{abs(int(value))}"
+    return f"-{literal}" if value < 0 else literal
 
 
 def _signed_expr(expr: Expr) -> str:
@@ -80,7 +81,12 @@ class SignedMulExpr(Expr):
     def verilog(self) -> str:
         left = _sign_extend_verilog(self.left, self.result_width)
         right = _sign_extend_verilog(self.right, self.result_width)
-        return f"({left} * {right})"
+        product = f"({left} * {right})"
+        return _resize_signed_verilog_text(
+            product,
+            max(self.left.width, self.right.width, self.result_width),
+            self.result_width,
+        )
 
 
 @dataclass(frozen=True)

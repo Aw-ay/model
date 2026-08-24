@@ -73,8 +73,6 @@ def _tokenize(source: str) -> list[_Token]:
                     raise ValueError(f"unsupported Verilog literal near {source[start:]!r}")
                 index += 1
                 value_start = index
-                if index < len(source) and source[index] == "-":
-                    index += 1
                 digit_start = index
                 while index < len(source) and source[index].isdigit():
                     index += 1
