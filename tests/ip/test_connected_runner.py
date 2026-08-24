@@ -933,7 +933,31 @@ All paths are Safely Timed.
             hashlib.sha256(manifest_bytes).hexdigest(), environment["manifest_sha256"]
         )
         manifest = json.loads(manifest_bytes)
+        authority_paths = {
+            "default.json": repository / "config" / "default.json",
+            "ip_architecture.json": repository / "config" / "ip_architecture.json",
+            "ip_lock.json": repository / "config" / "ip_lock.json",
+            "ps_platform.json": repository / "config" / "ps_platform.json",
+        }
+        expected_authority_hashes = {
+            name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for name, path in authority_paths.items()
+        }
+
+        def assert_authority_binding(candidate: dict[str, object]) -> None:
+            self.assertEqual(candidate["authority_sha256"], expected_authority_hashes)
+
+        assert_authority_binding(bundle)
+        tampered_bundle = dict(bundle)
+        tampered_hashes = dict(bundle["authority_sha256"])
+        tampered_hashes["default.json"] = "0" * 64
+        tampered_bundle["authority_sha256"] = tampered_hashes
+        with self.assertRaises(AssertionError):
+            assert_authority_binding(tampered_bundle)
         self.assertEqual(manifest["evidence_source_head"], source_head)
+        self.assertEqual(environment["python"], "3.13.2")
+        self.assertFalse(environment["ready"])
+        self.assertEqual(environment["blocking_reasons"], ["python_3_12_required"])
         self.assertEqual(manifest["python"], environment["python"])
         self.assertEqual(manifest["vivado"], environment["vivado"])
         self.assertEqual(manifest["vivado_build"], environment["vivado_build"])
@@ -980,16 +1004,11 @@ All paths are Safely Timed.
         )
         report_hashes = connected["report_hashes"]
         self.assertEqual(set(report_hashes), {"cdc", "clock_interaction", "timing_summary", "utilization"})
-        unavailable = connected["fresh_attempt_status"] != "success"
+        self.assertEqual(connected["fresh_attempt_status"], "blocked_before_catalog")
+        self.assertFalse(connected["production_integration_ready"])
         for value in (*(connected[name] for name in hash_fields), *report_hashes.values()):
-            if unavailable:
-                self.assertIsNone(value)
-            else:
-                self.assertRegex(value, r"^[0-9a-f]{64}$")
-        if unavailable:
-            self.assertIsNone(connected["bonded_iob_used"])
-        else:
-            self.assertEqual(connected["bonded_iob_used"], 0)
+            self.assertIsNone(value)
+        self.assertIsNone(connected["bonded_iob_used"])
 
         handoff_text = "\n".join(
             (repository / "docs" / "handoff" / name).read_text(encoding="utf-8")
