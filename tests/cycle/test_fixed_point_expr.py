@@ -206,6 +206,11 @@ class SaturateSignedTest(unittest.TestCase):
 
         self.assertRegex(expr.verilog(), r"\[23:0\]")
 
+    def test_saturate_signed_sign_extends_when_result_is_wider_than_source(self) -> None:
+        expr = saturate_signed(ConstExpr(-7, 16, signed=True), 24)
+
+        self.assertIn("$signed({{8{", expr.verilog())
+
     def test_concat_of_saturated_samples_preserves_both_24_bit_lanes_in_emitted_rtl(self) -> None:
         class SaturateConcatProbe(RTLModule):
             module_name = "saturate_concat_probe"

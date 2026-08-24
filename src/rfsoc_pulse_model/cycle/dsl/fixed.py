@@ -32,7 +32,9 @@ def _sign_extend_verilog(expr: Expr, target_width: int) -> str:
 
 
 def _truncate_signed_verilog(expr: Expr, target_width: int) -> str:
-    if target_width >= expr.width:
+    if target_width > expr.width:
+        return f"$signed({_sign_extend_verilog(expr, target_width)})"
+    if target_width == expr.width:
         return _signed_expr(expr)
     return f"$signed(({expr.verilog()})[{target_width - 1}:0])"
 

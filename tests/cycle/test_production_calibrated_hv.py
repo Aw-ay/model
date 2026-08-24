@@ -1,5 +1,4 @@
 import copy
-import re
 import unittest
 
 from rfsoc_pulse_model.common.config import ModelConfig
@@ -15,6 +14,7 @@ from rfsoc_pulse_model.cycle.hardware.production_calibrated_hv import (
     REFLECTION_SAMPLE_FORMAT,
     RxCalibratedHvFrontend2Spc,
 )
+from tests.cycle.verilog_eval import evaluate_verilog_expression
 
 
 def _pack_channels(values: list[int], width: int) -> int:
@@ -254,20 +254,52 @@ class RxCalibratedHvFrontend2SpcTest(unittest.TestCase):
         self.assertEqual(blocked["sample_base_index_o"], 0)
         self.assertEqual(blocked["incident_i_lane1_o"], 0)
 
-    def test_emitted_rtl_preserves_both_h_and_v_24_bit_lane_results(self) -> None:
-        rtl = VerilogEmitter().emit(RxCalibratedHvFrontend2Spc(self.config, self.coefficients))
+    def test_emitted_candidate_expressions_match_cycle_outputs_for_both_packed_lanes(self) -> None:
+        module = RxCalibratedHvFrontend2Spc(self.config, self.coefficients)
+        sim = CycleSimulator(module)
+        sim.step({"rst_i": 1})
+        rtl = VerilogEmitter().emit(module)
 
-        self.assertEqual(rtl, VerilogEmitter().emit(RxCalibratedHvFrontend2Spc(self.config, self.coefficients)))
-        self.assertIn("module rx_2spc_calibrated_hv_frontend", rtl)
+        beat = self._beat(selected_h=2, selected_v=1, sample_base=12)
+        signal_by_name = {
+            signal.name: signal
+            for signal in (*module.ports, *module.internal_signals)
+        }
+        environment = {
+            name: (signal.value, signal.width, signal.signed)
+            for name, signal in signal_by_name.items()
+        }
+        environment.update(
+            {
+                name: (value, signal_by_name[name].width, signal_by_name[name].signed)
+                for name, value in beat.items()
+            }
+        )
+        environment["rst_i"] = (0, 1, False)
+        expected = sim.step(beat)
 
-        for signal_name in (
-            "next_incident_i_lane0",
-            "next_incident_q_lane0",
-            "next_incident_i_lane1",
-            "next_incident_q_lane1",
+        for signal_name, output_name in (
+            ("next_incident_i_lane0", "incident_i_lane0_o"),
+            ("next_incident_q_lane0", "incident_q_lane0_o"),
+            ("next_incident_i_lane1", "incident_i_lane1_o"),
+            ("next_incident_q_lane1", "incident_q_lane1_o"),
         ):
-            assignment = next(line for line in rtl.splitlines() if f"{signal_name} =" in line)
-            self.assertGreaterEqual(len(re.findall(r"\[23:0\]", assignment)), 2)
+            prefix = f"    {signal_name} = "
+            assignment = next(line for line in rtl.splitlines() if line.startswith(prefix))
+            emitted = evaluate_verilog_expression(assignment[len(prefix) : -1], environment)
+            self.assertEqual(emitted.width, 48)
+            self.assertEqual(emitted.raw, expected[output_name])
+
+        emitted_i = evaluate_verilog_expression(
+            next(
+                line[len("    next_incident_i_lane0 = ") : -1]
+                for line in rtl.splitlines()
+                if line.startswith("    next_incident_i_lane0 = ")
+            ),
+            environment,
+        )
+        self.assertEqual(emitted_i.raw & ((1 << 24) - 1), 301 << 4)
+        self.assertEqual(emitted_i.raw >> 24, 501 << 4)
 
 
 if __name__ == "__main__":
