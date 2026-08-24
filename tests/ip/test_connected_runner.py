@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import subprocess
 from unittest.mock import patch
@@ -909,6 +911,68 @@ All paths are Safely Timed.
                 return 0
             with self.assertRaisesRegex(RuntimeError, "reparse"):
                 runner.run(artifacts, *context, launcher=junction_fake)
+
+    def test_tracked_connected_evidence_bundle_is_honest_and_boundary_scoped(self) -> None:
+        """Handoff evidence must not turn a blocked attempt into an OOC success claim."""
+        repository = Path(__file__).resolve().parents[2]
+        bundle = json.loads(
+            (repository / "docs" / "handoff" / "connected_evidence_bundle.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(bundle["bundle_schema_version"], 1)
+        self.assertRegex(bundle["evidence_checkout"]["git_head"], r"^[0-9a-f]{40}$")
+        self.assertRegex(bundle["environment"]["manifest_sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(bundle["focused_test_counts"], {"calibrated_hv": 14, "cycle": 57})
+        connected = bundle["connected"]
+        self.assertEqual(connected["timing_scope"], "ooc_boundary_only")
+        self.assertFalse(connected["production_integration_ready"])
+        self.assertEqual(connected["cdc15_endpoint_count"], 60)
+        from rfsoc_pulse_model.ip.cdc_inventory import CDC15_ENDPOINT_PAIRS
+
+        expected_inventory_hash = hashlib.sha256(
+            json.dumps(
+                [list(pair) for pair in CDC15_ENDPOINT_PAIRS],
+                separators=(",", ":"),
+            ).encode("utf-8") + b"\n"
+        ).hexdigest()
+        self.assertEqual(connected["cdc15_endpoint_set_sha256"], expected_inventory_hash)
+        hash_fields = (
+            "request_sha256",
+            "realization_tcl_sha256",
+            "verification_tcl_sha256",
+        )
+        report_hashes = connected["report_hashes"]
+        self.assertEqual(set(report_hashes), {"cdc", "clock_interaction", "timing_summary", "utilization"})
+        unavailable = connected["fresh_attempt_status"] != "success"
+        for value in (*(connected[name] for name in hash_fields), *report_hashes.values()):
+            if unavailable:
+                self.assertIsNone(value)
+            else:
+                self.assertRegex(value, r"^[0-9a-f]{64}$")
+        if unavailable:
+            self.assertIsNone(connected["bonded_iob_used"])
+        else:
+            self.assertEqual(connected["bonded_iob_used"], 0)
+
+        handoff = "\n".join(
+            (repository / "docs" / "handoff" / name).read_text(encoding="utf-8")
+            for name in (
+                "CURRENT_STATE.md",
+                "VERIFICATION_EVIDENCE.md",
+                "IMPLEMENTATION_HISTORY.md",
+                "NEXT_STEPS.md",
+                "OPEN_ISSUES.md",
+            )
+        )
+        self.assertIn("connected_evidence_bundle.json", handoff)
+        self.assertIn("ooc_boundary_only", handoff)
+        self.assertIn("production_integration_ready=false", handoff)
+        self.assertIn("baseline `c118362`", handoff)
+        self.assertIn("14 calibrated-H/V tests and 57 Cycle", handoff)
+        self.assertNotIn("51 Cycle", handoff)
+        self.assertNotIn("full Python regression reports 327", handoff)
+        self.assertNotIn("Task 6 forbidden", handoff)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,50 @@
+{
+  "authority_sha256": {
+    "default.json": "d92c4a334728af441b22fa907e55cf4d6d236d899f46cbe3cd3ed7f26f9d5eb3",
+    "ip_architecture.json": "36034e9c7b64061cdd449fb43030aea96368c95d6e88c8c6a0a9154da9e0bd96",
+    "ip_lock.json": "0b1c92166b605a0a56c867fb144896d23599ade95538a29b72c9c274437fbe97",
+    "ps_platform.json": "a1243d78a90ccb8e00f34749a8c3f18bf55870130c8f8372402407cf5591d11f"
+  },
+  "bundle_schema_version": 1,
+  "connected": {
+    "bonded_iob_used": null,
+    "cdc15_endpoint_count": 60,
+    "cdc15_endpoint_set_sha256": "4c8485d84fdbef527ecbc0785c8f045cdea0c4623cf7c787a0d287dcfdb3468a",
+    "fresh_attempt_status": "blocked_before_catalog",
+    "production_integration_ready": false,
+    "realization_tcl_sha256": null,
+    "report_hashes": {
+      "cdc": null,
+      "clock_interaction": null,
+      "timing_summary": null,
+      "utilization": null
+    },
+    "request_sha256": null,
+    "timing_scope": "ooc_boundary_only",
+    "verification_tcl_sha256": null
+  },
+  "evidence_checkout": {
+    "git_head": "e70e774427df1179c6abdef307613c023c0c7013",
+    "git_status_clean": true
+  },
+  "environment": {
+    "blocking_reasons": [
+      "python_3_12_required"
+    ],
+    "manifest_sha256": "9569a9a5a9b005169322adc45e12c2220f9a91a4788b8ea57d762fb96c83cec7",
+    "python": "3.13.2",
+    "ready": false,
+    "vivado": "2025.2",
+    "vivado_build": "6299465",
+    "vivado_executable": "C:\\AMDDesignTools\\2025.2\\Vivado\\bin\\vivado.bat"
+  },
+  "focused_test_counts": {
+    "calibrated_hv": 14,
+    "cycle": 57
+  },
+  "full_python_regression": {
+    "current_branch_status": "unclaimed_no_fresh_complete_summary",
+    "historical_baseline": "c118362",
+    "historical_result": "327 tests / 8 skips"
+  }
+}
