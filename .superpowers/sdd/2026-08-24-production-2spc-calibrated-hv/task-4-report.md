@@ -81,3 +81,34 @@ All four actual SHA-256 values matched their frozen values:
 | `config/ps_platform.json` | `a1243d78a90ccb8e00f34749a8c3f18bf55870130c8f8372402407cf5591d11f` | match |
 
 No Vivado attempt was created.
+
+## Fix Round 1 — paired saturation boundary evidence
+
+Review identified an evidence-only P2 gap: the prior Golden rail assertion and
+candidate subclass-injected overflow assertion were separate fixtures. The
+new test
+`test_golden_saturation_boundary_pairs_with_intentional_candidate_fail_closed_injection`
+uses one deliberate out-of-contract response, `reflection_sample` positive
+rail plus `0.25` (`524288.1875` in the normalized Golden boundary).
+
+- Golden authority rounding/saturation maps that shared response to the
+  signed maximum code `8388607` for both samples.
+- The test-only candidate subclass derives the same fixed-point rounded
+  boundary code `8388611`, injects it through the real overflow gate, and
+  asserts `calibration_error_o=1`, `incident_valid_o=0`, and all four packed
+  I/Q data outputs equal zero.
+- The test name and assertions make the intentional non-equality explicit:
+  Golden saturates numerically, while the candidate rejects the out-of-contract
+  response and fails closed. No production behavior is being claimed for that
+  deliberate overflow vector.
+
+Fix-round focused test result:
+
+```text
+Ran 1 test in 0.010s
+OK
+```
+
+The updated candidate file has 14 passing tests; the updated full Cycle suite
+has 51 passing tests. No authority/config/handoff files, plan files, Vivado
+files, or production readiness fields were modified in this fix round.

@@ -6,6 +6,7 @@ import numpy as np
 
 from rfsoc_pulse_model.common.calibration_types import CalibrationProfile
 from rfsoc_pulse_model.common.config import ModelConfig
+from rfsoc_pulse_model.common.fixed import round_ties_away_from_zero
 from rfsoc_pulse_model.common.reflection_types import (
     EightChannelAdcFrame,
     PhysicalChannelMapEntry,
@@ -518,6 +519,73 @@ class RxCalibratedHvFrontend2SpcTest(unittest.TestCase):
             reflection_format.quantize(result.incident.samples[1, 1].real),
             reflection_format.minimum,
         )
+
+    def test_golden_saturation_boundary_pairs_with_intentional_candidate_fail_closed_injection(self) -> None:
+        config = self._normalized_identity_config()
+        calibration = CalibrationProfile.identity(
+            frequency_hz=2.8e9,
+            temperature_c=25.0,
+            fixed_internal_delay_samples=64.0,
+            rcs_anchor=None,
+        )
+        reflection_format = config.numeric_formats["reflection_sample"]
+        boundary_response = reflection_format.to_float(reflection_format.maximum) + 0.25
+        rounded_boundary = round_ties_away_from_zero(
+            boundary_response * (1 << reflection_format.fraction_bits)
+        )
+        self.assertGreater(rounded_boundary, reflection_format.maximum)
+
+        samples = np.zeros((8, 2), dtype=np.complex128)
+        samples[0, :] = boundary_response
+        golden_result = GoldenEightChannelAdcFrontend(
+            config,
+            calibration,
+        ).reconstruct(
+            EightChannelAdcFrame(
+                samples,
+                np.zeros((8, 2), dtype=np.bool_),
+                SampleDomain.RFDC_COMPLEX_INPUT,
+                500_000_000,
+            ),
+            mode=RangeSelectionMode.FIXED,
+            fixed_ranges={
+                Polarization.H: GainRange.HIGH,
+                Polarization.V: GainRange.HIGH,
+            },
+        )
+        self.assertEqual(
+            reflection_format.quantize(golden_result.incident.samples[0, 0].real),
+            reflection_format.maximum,
+        )
+        self.assertEqual(
+            reflection_format.quantize(golden_result.incident.samples[0, 1].real),
+            reflection_format.maximum,
+        )
+
+        class BoundaryOverflowFrontend(RxCalibratedHvFrontend2Spc):
+            def _calibrate_sample(self, lane_bus, polarization, selected_range):
+                if polarization is Polarization.H and selected_range.eq(0).evaluate():
+                    rounded = ConstExpr(rounded_boundary, 48, signed=True)
+                    return saturate_signed(rounded, 24), signed_out_of_range(rounded, 24)
+                return super()._calibrate_sample(lane_bus, polarization, selected_range)
+
+        module = BoundaryOverflowFrontend(config, HvCalibrationCoefficients.identity())
+        sim = CycleSimulator(module)
+        sim.step({"rst_i": 1})
+        out = sim.step(
+            self._beat_from_vectors(
+                np.zeros((8, 2), dtype=np.int64),
+                np.zeros((8, 2), dtype=np.int64),
+                selected_h=0,
+                selected_v=0,
+            )
+        )
+        self.assertEqual(out["calibration_error_o"], 1)
+        self.assertEqual(out["incident_valid_o"], 0)
+        self.assertEqual(out["incident_i_lane0_o"], 0)
+        self.assertEqual(out["incident_q_lane0_o"], 0)
+        self.assertEqual(out["incident_i_lane1_o"], 0)
+        self.assertEqual(out["incident_q_lane1_o"], 0)
 
     def test_candidate_verilog_is_byte_deterministic_with_complete_widths(self) -> None:
         first_module = RxCalibratedHvFrontend2Spc(self.config, self.coefficients)
