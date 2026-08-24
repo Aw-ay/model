@@ -7,10 +7,14 @@ from rfsoc_pulse_model.golden.delay import (
     apply_causal_delay,
     apply_relative_delay,
     compile_target_delay,
+    fractional_delay_center_samples,
 )
 
 
 class GoldenDelayTest(unittest.TestCase):
+    def test_sixty_three_tap_kernel_center_is_internal_not_public_delay(self) -> None:
+        self.assertEqual(fractional_delay_center_samples(63), 31)
+
     def test_integer_delay_is_zero_filled_without_wraparound(self) -> None:
         source = np.zeros((2, 96), dtype=np.complex128)
         source[0, 10] = 1.0

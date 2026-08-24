@@ -9,14 +9,19 @@ from typing import Mapping, Sequence, Tuple
 from .tables import FIR_DECIMATOR_Q17
 from .types import (
     ChannelRole,
+    ClockingProofStatus,
     GainRange,
     IQUnit,
     Polarization,
     PowerUnit,
+    RfdcAdcClockingMode,
+    RfdcDacClockingMode,
     SampleDomain,
 )
 from .fixed import PROJECT_ROUNDING_MODE, RoundingMode
+from .numeric_formats import NumericFormatManifest
 from .reflection_types import PhysicalChannelMapEntry
+from .rfdc_axis import RfdcAxisWordFormat
 
 
 @dataclass(frozen=True)
@@ -159,6 +164,10 @@ class ModelConfig:
     rfdc_interpolation: int
     rx_fabric_clock_hz: int
     rfdc_complex_samples_per_cycle: int
+    rfdc_adc_clocking_mode: RfdcAdcClockingMode
+    rfdc_adc_clocking_proof_status: ClockingProofStatus
+    rfdc_dac_clocking_mode: RfdcDacClockingMode
+    rfdc_dac_clocking_proof_status: ClockingProofStatus
     rfdc_complex_sample_rate_hz: int
     pl_decimation: int
     detector_sample_rate_hz: int
@@ -177,6 +186,8 @@ class ModelConfig:
     auto_range_high_water_fraction: float
     auto_range_low_water_fraction: float
     auto_range_hold_samples: int
+    rfdc_axis: RfdcAxisWordFormat
+    numeric_formats: NumericFormatManifest
     adc_channel_map: Tuple[PhysicalChannelMapEntry, ...]
     dac_channel_map: Tuple[PhysicalChannelMapEntry, ...]
     channels: int
@@ -214,6 +225,18 @@ class ModelConfig:
             rfdc_complex_samples_per_cycle=int(
                 values["rfdc_complex_samples_per_cycle"]
             ),
+            rfdc_adc_clocking_mode=RfdcAdcClockingMode(
+                str(values["rfdc_adc_clocking_mode"])
+            ),
+            rfdc_adc_clocking_proof_status=ClockingProofStatus(
+                str(values["rfdc_adc_clocking_proof_status"])
+            ),
+            rfdc_dac_clocking_mode=RfdcDacClockingMode(
+                str(values["rfdc_dac_clocking_mode"])
+            ),
+            rfdc_dac_clocking_proof_status=ClockingProofStatus(
+                str(values["rfdc_dac_clocking_proof_status"])
+            ),
             rfdc_complex_sample_rate_hz=int(values["rfdc_complex_sample_rate_hz"]),
             pl_decimation=int(values["pl_decimation"]),
             detector_sample_rate_hz=int(values["detector_sample_rate_hz"]),
@@ -238,6 +261,10 @@ class ModelConfig:
                 values["auto_range_low_water_fraction"]
             ),
             auto_range_hold_samples=int(values["auto_range_hold_samples"]),
+            rfdc_axis=RfdcAxisWordFormat.from_mapping(values["rfdc_axis_format"]),
+            numeric_formats=NumericFormatManifest.from_mapping(
+                values["numeric_formats"]
+            ),
             adc_channel_map=cls._channel_map(values["adc_channel_map"], "adc"),
             dac_channel_map=cls._channel_map(values["dac_channel_map"], "dac"),
             channels=int(values["channels"]),
@@ -299,12 +326,62 @@ class ModelConfig:
     def power_unit(self) -> PowerUnit:
         return self.detector.power_unit
 
+    @property
+    def threshold_scale_code(self) -> int:
+        return self.numeric_formats["threshold_scale"].quantize(
+            self.detector.threshold_scale
+        )
+
+    @property
+    def single_clock_ingress_integration_ready(self) -> bool:
+        """True only after Vivado proves the common-clock MTS architecture."""
+
+        return (
+            self.rfdc_adc_clocking_mode
+            == RfdcAdcClockingMode.COMMON_PL_CLOCK_MTS
+            and self.rfdc_adc_clocking_proof_status
+            == ClockingProofStatus.VIVADO_VERIFIED
+        )
+
+    @property
+    def single_clock_tx_integration_ready(self) -> bool:
+        """True only after Vivado proves the common-clock MTS/SYSREF TX path."""
+
+        return (
+            self.rfdc_dac_clocking_mode
+            == RfdcDacClockingMode.COMMON_PL_CLOCK_MTS_SYSREF
+            and self.rfdc_dac_clocking_proof_status
+            == ClockingProofStatus.VIVADO_VERIFIED
+        )
+
     @classmethod
     def load_default(cls) -> "ModelConfig":
         resource = resources.files("rfsoc_pulse_model.config").joinpath("default.json")
         return cls.from_mapping(json.loads(resource.read_text(encoding="utf-8")))
 
     def validate(self) -> None:
+        if not isinstance(self.rfdc_adc_clocking_mode, RfdcAdcClockingMode):
+            raise ValueError(
+                "rfdc_adc_clocking_mode must be an RfdcAdcClockingMode"
+            )
+        if not isinstance(
+            self.rfdc_adc_clocking_proof_status,
+            ClockingProofStatus,
+        ):
+            raise ValueError(
+                "rfdc_adc_clocking_proof_status must be a ClockingProofStatus"
+            )
+        if not isinstance(self.rfdc_dac_clocking_mode, RfdcDacClockingMode):
+            raise ValueError(
+                "rfdc_dac_clocking_mode must be an RfdcDacClockingMode"
+            )
+        if not isinstance(
+            self.rfdc_dac_clocking_proof_status,
+            ClockingProofStatus,
+        ):
+            raise ValueError(
+                "rfdc_dac_clocking_proof_status must be a ClockingProofStatus"
+            )
         if self.rfdc_decimation < 1 or self.rfdc_interpolation < 1:
             raise ValueError("RFDC interpolation and decimation must be positive")
         if self.adc_sample_rate_hz % self.rfdc_decimation:
@@ -375,6 +452,40 @@ class ModelConfig:
             raise ValueError("auto-range water marks must satisfy 0 < low < high < 1")
         if self.auto_range_hold_samples < 1:
             raise ValueError("auto_range_hold_samples must be positive")
+        if (
+            self.rfdc_axis.adc_component_samples_per_cycle
+            != self.rfdc_complex_samples_per_cycle
+        ):
+            raise ValueError("RFDC ADC AXI samples/cycle must match the sample-rate contract")
+        if (
+            self.rfdc_axis.dac_complex_samples_per_cycle
+            != self.tx_samples_per_cycle
+        ):
+            raise ValueError("RFDC DAC AXI samples/cycle must match the TX rate contract")
+        if self.numeric_formats["adc_component"].width != self.iq_width_bits:
+            raise ValueError("ADC numeric format must match detector IQ width")
+        if self.numeric_formats["power"].width != self.power_width_bits:
+            raise ValueError("power numeric format must match detector power width")
+        if self.numeric_formats["moving_power_sum"].width < (
+            self.power_width_bits + math.ceil(math.log2(self.detector.moving_average))
+        ):
+            raise ValueError("moving power sum numeric format is too narrow")
+        if self.numeric_formats["noise_boot_sum"].width < (
+            self.power_width_bits + math.ceil(math.log2(self.detector.noise_boot_samples))
+        ):
+            raise ValueError("noise boot sum numeric format is too narrow")
+        if self.numeric_formats["vote_count"].width < math.ceil(
+            math.log2(self.detector.vote_window + 1)
+        ):
+            raise ValueError("vote count numeric format is too narrow")
+        if self.numeric_formats["channel_mask"].width != self.adc_channels:
+            raise ValueError("channel mask numeric format must cover every ADC")
+        if self.numeric_formats["channel_index"].maximum < self.adc_channels - 1:
+            raise ValueError("channel index numeric format cannot address every ADC")
+        if self.numeric_formats["target_count"].maximum < self.maximum_targets:
+            raise ValueError("target count numeric format cannot represent maximum_targets")
+        if self.numeric_formats["delay_integer"].maximum < self.maximum_delay_samples:
+            raise ValueError("delay integer numeric format cannot represent maximum_delay_samples")
         self._validate_channel_map(self.adc_channel_map, self.adc_channels, "adc")
         self._validate_channel_map(self.dac_channel_map, self.dac_channels, "dac")
         if self.channels < 1 or len(self.ranges_db) != self.channels:
@@ -388,8 +499,8 @@ class ModelConfig:
             raise ValueError(
                 "DAC baseband rate must equal rx_fabric_clock_hz * tx_samples_per_cycle"
             )
-        if self.tx_data_type != "real":
-            raise ValueError("tx_data_type must be real")
+        if self.tx_data_type != "complex_iq":
+            raise ValueError("tx_data_type must be complex_iq")
         if self.rounding_mode != PROJECT_ROUNDING_MODE:
             raise ValueError(
                 f"rounding_mode must be {PROJECT_ROUNDING_MODE.value}"
@@ -406,6 +517,58 @@ class ModelConfig:
             raise ValueError(
                 f"{kind}_channel_map index values must contain each channel exactly once"
             )
+        rfdc_routes = [
+            (entry.rfdc_tile, entry.rfdc_slice)
+            for entry in entries
+        ]
+        if len(set(rfdc_routes)) != expected_count:
+            raise ValueError(
+                f"{kind}_channel_map RFDC route values must be unique"
+            )
+        if kind == "adc":
+            expected_routes = {
+                (tile, rfdc_slice)
+                for tile in range(4)
+                for rfdc_slice in (0, 2)
+            }
+            if set(rfdc_routes) != expected_routes:
+                raise ValueError(
+                    "adc_channel_map must cover the canonical RFDC routes"
+                )
+            expected_by_index = {
+                index: (index // 2, 2 * (index % 2))
+                for index in range(expected_count)
+            }
+            if any(
+                (entry.rfdc_tile, entry.rfdc_slice)
+                != expected_by_index[entry.index]
+                for entry in entries
+            ):
+                raise ValueError(
+                    "adc_channel_map index must match its canonical RFDC route"
+                )
+        if kind == "dac":
+            expected_routes = {
+                (tile, rfdc_slice)
+                for tile in range(2)
+                for rfdc_slice in range(4)
+            }
+            if set(rfdc_routes) != expected_routes:
+                raise ValueError(
+                    "dac_channel_map must cover the canonical RFDC routes"
+                )
+            expected_by_index = {
+                index: (index // 4, index % 4)
+                for index in range(expected_count)
+            }
+            if any(
+                (entry.rfdc_tile, entry.rfdc_slice)
+                != expected_by_index[entry.index]
+                for entry in entries
+            ):
+                raise ValueError(
+                    "dac_channel_map index must match its canonical RFDC route"
+                )
         if kind in ("adc", "dac"):
             for polarization in (Polarization.H, Polarization.V):
                 for gain_range in (GainRange.HIGH, GainRange.MID, GainRange.LOW):

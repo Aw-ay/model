@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rfsoc-pulse-model"
-version = "0.4.0"
+version = "0.12.0"
 description = "Golden, cycle-accurate, and generated-Verilog models for the ZU27DR pulse system"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -14,7 +14,7 @@ dependencies = ["numpy>=1.21,<3"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-"rfsoc_pulse_model.config" = ["default.json"]
+"rfsoc_pulse_model.config" = ["default.json", "ip_architecture.json", "ip_lock.json", "ps_platform.json"]
 
 [tool.unittest]
 start-directory = "tests"

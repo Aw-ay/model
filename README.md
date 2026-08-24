@@ -7,9 +7,11 @@ system. Development has one direction only:
 Golden mathematics -> Cycle hardware architecture -> generated Verilog
 ```
 
-The current milestone implements `common/` and the complete clock-free
-`golden/` layer. `cycle/` is an explicit package boundary for the next
-milestone; `build/` does not become authoritative source code.
+The current milestone keeps the complete clock-free `golden/` layer and adds
+an AMD IP-first hardware architecture authority. Existing Cycle-derived RX/TX
+adapters remain tested legacy references while production RFDC, AXIS and FIR
+ownership moves to AMD IP. `build/` is generated evidence and never becomes
+authoritative source code.
 
 ## Golden model
 
@@ -77,9 +79,28 @@ oracle only; Cycle must replace it with bounded delay RAM, FIR state, detector
 state and explicit 2SPC pipelines.
 
 `result.dac_frame` is an eight-channel complex-baseband mathematical
-reference. This milestone does not define RFDC DAC AXI words and does not
-validate Cycle timing, generated RTL, Vivado Block Design, CDC or board RF
-performance.
+reference on `SampleTimeReference.LATENCY_NORMALIZED`. Use
+`result.dac_frame.sample_index(offset, SampleTimeReference.PHYSICAL)` to map an
+array offset onto the measured 500-MSPS-equivalent physical Cycle/DAC time
+axis; it is not a raw 4-GSPS converter sample number. The RFDC DAC AXI
+boundary preserves that envelope as two signed-I16/Q16 complex samples per
+64-bit word. The RFDC fine mixer performs I/Q-to-real conversion at the frozen
+2.8 GHz NCO frequency with unity (0 dB) mixer scaling, while every physical
+DAC remains one independent real analogue output. Golden now owns I/Q16
+rounding and clipping; Cycle owns 2SPC packing and deterministic ready/
+underrun behavior. The reflection DSP pipeline, Vivado Block Design, CDC,
+timing and board RF performance remain unvalidated.
+
+`result.dac_iq_codes` is the corresponding executable Golden boundary. Its
+`i` and `q` arrays are immutable signed-16 codes and `clipped` marks samples
+where either component saturated. The arrays retain the same `(8, N)` shape
+and normalized sample timeline as `result.dac_frame`; Cycle consumes two
+adjacent code columns per 250 MHz clock.
+
+The registered TX boundary assumes a common 250 MHz clock across both DAC
+tiles with MTS/SYSREF synchronization. `ModelConfig` deliberately reports
+`single_clock_tx_integration_ready=False` until Vivado readback, CDC and timing
+evidence changes the DAC clocking proof status from `unverified`.
 
 ```python
 import numpy as np
@@ -172,8 +193,8 @@ DAC_baseband_rate = DAC_fabric_clock * TX_samples_per_clock
 ```
 
 For the default configuration these resolve to 4 GSPS -> 500 MSPS complex ->
-250 MSPS detector, and 4 GSPS / 8 = 500 MSPS real TX baseband carried as two
-samples per 250 MHz clock. Inconsistent rates, FIR group delay, channel/range
+250 MSPS detector, and 4 GSPS / 8 = 500 MSPS complex TX baseband carried as
+two I/Q samples per 250 MHz clock. Inconsistent rates, FIR group delay, channel/range
 count, IQ/power format or TX data type are rejected. `ModelConfig` is the
 single source for these fields and passes them into `DetectorConfig`, which in
 turn stamps every emitted `PulseRecord`.
@@ -186,7 +207,49 @@ Cycle interface interpretation.
 
 `ModelConfig` validates in `__post_init__`, so direct construction,
 `from_mapping()` and `dataclasses.replace()` cannot create different validity
-rules. The current package schema/config version is `6/9`.
+rules. The current package schema/config version is `13/19`.
+
+The XCZU27DR v2.1 RFDC tile/slice, package-bank, board-net and carrier-endpoint
+mapping is frozen in `ModelConfig` and documented in
+`docs/contracts/zu27dr-v2.1-physical-channel-map.md`. External H/V and
++20/0/-20 dB wiring still requires the documented board continuity and
+low-power tone acceptance before normal RF operation.
+
+The PL-observable RFDC AXI word contract is frozen in `ModelConfig.rfdc_axis` and documented
+in `docs/contracts/rfdc-axis-word-format.md`. Each physical dual ADC uses an
+even I stream and its adjacent odd Q stream, each 32-bit at 250 MHz with two
+signed-16 component samples. The paired detector ingress word is exactly
+`{Q1,I1,Q0,I0}`. Every DAC also uses a 64-bit I/Q stream
+`{Q1,I1,Q0,I0}` feeding the RFDC I/Q-to-real fine mixer. Vivado readback shows
+the existing BD still uses 32-bit real DAC streams and a partial ADC setup, so
+it is deliberately rejected as the target integration. RFDC mixer, NCO and
+analogue-output settings live only in `HardwareArchitectureConfig.rfdc`; Golden
+and Cycle must not treat those converter-internal settings as algorithm fields.
+
+`AUTO_HOLD` uses the absolute RFDC input-sample timeline. H and V each retain
+their current range and last absolute switch sample across contiguous frames;
+a gap is rejected until `reset_auto_hold()` explicitly begins a new
+acquisition. Range decisions use delay-aligned raw ADC codes and the matching
+aligned clipping sideband, while the selected output uses the calibrated value
+at that same aligned sample. Thus channel delay calibration cannot make the
+range decision and returned sample refer to different physical instants.
+
+Absolute RCS is fail-closed. An `RcsCalibrationAnchor` must carry a nonempty
+calibration ID, an explicit validity flag, frequency/temperature/physical-range
+conditions and their tolerances. Absolute mode rejects a missing, invalid,
+out-of-anchor-condition or out-of-profile-condition calibration before target
+gain is emitted. Only explicitly non-absolute mode may fall back to relative
+gain, and then `absolute_rcs_calibrated` remains false.
+
+The streaming API emits closed, stable PDWs and associated events online; it
+does not wait unconditionally for `final=True`. It withholds a record that is
+closed only by the current array boundary and emits records/events as a stable
+global `(ToA, channel)` prefix, so concatenating per-call outputs exactly
+matches one-shot ordering without duplicates. Stream status distinguishes the
+exclusive end of accepted input (`processed_stop_sample`) from the exclusive
+end of stable waveform output (`emitted_stop_sample`). `monitor_pulse_count`
+is new PDWs in this call, `monitor_pulse_count_total` is cumulative, and
+`stream_final` states whether future input is forbidden.
 
 The authoritative installed resource is
 `rfsoc_pulse_model/config/default.json`. The root `config/default.json` is a
@@ -203,9 +266,30 @@ incident = adc_code / (10^(nominal_gain_db/20) * response_gain)
 ```
 
 ADC and DAC channel alignment removes only relative path delay. The symmetric
-63-tap Golden interpolation kernel does not add its 31-sample center delay to
-the public time axis. Common hardware/pipeline latency remains part of the
-separately measured `fixed_internal_delay_samples` contract.
+63-tap Golden interpolation kernel has an internal center of 31 samples, but
+that center is removed from the public time axis in both the causal target
+delay and the Golden-only relative alignment helpers. It is never added to
+`fixed_internal_delay`.
+
+`FixedInternalDelay` is measured from the mathematical RFDC ADC complex input
+to the mathematical DAC baseband output. Its `samples` value is expressed in
+`RFDC_COMPLEX_INPUT` at 500 MSPS. It includes common Cycle pipeline, RAM and
+filter latency measured for the deployed build, and excludes target-programmed
+delay. A calibration profile whose delay rate differs from
+`reflection_sample_rate_hz` is rejected before target compilation. See
+[`docs/contracts/fixed-internal-delay.md`](docs/contracts/fixed-internal-delay.md).
+
+Golden DAC arrays remain latency-normalized. For equivalence, convert a
+physical Cycle output coordinate with:
+
+```text
+normalized_cycle_index = physical_cycle_index - fixed_internal_delay.samples
+```
+
+The generated manifest records the normalized Golden time reference, the
+31-sample internal kernel center and that the numeric fixed delay must come
+from a measured calibration profile; it deliberately does not invent a fixed
+delay value.
 
 Because delaying a complex envelope between coherent DDC and DUC stages does
 not by itself reproduce RF carrier propagation phase, each compiled target
@@ -238,15 +322,30 @@ for scalar and NumPy operations. ADC gain quantization, IQ payload conversion,
 power fields, frequency words, fixed formats and DAC LFM samples all use it.
 Future Cycle and generated RTL must implement the same rule explicitly.
 
+### Fixed-point width authority
+
+`ModelConfig.numeric_formats` is the required width authority for every Cycle
+data-path boundary and intermediate. It covers RFDC ADC input, the 2:1 FIR,
+power/noise/threshold/vote, PDW fields, the 500 MSPS dual-polarization
+reflection path, fractional delay, calibration and target matrices,
+multi-target accumulation, phase/NCO, TX scaling and DAC output.
+
+Lossless intermediate nodes use overflow policy `error`; Cycle simulation must
+raise rather than hide an undersized value. Only named external/requantization
+boundaries may `saturate`, and phase/event rollover is explicitly `wrap`.
+Every discarded fractional bit uses project-wide `ties_away_from_zero`.
+The complete table and width derivations are frozen in
+[`docs/contracts/fixed-point-widths.md`](docs/contracts/fixed-point-widths.md).
+
 ## Establishing correspondence between the three layers
 
 Correspondence is defined by a shared contract, not by giving identically
 named functions unrelated implementations.
 
-| Algorithm contract | Golden source | Future Cycle source | Generated RTL |
+| Algorithm contract | Golden source | Cycle source | Generated RTL |
 | --- | --- | --- | --- |
-| RX I/Q lane order | `golden/receive.py::unpack_dual_iq_words` | `cycle/hardware/dual_iq_packer.py` | `rfdc_dual_iq_packer.v` |
-| 15-tap 2:1 complex FIR | `golden/receive.py::GoldenReceivePipeline` | `cycle/hardware/fir_decimator.py` | `complex_fir_decimator2.v` |
+| 8-channel RFDC 2SPC ingress reference | `common/rfdc_axis.py` | legacy `cycle/hardware/rx_group_ingress.py` | legacy reference `reference_rtl/rx_group_ingress_2spc.v` |
+| 15-tap 2:1 complex FIR | `golden/receive.py::GoldenReceivePipeline` | AMD FIR Compiler boundary vectors | vendor IP; no generated project RTL |
 | I/Q power | NumPy magnitude squared in `golden/detector.py` | `cycle/hardware/iq_power.py` | `iq_power.v` |
 | Adaptive threshold | `GoldenPulseDetector` | `cycle/hardware/noise_threshold.py` | `noise_threshold.v` |
 | Moving average and N/M vote | `GoldenPulseDetector` | `cycle/hardware/coarse_detector.py` | `coarse_detector.v` |
@@ -254,8 +353,21 @@ named functions unrelated implementations.
 | Range association | `common/events.py` | `cycle/software/event_packetizer.py` or a later hardware associator | none until registered as hardware |
 | Real LFM phase law | `golden/transmit.py` | `cycle/hardware/tx_lfm.py` | `tx_lfm_axis.v` |
 
+Only rows registered by the current generators are implemented. Target AMD IP
+blocks use parameter-manifest and vendor behavioral-simulation gates rather
+than project-generated Verilog; planned custom RTL still requires a Cycle
+contract before it may be emitted.
+
 All layers consume `ModelConfig`, `common/types.py`, `common/fixed.py`, and
-`common/tables.py`. Their equivalence gates differ intentionally:
+`common/tables.py`. `cycle/registry.py` is the transitional legacy-RTL emission
+allow-list; `ip/registry.py` is the target production-ownership authority.
+Unregistered `.v` files make generation fail rather than being preserved.
+The current 2SPC ingress and TX AXIS boundary modules are legacy reference
+outputs only: their generated Verilog is written to `build/reference_rtl/` and
+is excluded from the production source list. The corresponding production
+2SPC ingress and egress responsibilities remain pending in the AMD-IP-first
+architecture; these reference modules do not satisfy them.
+Their equivalence gates differ intentionally:
 
 1. **Golden -> Cycle:** compare normalized semantics. Detection count/order,
    refined ToA/PW, range choice, IQ-window boundaries and frequency meaning
@@ -273,28 +385,121 @@ fixed widths, registers, RAM/FIFO and handshakes. Any numerical change starts
 in Golden; any architecture/latency change starts in Cycle; Verilog is always
 regenerated and never hand-edited.
 
+The implemented ingress consumes eight flattened 32-bit I words and eight
+32-bit Q words per 250 MHz clock, publishes lane0/lane1 for all eight channels
+after one cycle, and increments an absolute 500 MSPS sample base by two. It has
+no ready/backpressure input. Startup patterns are ignored until
+`acquisition_enable_i`; after arming, an all-idle beat sets sticky
+`gap_error_o` and a partially valid 16-stream group sets sticky
+`format_error_o`. Either fault invalidates cross-channel time alignment and
+fails closed until reset.
+
+The single `clk_i` is only an integration candidate: the default configuration
+records `common_pl_clock_mts` with proof status `unverified`, so generated
+metadata reports that Block Design integration is not ready until Vivado proves
+the common clock/reset/MTS topology. See
+[`docs/contracts/cycle-2spc-ingress.md`](docs/contracts/cycle-2spc-ingress.md).
+
 ## Layout
 
 ```text
 model/
-  config/default.json
+  config/{default.json,ip_architecture.json}
   src/rfsoc_pulse_model/
-    config/default.json          # installed package data
-    common/{config.py,types.py,fixed.py,events.py,tables.py}
+    config/{default.json,ip_architecture.json}  # installed package data
+    common/{config.py,types.py,fixed.py,numeric_formats.py,events.py,tables.py}
     golden/{detector.py,receive.py,transmit.py}
     cycle/{dsl,hardware,software}/
-  tests/{golden,cycle,equivalence,verilog}/
+    ip/{types.py,registry.py,tcl.py,catalog.py,generate.py}
+  tests/{golden,cycle,equivalence,ip,verilog}/
   build/                         # generated locally, ignored
 ```
+
+The schema-v2 AMD-IP architecture is specified in
+[`docs/superpowers/specs/2026-08-11-ip-architecture-normalization-design.md`](docs/superpowers/specs/2026-08-11-ip-architecture-normalization-design.md)
+and implemented according to
+[`docs/superpowers/plans/2026-08-11-ip-architecture-normalization.md`](docs/superpowers/plans/2026-08-11-ip-architecture-normalization.md).
+Its current resolved production catalog lock is
+[`config/ip_lock.json`](config/ip_lock.json); the installed package copy must
+remain byte-identical.
+
+Before any migrated build, freeze the machine-specific environment separately
+from the four authority JSON files. This removes the disposable Vivado tree,
+records the current Git/Python/Vivado identity, and writes a truthful readiness
+decision under `build/metadata/`:
+
+```powershell
+$env:PYTHONPATH=(Join-Path (Get-Location) 'src')
+python -m rfsoc_pulse_model.ip.environment --repo-root (Get-Location) --timezone Asia/Hong_Kong
+```
+
+The command must report `ready: true` before generation. A dirty Git tree,
+anything other than Python 3.12, an unverified Vivado 2025.2 build, changed
+authority bytes, or absolute paths in authority JSON keeps the gate closed.
+`build/metadata/environment.txt` is the package snapshot for this machine; the
+readiness record audits `numpy`, `scipy`, `pytest`, and `unittest`. It is
+environment provenance, not architecture authority.
+
+Only after Phase 0 is ready, generate the architecture metadata, production-lock-validated unconnected
+realization skeleton, and transitional legacy reference RTL with:
+
+```powershell
+python -m rfsoc_pulse_model.generate --output (Join-Path (Get-Location) 'build') --ip-mode production
+```
+
+This writes production-only generated RTL to `build/rtl/`, non-production
+legacy verification RTL to `build/reference_rtl/`, numeric metadata,
+`metadata/ip_architecture.json`, the discovery-only
+`vivado/discover_ip_catalog.tcl`, the unconnected realization-provenance
+`vivado/realize_ip_architecture.tcl`, and a manifest with separate
+`production_rtl` and `reference_rtl` arrays. The build directory is disposable
+and generated files must be regenerated rather than hand-edited.
+
+Run catalog discovery first, passing the three authority SHA-256 values from
+the generated request; it creates only a fixed-part in-memory catalog project
+and writes a fresh `build/metadata/catalog_evidence.tsv`:
+
+```text
+vivado -mode batch -source build/vivado/discover_ip_catalog.tcl -tclargs <architecture_config_sha256> <generated_tcl_sha256> <catalog_request_sha256>
+```
+
+After strict evidence ingestion, the environment-aware generation step writes
+`build/metadata/catalog_provenance.json`. That sidecar binds the fresh TSV to
+the current Phase-0 manifest without changing the architecture discovery or
+production-lock hashes. Never copy the TSV or sidecar from another machine.
+
+After strict evidence ingestion and explicit lock promotion, production
+generation emits `build/vivado/realize_ip_architecture.tcl`. Run that script
+separately to realize only the unconnected `rfdc_0` skeleton:
+
+```text
+vivado -mode batch -source build/vivado/realize_ip_architecture.tcl
+```
+
+When a Vivado project is already open, realization first requires its `PART`
+to equal the cross-authority-checked `device_part`; a mismatch stops before
+any Block Design or cell is created. A matching-part probe reached the guard,
+created the unconnected design and `rfdc_0`, and printed the skeleton status.
+The clean-exit wrapper recheck after that probe was not completed because the
+approval backend disconnected; this is an unverified wrapper boundary, not a
+production-Tcl failure or integration acceptance.
+
+See [`docs/contracts/amd-ip-ownership.md`](docs/contracts/amd-ip-ownership.md)
+for the production ownership boundary and
+[`docs/verification/amd-ip-normalization-acceptance.md`](docs/verification/amd-ip-normalization-acceptance.md)
+for the current acceptance evidence and remaining gates. The older foundation
+acceptance is historical only and is not the current invocation contract.
 
 ## Run
 
 ```powershell
-cd D:\AWAY\RFSOC\model
-py -m pip install -e .
-py -m unittest discover -s tests\golden -v
+Set-Location '<REPO_ROOT>'
+$env:PYTHONPATH=(Join-Path (Get-Location) 'src')
+python -m pip install -e .
+python -m unittest discover -s tests -v
 ```
 
-The default `py` installation on a development machine must have a working
-NumPy installation. Model tests do not validate Vivado Block Design, CDC,
-timing closure, bitstream generation, or board operation.
+The migration workflow records the actual interpreter used instead of relying
+on a path copied from another machine. Model tests do not validate
+Vivado Block Design, CDC, timing closure, bitstream generation, or board
+operation.

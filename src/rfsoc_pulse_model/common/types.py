@@ -53,12 +53,40 @@ class AuxOutputMode(str, Enum):
     CANCELLATION = "cancellation"
 
 
+class RfdcAdcClockingMode(str, Enum):
+    """Structural clock architecture at the RF-ADC/Cycle boundary."""
+
+    COMMON_PL_CLOCK_MTS = "common_pl_clock_mts"
+    PER_TILE_CDC = "per_tile_cdc"
+
+
+class RfdcDacClockingMode(str, Enum):
+    """Structural clock architecture at the RF-DAC/Cycle boundary."""
+
+    COMMON_PL_CLOCK_MTS_SYSREF = "common_pl_clock_mts_sysref"
+    PER_TILE_CDC = "per_tile_cdc"
+
+
+class ClockingProofStatus(str, Enum):
+    """Whether the selected RFDC clock architecture has Vivado evidence."""
+
+    UNVERIFIED = "unverified"
+    VIVADO_VERIFIED = "vivado_verified"
+
+
 class SampleDomain(str, Enum):
     """Timebase in which sample-index fields are expressed."""
 
     RFDC_COMPLEX_INPUT = "rfdc_complex_input"
     DETECTOR = "detector"
     DAC_BASEBAND = "dac_baseband"
+
+
+class SampleTimeReference(str, Enum):
+    """Whether a sample index includes measured common hardware latency."""
+
+    LATENCY_NORMALIZED = "latency_normalized"
+    PHYSICAL = "physical"
 
 
 class IQUnit(str, Enum):

@@ -5,7 +5,14 @@ import unittest
 
 from rfsoc_pulse_model.common.config import ModelConfig
 from rfsoc_pulse_model.common.fixed import RoundingMode
-from rfsoc_pulse_model.common.types import IQUnit, PowerUnit, SampleDomain
+from rfsoc_pulse_model.common.types import (
+    ClockingProofStatus,
+    IQUnit,
+    PowerUnit,
+    RfdcAdcClockingMode,
+    RfdcDacClockingMode,
+    SampleDomain,
+)
 
 
 class ModelConfigTest(unittest.TestCase):
@@ -21,6 +28,24 @@ class ModelConfigTest(unittest.TestCase):
 
         self.assertEqual(config.rfdc_complex_sample_rate_hz, 500_000_000)
         self.assertEqual(config.rfdc_complex_samples_per_cycle, 2)
+        self.assertEqual(
+            config.rfdc_adc_clocking_mode,
+            RfdcAdcClockingMode.COMMON_PL_CLOCK_MTS,
+        )
+        self.assertEqual(
+            config.rfdc_adc_clocking_proof_status,
+            ClockingProofStatus.UNVERIFIED,
+        )
+        self.assertFalse(config.single_clock_ingress_integration_ready)
+        self.assertEqual(
+            config.rfdc_dac_clocking_mode,
+            RfdcDacClockingMode.COMMON_PL_CLOCK_MTS_SYSREF,
+        )
+        self.assertEqual(
+            config.rfdc_dac_clocking_proof_status,
+            ClockingProofStatus.UNVERIFIED,
+        )
+        self.assertFalse(config.single_clock_tx_integration_ready)
         self.assertEqual(
             config.dac_nominal_gain_policy,
             "external_analog_path",
@@ -41,6 +66,141 @@ class ModelConfigTest(unittest.TestCase):
         self.assertEqual(config.detector.iq_width_bits, config.iq_width_bits)
         self.assertEqual(config.detector.power_unit, config.power_unit)
 
+    def test_default_configuration_freezes_every_cycle_numeric_format(self) -> None:
+        config = ModelConfig.load_default()
+        expected = {
+            "adc_component": (16, True, 0, "error"),
+            "decimator_coefficient": (18, True, 17, "error"),
+            "decimator_product": (34, True, 17, "error"),
+            "decimator_accumulator": (38, True, 17, "error"),
+            "decimator_output": (16, True, 0, "saturate"),
+            "power_square": (31, False, 0, "error"),
+            "power": (32, False, 0, "error"),
+            "moving_power_sum": (35, False, 0, "error"),
+            "noise_boot_sum": (46, False, 0, "error"),
+            "noise_estimate": (32, False, 0, "saturate"),
+            "threshold_scale": (32, False, 16, "error"),
+            "threshold_product": (64, False, 16, "error"),
+            "threshold": (32, False, 0, "saturate"),
+            "vote_count": (3, False, 0, "error"),
+            "sample_index": (64, False, 0, "error"),
+            "pulse_width": (32, False, 0, "error"),
+            "range_id": (2, False, 0, "error"),
+            "channel_index": (3, False, 0, "error"),
+            "polarization": (1, False, 0, "error"),
+            "selected_range": (2, False, 0, "error"),
+            "event_id": (32, False, 0, "wrap"),
+            "channel_mask": (8, False, 0, "error"),
+            "flags": (16, False, 0, "error"),
+            "frequency_word": (32, True, 31, "saturate"),
+            "iq_count": (32, False, 0, "error"),
+            "config_version": (32, False, 0, "error"),
+            "reflection_sample": (24, True, 4, "saturate"),
+            "target_count": (4, False, 0, "error"),
+            "delay_integer": (21, False, 0, "error"),
+            "delay_fraction": (18, False, 17, "error"),
+            "fractional_delay_coefficient": (18, True, 17, "error"),
+            "fractional_delay_product": (42, True, 21, "error"),
+            "fractional_delay_accumulator": (48, True, 21, "error"),
+            "calibration_coefficient": (24, True, 20, "saturate"),
+            "calibration_product": (48, True, 24, "error"),
+            "matrix_accumulator": (50, True, 24, "error"),
+            "target_coefficient": (32, True, 20, "saturate"),
+            "target_product": (56, True, 24, "error"),
+            "multi_target_accumulator": (61, True, 24, "error"),
+            "phase_accumulator": (32, False, 32, "wrap"),
+            "phase_increment": (32, True, 31, "wrap"),
+            "nco_phasor": (18, True, 17, "saturate"),
+            "nco_product": (42, True, 21, "error"),
+            "nco_complex_result": (43, True, 21, "error"),
+            "tx_sine_lut": (16, True, 15, "saturate"),
+            "tx_amplitude": (16, False, 15, "saturate"),
+            "tx_product": (32, True, 30, "error"),
+            "dac_sample": (16, True, 0, "saturate"),
+        }
+
+        self.assertEqual(config.numeric_formats.as_tuples(), expected)
+        self.assertEqual(config.threshold_scale_code, 905_413)
+
+    def test_numeric_format_drift_is_rejected(self) -> None:
+        payload = self.root_payload()
+        payload["numeric_formats"]["decimator_accumulator"]["width"] = 37
+
+        with self.assertRaisesRegex(ValueError, "numeric format"):
+            ModelConfig.from_mapping(payload)
+
+    def test_rfdc_axis_format_freezes_dual_adc_and_dac_iq_words(self) -> None:
+        config = ModelConfig.from_mapping(self.root_payload())
+        axis = config.rfdc_axis
+
+        self.assertEqual(axis.adc_data_type, "iq_separate_streams")
+        self.assertEqual(axis.adc_component_width_bits, 16)
+        self.assertEqual(axis.adc_component_stream_width_bits, 32)
+        self.assertEqual(axis.adc_component_samples_per_cycle, 2)
+        self.assertEqual(axis.adc_i_axis(0), "m00_axis")
+        self.assertEqual(axis.adc_q_axis(0), "m01_axis")
+        self.assertEqual(axis.adc_i_axis(7), "m32_axis")
+        self.assertEqual(axis.adc_q_axis(7), "m33_axis")
+        self.assertEqual(axis.dac_data_type, "iq_interleaved")
+        self.assertEqual(axis.dac_component_width_bits, 16)
+        self.assertEqual(axis.dac_axis_width_bits, 64)
+        self.assertEqual(axis.dac_complex_samples_per_cycle, 2)
+        self.assertEqual(axis.dac_component_order, "q1_i1_q0_i0_msb_to_lsb")
+        self.assertEqual(axis.dac_axis(0), "s00_axis")
+        self.assertEqual(axis.dac_axis(7), "s13_axis")
+
+    def test_rfdc_axis_contract_excludes_converter_internal_metadata(self) -> None:
+        axis = ModelConfig.load_default().rfdc_axis
+
+        for name in (
+            "dac_analog_output_type",
+            "dac_mixer_mode",
+            "dac_mixer_scale_mode",
+            "dac_nco_frequency_hz",
+        ):
+            self.assertFalse(hasattr(axis, name), name)
+
+    def test_rfdc_axis_known_words_have_sample_zero_in_least_significant_bits(self) -> None:
+        axis = ModelConfig.from_mapping(self.root_payload()).rfdc_axis
+
+        i_word = axis.pack_adc_component_samples((-32_768, 12_345))
+        q_word = axis.pack_adc_component_samples((-1, 32_767))
+        self.assertEqual(i_word, 0x3039_8000)
+        self.assertEqual(q_word, 0x7FFF_FFFF)
+        self.assertEqual(
+            axis.pack_complex_samples(i_word, q_word),
+            0x7FFF_3039_FFFF_8000,
+        )
+        self.assertEqual(
+            axis.unpack_complex_samples(0x7FFF_3039_FFFF_8000),
+            ((-32_768, -1), (12_345, 32_767)),
+        )
+        self.assertEqual(
+            axis.pack_dac_complex_samples(
+                ((-32_768, -1), (12_345, 32_767))
+            ),
+            0x7FFF_3039_FFFF_8000,
+        )
+        self.assertEqual(
+            axis.unpack_dac_complex_samples(0x7FFF_3039_FFFF_8000),
+            ((-32_768, -1), (12_345, 32_767)),
+        )
+
+    def test_rfdc_axis_rejects_old_64_bit_125_mhz_component_stream_contract(self) -> None:
+        payload = self.root_payload()
+        payload["rfdc_axis_format"]["adc_component_stream_width_bits"] = 64
+        payload["rfdc_axis_format"]["adc_component_samples_per_cycle"] = 4
+
+        with self.assertRaisesRegex(ValueError, "two signed-16 samples"):
+            ModelConfig.from_mapping(payload)
+
+    def test_rfdc_axis_rejects_q_stream_detached_from_physical_adc(self) -> None:
+        payload = self.root_payload()
+        payload["rfdc_axis_format"]["adc_q_axis_names"][0] = "m02_axis"
+
+        with self.assertRaisesRegex(ValueError, "I/Q AXI interface names"):
+            ModelConfig.from_mapping(payload)
+
     def test_inconsistent_detector_rate_is_rejected(self) -> None:
         payload = self.root_payload()
         payload["detector_sample_rate_hz"] = 125_000_000
@@ -53,6 +213,20 @@ class ModelConfigTest(unittest.TestCase):
         payload["rfdc_complex_samples_per_cycle"] = 1
 
         with self.assertRaisesRegex(ValueError, "rx_fabric_clock_hz"):
+            ModelConfig.from_mapping(payload)
+
+    def test_inconsistent_adc_converter_rate_is_rejected(self) -> None:
+        payload = self.root_payload()
+        payload["adc_sample_rate_hz"] = 3_200_000_000
+
+        with self.assertRaisesRegex(ValueError, "adc_sample_rate_hz / rfdc_decimation"):
+            ModelConfig.from_mapping(payload)
+
+    def test_inconsistent_dac_pl_rate_is_rejected(self) -> None:
+        payload = self.root_payload()
+        payload["dac_sample_rate_hz"] = 3_200_000_000
+
+        with self.assertRaisesRegex(ValueError, "DAC baseband rate"):
             ModelConfig.from_mapping(payload)
 
     def test_ambiguous_rfdc_words_per_cycle_name_is_rejected(self) -> None:
@@ -70,9 +244,40 @@ class ModelConfigTest(unittest.TestCase):
     def test_installed_package_loads_its_default_config_resource(self) -> None:
         config = ModelConfig.load_default()
 
-        self.assertEqual(config.model_schema_version, 6)
-        self.assertEqual(config.config_version, 9)
+        self.assertEqual(config.model_schema_version, 13)
+        self.assertEqual(config.config_version, 19)
         self.assertEqual(config.channels, 4)
+
+    def test_unknown_rfdc_adc_clocking_mode_is_rejected(self) -> None:
+        payload = self.root_payload()
+        payload["rfdc_adc_clocking_mode"] = "same_frequency_only"
+
+        with self.assertRaisesRegex(ValueError, "same_frequency_only"):
+            ModelConfig.from_mapping(payload)
+
+    def test_dataclass_replace_cannot_bypass_clocking_enum_types(self) -> None:
+        config = ModelConfig.load_default()
+
+        with self.assertRaisesRegex(ValueError, "rfdc_adc_clocking_mode"):
+            dataclasses.replace(
+                config,
+                rfdc_adc_clocking_mode="common_pl_clock_mts",
+            )
+        with self.assertRaisesRegex(ValueError, "rfdc_adc_clocking_proof_status"):
+            dataclasses.replace(
+                config,
+                rfdc_adc_clocking_proof_status="unverified",
+            )
+        with self.assertRaisesRegex(ValueError, "rfdc_dac_clocking_mode"):
+            dataclasses.replace(
+                config,
+                rfdc_dac_clocking_mode="common_pl_clock_mts_sysref",
+            )
+        with self.assertRaisesRegex(ValueError, "rfdc_dac_clocking_proof_status"):
+            dataclasses.replace(
+                config,
+                rfdc_dac_clocking_proof_status="unverified",
+            )
 
     def test_unknown_power_unit_is_rejected(self) -> None:
         payload = self.root_payload()
@@ -106,6 +311,48 @@ class ModelConfigTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "adc_channel_map.*index"):
             ModelConfig.from_mapping(payload)
+
+    def test_duplicate_adc_rfdc_route_is_rejected(self) -> None:
+        payload = self.root_payload()
+        payload["adc_channel_map"][1]["rfdc_tile"] = 0
+        payload["adc_channel_map"][1]["rfdc_slice"] = 0
+
+        with self.assertRaisesRegex(ValueError, "adc_channel_map.*RFDC route"):
+            ModelConfig.from_mapping(payload)
+
+    def test_noncanonical_adc_rfdc_route_is_rejected(self) -> None:
+        payload = self.root_payload()
+        payload["adc_channel_map"][0]["rfdc_slice"] = 1
+
+        with self.assertRaisesRegex(ValueError, "adc_channel_map.*canonical"):
+            ModelConfig.from_mapping(payload)
+
+    def test_noncanonical_dac_rfdc_route_is_rejected(self) -> None:
+        payload = self.root_payload()
+        payload["dac_channel_map"][0]["rfdc_tile"] = 2
+
+        with self.assertRaisesRegex(ValueError, "dac_channel_map.*canonical"):
+            ModelConfig.from_mapping(payload)
+
+    def test_channel_index_cannot_be_detached_from_its_rfdc_route(self) -> None:
+        for kind in ("adc", "dac"):
+            with self.subTest(kind=kind):
+                payload = self.root_payload()
+                channel_map = payload[f"{kind}_channel_map"]
+                first_route = (
+                    channel_map[0]["rfdc_tile"],
+                    channel_map[0]["rfdc_slice"],
+                )
+                channel_map[0]["rfdc_tile"] = channel_map[1]["rfdc_tile"]
+                channel_map[0]["rfdc_slice"] = channel_map[1]["rfdc_slice"]
+                channel_map[1]["rfdc_tile"] = first_route[0]
+                channel_map[1]["rfdc_slice"] = first_route[1]
+
+                with self.assertRaisesRegex(
+                    ValueError,
+                    f"{kind}_channel_map.*index.*RFDC",
+                ):
+                    ModelConfig.from_mapping(payload)
 
     def test_dataclass_replace_cannot_bypass_model_validation(self) -> None:
         config = ModelConfig.load_default()

@@ -196,6 +196,98 @@ class GoldenAdcFrontendTest(unittest.TestCase):
         self.assertAlmostEqual(result.incident.samples[0, 11], 1.0, places=12)
         self.assertLess(abs(result.incident.samples[0, 41]), 1e-12)
 
+    def test_auto_hold_state_uses_absolute_samples_across_contiguous_frames(self) -> None:
+        config = dataclasses.replace(self.config, auto_range_hold_samples=4)
+        frontend = GoldenEightChannelAdcFrontend(config, self.calibration)
+
+        first_samples = np.zeros((8, 2), dtype=np.complex128)
+        first_clipped = np.zeros((8, 2), dtype=np.bool_)
+        first_clipped[0, 0] = True
+        first = frontend.reconstruct(
+            EightChannelAdcFrame(
+                first_samples,
+                first_clipped,
+                SampleDomain.RFDC_COMPLEX_INPUT,
+                500_000_000,
+                start_sample=100,
+            ),
+            mode=RangeSelectionMode.AUTO_HOLD,
+        )
+        second = frontend.reconstruct(
+            EightChannelAdcFrame(
+                np.zeros((8, 2), dtype=np.complex128),
+                np.zeros((8, 2), dtype=np.bool_),
+                SampleDomain.RFDC_COMPLEX_INPUT,
+                500_000_000,
+                start_sample=102,
+            ),
+            mode=RangeSelectionMode.AUTO_HOLD,
+        )
+
+        self.assertTrue(all(value == GainRange.MID for value in first.selected_ranges[0]))
+        self.assertTrue(all(value == GainRange.MID for value in second.selected_ranges[0]))
+        self.assertEqual(frontend.auto_hold_state.last_switch_samples[0], 100)
+        self.assertEqual(frontend.auto_hold_state.next_sample, 104)
+
+    def test_auto_hold_rejects_a_gap_in_its_absolute_sample_timeline(self) -> None:
+        frontend = GoldenEightChannelAdcFrontend(self.config, self.calibration)
+        empty = np.zeros((8, 2), dtype=np.complex128)
+        clipped = np.zeros((8, 2), dtype=np.bool_)
+        frontend.reconstruct(
+            EightChannelAdcFrame(
+                empty,
+                clipped,
+                SampleDomain.RFDC_COMPLEX_INPUT,
+                500_000_000,
+                start_sample=10,
+            ),
+            mode=RangeSelectionMode.AUTO_HOLD,
+        )
+
+        with self.assertRaisesRegex(ValueError, "contiguous absolute samples"):
+            frontend.reconstruct(
+                EightChannelAdcFrame(
+                    empty,
+                    clipped,
+                    SampleDomain.RFDC_COMPLEX_INPUT,
+                    500_000_000,
+                    start_sample=20,
+                ),
+                mode=RangeSelectionMode.AUTO_HOLD,
+            )
+
+    def test_auto_hold_decision_uses_the_same_aligned_sample_as_output(self) -> None:
+        channels = list(self.calibration.adc_channels)
+        channels[0] = ComplexChannelCalibration(response_delay_samples=0.0)
+        for index in range(1, 8):
+            channels[index] = ComplexChannelCalibration(response_delay_samples=1.0)
+        profile = dataclasses.replace(
+            self.calibration,
+            adc_channels=tuple(channels),
+        )
+        samples = np.zeros((8, 8), dtype=np.complex128)
+        clipped = np.zeros((8, 8), dtype=np.bool_)
+        samples[0, 0] = 32_767.0
+        clipped[0, 0] = True
+
+        result = GoldenEightChannelAdcFrontend(
+            self.config,
+            profile,
+        ).reconstruct(
+            EightChannelAdcFrame(
+                samples,
+                clipped,
+                SampleDomain.RFDC_COMPLEX_INPUT,
+                500_000_000,
+            ),
+            mode=RangeSelectionMode.AUTO_HOLD,
+        )
+
+        self.assertEqual(result.selected_ranges[0, 0], GainRange.HIGH)
+        self.assertEqual(result.selected_ranges[0, 1], GainRange.MID)
+        self.assertFalse(result.corrected_clipped[0, 0])
+        self.assertTrue(result.corrected_clipped[0, 1])
+
 
 if __name__ == "__main__":
     unittest.main()

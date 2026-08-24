@@ -13,6 +13,7 @@ from ..common.types import (
     AuxOutputMode,
     ChannelRole,
     Polarization,
+    SampleTimeReference,
 )
 from .delay import apply_relative_delay
 
@@ -138,5 +139,7 @@ class GoldenEightChannelDacRouter:
             sample_domain=reflected.sample_domain,
             sample_rate_hz=reflected.sample_rate_hz,
             representation=self.config.dac_output_mode,
+            fixed_internal_delay=self.calibration.fixed_internal_delay,
+            time_reference=SampleTimeReference.LATENCY_NORMALIZED,
             start_sample=reflected.start_sample,
         )

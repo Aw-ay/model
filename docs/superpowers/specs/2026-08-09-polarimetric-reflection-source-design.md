@@ -200,6 +200,8 @@ fractional_delay_taps 为正奇数
 
 `ModelConfig.__post_init__()` 无条件调用 `validate()`，因此直接构造、`from_mapping()` 和 `dataclasses.replace()` 共用同一套约束。DAC0..5 与 ADC echo 路径一样，必须完整且唯一覆盖 H/V × HIGH/MID/LOW。
 
+每个 `PhysicalChannelMapEntry` 还必须携带 `rfdc_tile`、`rfdc_slice`、`package_bank`、`board_net` 和 `board_endpoint`。默认 XCZU27DR v2.1 映射、J4 管脚与独立射频连接器以 `docs/contracts/zu27dr-v2.1-physical-channel-map.md` 为唯一物理映射契约；后续 Cycle、RTL 和 Block Design 禁止另建索引表。
+
 ### 6.2 `ReflectionScenario`：一次运行的输入
 
 包含：
@@ -227,7 +229,7 @@ fractional_delay_taps 为正奇数
 
 ### 7.1 ADC 默认映射
 
-在实测表更新前，按评审方案冻结默认逻辑映射：
+按评审方案冻结默认逻辑映射；RFDC tile/slice、package bank 和板端连接器见物理映射契约：
 
 | ADC | 极化 | 档位 | 用途 |
 | --- | --- | --- | --- |

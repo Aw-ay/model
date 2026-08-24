@@ -6,12 +6,14 @@ from typing import Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
+from .calibration_types import FixedInternalDelay
 from .types import (
     AuxOutputMode,
     ChannelRole,
     GainRange,
     Polarization,
     SampleDomain,
+    SampleTimeReference,
 )
 
 
@@ -39,6 +41,11 @@ def _immutable_array(
 @dataclass(frozen=True)
 class PhysicalChannelMapEntry:
     index: int
+    rfdc_tile: int
+    rfdc_slice: int
+    package_bank: int
+    board_net: str
+    board_endpoint: str
     polarization: Polarization
     gain_range: GainRange
     allowed_roles: Tuple[ChannelRole, ...]
@@ -53,6 +60,11 @@ class PhysicalChannelMapEntry:
             raise ValueError("allowed_roles must be a sequence")
         return cls(
             index=int(values["index"]),
+            rfdc_tile=int(values["rfdc_tile"]),
+            rfdc_slice=int(values["rfdc_slice"]),
+            package_bank=int(values["package_bank"]),
+            board_net=str(values["board_net"]),
+            board_endpoint=str(values["board_endpoint"]),
             polarization=Polarization(str(values["polarization"])),
             gain_range=GainRange(str(values["gain_range"])),
             allowed_roles=tuple(ChannelRole(str(value)) for value in raw_roles),
@@ -64,6 +76,12 @@ class PhysicalChannelMapEntry:
     def __post_init__(self) -> None:
         if self.index < 0:
             raise ValueError("physical channel index cannot be negative")
+        if self.rfdc_tile < 0 or self.rfdc_slice < 0:
+            raise ValueError("RFDC tile and slice cannot be negative")
+        if self.package_bank < 1:
+            raise ValueError("package_bank must be positive")
+        if not self.board_net.strip() or not self.board_endpoint.strip():
+            raise ValueError("physical channel requires board net and endpoint")
         if not self.allowed_roles:
             raise ValueError("physical channel requires at least one allowed role")
         if len(set(self.allowed_roles)) != len(self.allowed_roles):
@@ -135,6 +153,8 @@ class EightChannelDacFrame:
     sample_domain: SampleDomain
     sample_rate_hz: int
     representation: str
+    fixed_internal_delay: FixedInternalDelay
+    time_reference: SampleTimeReference
     start_sample: int = 0
 
     def __post_init__(self) -> None:
@@ -154,8 +174,36 @@ class EightChannelDacFrame:
             raise ValueError("sample_rate_hz must be positive")
         if self.representation != "complex_baseband_reference":
             raise ValueError("unsupported DAC mathematical representation")
+        if not isinstance(self.fixed_internal_delay, FixedInternalDelay):
+            raise ValueError("DAC frame fixed_internal_delay has the wrong type")
+        if self.fixed_internal_delay.sample_domain != self.sample_domain:
+            raise ValueError("DAC frame delay and samples must share one domain")
+        if self.fixed_internal_delay.sample_rate_hz != self.sample_rate_hz:
+            raise ValueError("DAC frame delay and samples must share one rate")
+        if not isinstance(self.time_reference, SampleTimeReference):
+            raise ValueError("time_reference must be a SampleTimeReference")
+        if self.time_reference != SampleTimeReference.LATENCY_NORMALIZED:
+            raise ValueError("Golden DAC frame must use latency_normalized time")
         if self.start_sample < 0:
             raise ValueError("start_sample cannot be negative")
+
+    def sample_index(
+        self,
+        offset: int,
+        reference: SampleTimeReference,
+    ) -> float:
+        """Return one frame offset on the normalized or physical time axis."""
+
+        if not isinstance(offset, int) or isinstance(offset, bool):
+            raise ValueError("DAC frame offset must be an integer")
+        if not 0 <= offset < self.samples.shape[1]:
+            raise ValueError("DAC frame offset is outside the frame")
+        if not isinstance(reference, SampleTimeReference):
+            raise ValueError("reference must be a SampleTimeReference")
+        normalized = float(self.start_sample + offset)
+        if reference == SampleTimeReference.LATENCY_NORMALIZED:
+            return normalized
+        return self.fixed_internal_delay.normalized_to_physical_sample(normalized)
 
 
 @dataclass(frozen=True)
@@ -267,9 +315,21 @@ class ReflectionStatus:
     calibration_outputs_enabled: bool
     cancellation_outputs_enabled: bool
     monitor_pulse_count: int
+    monitor_pulse_count_total: int
+    processed_stop_sample: int
+    emitted_stop_sample: int
+    stream_final: bool
 
     def __post_init__(self) -> None:
         if len(self.adc_clipped) != 2 or len(self.selected_ranges) != 2:
             raise ValueError("reflection status requires H and V values")
-        if self.monitor_pulse_count < 0:
-            raise ValueError("monitor_pulse_count cannot be negative")
+        if self.monitor_pulse_count < 0 or self.monitor_pulse_count_total < 0:
+            raise ValueError("monitor pulse counts cannot be negative")
+        if self.monitor_pulse_count > self.monitor_pulse_count_total:
+            raise ValueError("per-result monitor count cannot exceed cumulative count")
+        if self.processed_stop_sample < 0 or self.emitted_stop_sample < 0:
+            raise ValueError("status sample stops cannot be negative")
+        if self.emitted_stop_sample > self.processed_stop_sample:
+            raise ValueError("emitted_stop_sample cannot exceed processed_stop_sample")
+        if not isinstance(self.stream_final, bool):
+            raise ValueError("stream_final must be boolean")

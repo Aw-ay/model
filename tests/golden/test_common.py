@@ -229,6 +229,13 @@ class CommonContractTest(unittest.TestCase):
         self.assertEqual(integer.quantize(0.5), 1)
         self.assertEqual(integer.quantize(-0.5), -1)
 
+    def test_error_overflow_policy_never_hides_internal_width_loss(self) -> None:
+        exact = FixedFormat(width=8, signed=True, overflow="error")
+
+        self.assertEqual(exact.cast_integer(127), 127)
+        with self.assertRaises(OverflowError):
+            exact.cast_integer(128)
+
 
 if __name__ == "__main__":
     unittest.main()

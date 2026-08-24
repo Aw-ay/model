@@ -1,0 +1,1696 @@
+# IP Architecture Normalization Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Replace the current IP-family skeleton with schema-v2 family, instance, block, responsibility, evidence, and lock authorities that are truthful, reproducible, and safe to use as the foundation for a future connected Block Design.
+
+**Architecture:** A single packaged `HardwareArchitectureConfig` declares `device_part`, four architecture object collections, and RFDC integration metadata. Its `device_part` must equal the shared `ModelConfig.device_part`; both discovery and realization use that parsed value. Discovery creates one fixed-part in-memory project only to initialize the Vivado IP catalog, while realization remains separately responsible for its unconnected skeleton cells. Strongly bound Vivado evidence produces a candidate lock; only an explicit promotion creates the production lock, while ownership completeness and production readiness remain independent machine-derived results.
+
+**Tech Stack:** Python 3.12, immutable dataclasses and enums, canonical JSON, strict TSV evidence, `unittest`, generated Verilog-2001 reference RTL, Vivado 2025.2 Tcl, AMD IP Catalog, SHA-256, Git checkpoints.
+
+## Global Constraints
+
+- Work in `D:\AWAY\RFSOC\model` on branch `model-update-20260811`; create local commits only and do not push.
+- RF Data Converter is exactly `xilinx.com:ip:usp_rf_data_converter:2.6`.
+- `IP Family != IP Instance != Architecture Block` is a hard invariant.
+- `rfdc_integration` references `rfdc_0`; it does not define a second RFDC identity.
+- Schema-v2 `HardwareArchitectureConfig.device_part` is required in both byte-identical `ip_architecture.json` copies and must equal shared `ModelConfig.device_part`; neither Tcl emitter may hard-code a different part.
+- `architecture_pending` is a formal `ImplementationKind` and is equivalent to `ArchitectureStatus.ARCHITECTURE_PENDING`.
+- Production and legacy reference responsibility namespaces are disjoint.
+- `required_responsibilities` is one top-level object with exactly `production` and `continuous_dual_polar_reflection` members; do not add a sixth top-level schema domain.
+- Every production `required_responsibility` has exactly one non-legacy architecture-block owner; missing, duplicate, and unknown production responsibilities are errors.
+- The frozen `continuous_dual_polar_reflection` order is `rx_2spc_continuous_ingress`, `adc_channel_alignment_and_calibration`, `dual_polar_three_range_selection`, `continuous_sample_time_and_stream_integrity`, `integer_delay_processing`, `fractional_delay_processing`, `range_rcs_complex_gain_application`, `polarimetric_scattering_matrix_2x2`, `doppler_phase_generation`, `doppler_complex_modulation`, `multi_target_output_alignment`, `multi_target_accumulation`, `tx_polarization_predistortion`, `eight_channel_dac_routing`, `tx_iq16_quantization`, `tx_2spc_continuous_egress`.
+- Each traceability-chain responsibility is in `required_responsibilities.production` and has exactly one non-legacy owner. PDW and monitor responsibilities are side-branch production responsibilities and never enter this chain.
+- `responsibility_complete`, `catalog_resolution_complete`, and `production_integration_ready` are independent derived results.
+- Hash order is exactly architecture config, discovery Tcl, catalog request, external evidence, candidate lock.
+- In requests, evidence, and locks, `generated_tcl_sha256` means only the SHA-256 of `build/vivado/discover_ip_catalog.tcl`.
+- `realize_ip_architecture.tcl` uses separate `realization_tcl_sha256` provenance and does not affect IP-lock validity.
+- A production lock must match the required IP-family set exactly; both missing and extra families are errors.
+- Catalog discovery must query every required family after creating exactly one fixed-part in-memory project from `config.device_part` to initialize the catalog. It must not create a disk project, BD, cell, connection, or run `validate_bd_design`.
+- Only `IpInstanceLifecycle.MATERIALIZED` instances may emit `create_bd_cell`.
+- Legacy Cycle-derived Verilog is generated only under `build/reference_rtl/` and never appears in the production source list.
+- Do not migrate `ModelConfig`, choose a multi-target fractional-delay implementation, add IP parameter dictionaries, connect AXIS, run `validate_bd_design`, or claim CDC/timing/board closure in this plan.
+- Use `C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe` with `PYTHONPATH=D:\AWAY\RFSOC\model\src`.
+- Never hand-edit generated Tcl, metadata, candidate locks, manifests, or Verilog.
+
+---
+
+## File Structure
+
+| Path | Responsibility |
+|---|---|
+| `config/ip_architecture.json` | Source-tree schema-v2 architecture authority |
+| `src/rfsoc_pulse_model/config/ip_architecture.json` | Byte-identical installed schema-v2 package data |
+| `config/ip_lock.json` | Explicitly promoted production catalog lock |
+| `src/rfsoc_pulse_model/config/ip_lock.json` | Byte-identical installed production lock |
+| `src/rfsoc_pulse_model/ip/types.py` | Family, instance, RFDC integration, block, required-responsibility, enum, and config types |
+| `src/rfsoc_pulse_model/ip/registry.py` | Production ownership map, frozen reflection-chain validation, and exact readiness evaluation |
+| `src/rfsoc_pulse_model/ip/tcl.py` | Separate deterministic discovery and realization Tcl emitters |
+| `src/rfsoc_pulse_model/ip/catalog.py` | Exact IP-family/VLNV identity and resolved-set validation |
+| `src/rfsoc_pulse_model/ip/evidence.py` | Canonical request, strict evidence, binding, and candidate-lock logic |
+| `src/rfsoc_pulse_model/ip/lock.py` | Production-lock validation and explicit candidate promotion CLI |
+| `src/rfsoc_pulse_model/ip/generate.py` | Architecture artifact orchestration and derived statuses |
+| `src/rfsoc_pulse_model/ip/__init__.py` | Stable public architecture API |
+| `src/rfsoc_pulse_model/generate.py` | Top generator, production/reference RTL separation, CLI mode |
+| `pyproject.toml` | Package-data inclusion for architecture config and production lock |
+| `tests/ip/test_architecture_config.py` | Schema-v2 types, enums, config-copy, and cross-reference tests |
+| `tests/ip/test_registry.py` | Production/legacy ownership and readiness predicate tests |
+| `tests/ip/test_tcl.py` | Discovery/realization separation and deterministic hash tests |
+| `tests/ip/test_catalog.py` | Exact complete required-family catalog tests |
+| `tests/ip/test_evidence.py` | Acyclic request/evidence binding and stale evidence tests |
+| `tests/ip/test_lock.py` | Exact-set production-lock and promotion tests |
+| `tests/verilog/test_generate.py` | Reference RTL isolation and combined manifest regression |
+| `docs/contracts/amd-ip-ownership.md` | Published family/instance/block and responsibility contract |
+| `docs/verification/amd-ip-normalization-acceptance.md` | Recorded Python and Vivado evidence and remaining gates |
+
+---
+
+### Task 1: Replace the schema-v1 family list with typed schema-v2 architecture objects
+
+**Files:**
+- Modify: `config/ip_architecture.json`
+- Modify: `src/rfsoc_pulse_model/config/ip_architecture.json`
+- Modify: `src/rfsoc_pulse_model/ip/types.py`
+- Modify: `src/rfsoc_pulse_model/ip/__init__.py`
+- Modify: `tests/ip/test_architecture_config.py`
+
+**Interfaces:**
+- Consumes: the approved schema in `docs/superpowers/specs/2026-08-11-ip-architecture-normalization-design.md`.
+- Produces: `ImplementationKind`, `IpInstanceLifecycle`, `ParameterStatus`, `ConnectionStatus`, `ArchitectureStatus`, `IpFamilySpec`, `IpInstanceSpec`, `RfdcIntegrationMetadata`, `ArchitectureBlockSpec`, `RequiredResponsibilitiesSpec`, and `HardwareArchitectureConfig.load_default()` with a cross-authority device-part check.
+
+- [ ] **Step 1: Write failing schema-v2 type and package-data tests**
+
+Replace the schema-v1 assumptions in `tests/ip/test_architecture_config.py` with tests containing these exact expectations:
+
+```python
+EXPECTED_FAMILIES = {
+    "rfdc",
+    "axis_register_slice",
+    "axis_data_fifo",
+    "axis_clock_converter",
+    "axis_dwidth_converter",
+    "axis_combiner",
+    "axis_broadcaster",
+    "axis_switch",
+    "fir_compiler",
+    "dds_compiler",
+    "complex_multiplier",
+    "cordic",
+    "axi_dma",
+}
+
+from rfsoc_pulse_model.common.config import ModelConfig
+
+
+def test_default_uses_schema_v2_and_separates_family_instance_block(self) -> None:
+    config = HardwareArchitectureConfig.load_default()
+    self.assertEqual(config.architecture_schema_version, 2)
+    self.assertEqual(config.device_part, ModelConfig.load_default().device_part)
+    self.assertEqual(config.device_part, "xczu27dr-fsve1156-2-i")
+    self.assertEqual({family.family_id for family in config.ip_families}, EXPECTED_FAMILIES)
+    self.assertEqual(
+        {instance.instance_name for instance in config.ip_instances},
+        {"rfdc_0", "monitor_fir_dec2_0"},
+    )
+    self.assertEqual(config.rfdc_integration.instance_ref, "rfdc_0")
+    self.assertEqual(
+        config.instance_by_name("rfdc_0").family_ref,
+        "rfdc",
+    )
+
+
+def test_default_rejects_architecture_model_device_part_mismatch(self) -> None:
+    payload = self.root_payload()
+    payload["device_part"] = "xczu28dr-ffvg1517-2-e"
+    with self.assertRaisesRegex(ValueError, "device_part.*ModelConfig"):
+        HardwareArchitectureConfig.from_mapping(payload)
+
+
+def test_fractional_delay_is_pending_without_fake_instances(self) -> None:
+    config = HardwareArchitectureConfig.load_default()
+    block = config.block_by_name("fractional_delay_bank")
+    self.assertEqual(block.implementation_kind, ImplementationKind.ARCHITECTURE_PENDING)
+    self.assertEqual(block.architecture_status, ArchitectureStatus.ARCHITECTURE_PENDING)
+    self.assertFalse(block.production_accepted)
+    self.assertEqual(block.instance_refs, ())
+    self.assertFalse(
+        any(instance.instance_name.startswith("fractional_delay_fir_")
+            for instance in config.ip_instances)
+    )
+
+
+def test_default_declares_the_frozen_continuous_reflection_chain(self) -> None:
+    config = HardwareArchitectureConfig.load_default()
+    chain = config.required_responsibilities.continuous_dual_polar_reflection
+    self.assertEqual(
+        chain,
+        (
+            "rx_2spc_continuous_ingress",
+            "adc_channel_alignment_and_calibration",
+            "dual_polar_three_range_selection",
+            "continuous_sample_time_and_stream_integrity",
+            "integer_delay_processing",
+            "fractional_delay_processing",
+            "range_rcs_complex_gain_application",
+            "polarimetric_scattering_matrix_2x2",
+            "doppler_phase_generation",
+            "doppler_complex_modulation",
+            "multi_target_output_alignment",
+            "multi_target_accumulation",
+            "tx_polarization_predistortion",
+            "eight_channel_dac_routing",
+            "tx_iq16_quantization",
+            "tx_2spc_continuous_egress",
+        ),
+    )
+    self.assertTrue(
+        set(chain) <= set(config.required_responsibilities.production)
+    )
+
+
+def test_2spc_production_boundaries_are_pending_not_legacy_aliases(self) -> None:
+    config = HardwareArchitectureConfig.load_default()
+    for block_name, responsibility in (
+        ("rx_2spc_continuous_ingress", "rx_2spc_continuous_ingress"),
+        ("tx_2spc_continuous_egress", "tx_2spc_continuous_egress"),
+    ):
+        block = config.block_by_name(block_name)
+        self.assertEqual(block.responsibilities, (responsibility,))
+        self.assertEqual(
+            block.implementation_kind,
+            ImplementationKind.ARCHITECTURE_PENDING,
+        )
+        self.assertEqual(block.architecture_status, ArchitectureStatus.ARCHITECTURE_PENDING)
+        self.assertFalse(block.production_accepted)
+        self.assertEqual(block.instance_refs, ())
+        self.assertIsNone(block.source)
+        self.assertEqual(block.reference_responsibilities, ())
+    self.assertEqual(
+        config.block_by_name("rx_group_ingress_2spc").reference_responsibilities,
+        ("legacy_reference.rx_group_ingress_2spc",),
+    )
+    self.assertEqual(
+        config.block_by_name("tx_iq_axis_boundary_2spc").reference_responsibilities,
+        ("legacy_reference.tx_iq_axis_boundary_2spc",),
+    )
+
+
+def test_monitor_branch_is_the_only_monitor_and_pdw_owner(self) -> None:
+    config = HardwareArchitectureConfig.load_default()
+    monitor_branch = config.block_by_name("monitor_branch")
+    self.assertEqual(monitor_branch.instance_refs, ("monitor_fir_dec2_0",))
+    self.assertEqual(
+        set(monitor_branch.responsibilities),
+        {
+            "monitor_fir_dec2",
+            "adaptive_noise",
+            "adaptive_threshold",
+            "nm_voting",
+            "toa",
+            "contiguous_main_peak_fwhm",
+            "coarse_pdw",
+            "hit_iq_event_framing",
+        },
+    )
+    self.assertEqual(
+        config.instance_by_name("monitor_fir_dec2_0").logical_role,
+        "monitor_decimator",
+    )
+    self.assertEqual(
+        config.instance_by_name("monitor_fir_dec2_0").lifecycle,
+        IpInstanceLifecycle.PLANNED,
+    )
+    self.assertFalse(
+        any(
+            block.block_name == "monitor_decimator"
+            for block in config.architecture_blocks
+        )
+    )
+
+
+def test_pending_kind_and_status_cannot_disagree(self) -> None:
+    with self.assertRaisesRegex(ValueError, "architecture_pending.*equivalent"):
+        ArchitectureBlockSpec(
+            block_name="bad_pending",
+            implementation_kind=ImplementationKind.ARCHITECTURE_PENDING,
+            responsibilities=("fractional_delay_processing",),
+            reference_responsibilities=(),
+            instance_refs=(),
+            architecture_status=ArchitectureStatus.FROZEN,
+            production_accepted=False,
+            source=None,
+        )
+```
+
+Retain the existing exact RFDC 2.6 and byte-identical config-copy tests, updating access from `config.rfdc.ip` to `config.family_by_id("rfdc")` and `config.rfdc_integration`.
+
+- [ ] **Step 2: Run Task 1 tests and verify RED**
+
+Run:
+
+```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest tests.ip.test_architecture_config -v
+```
+
+Expected: failures because schema version 1 has no `ip_families`, `ip_instances`, `architecture_blocks`, `ArchitectureStatus`, or `ARCHITECTURE_PENDING` kind.
+
+- [ ] **Step 3: Implement the strict enums and immutable object types**
+
+In `src/rfsoc_pulse_model/ip/types.py`, add these exact enum members:
+
+```python
+class ImplementationKind(str, Enum):
+    AMD_IP = "amd_ip"
+    XPM_MACRO = "xpm_macro"
+    CUSTOM_RTL = "custom_rtl"
+    ARCHITECTURE_PENDING = "architecture_pending"
+    LEGACY_NON_PRODUCTION = "legacy_non_production"
+
+
+class IpInstanceLifecycle(str, Enum):
+    PLANNED = "planned"
+    MATERIALIZED = "materialized"
+    RETIRED = "retired"
+
+
+class ParameterStatus(str, Enum):
+    UNSPECIFIED = "unspecified"
+    DRAFTED = "drafted"
+    FROZEN = "frozen"
+    VIVADO_VERIFIED = "vivado_verified"
+
+
+class ConnectionStatus(str, Enum):
+    UNCONNECTED = "unconnected"
+    PARTIAL = "partial"
+    CONNECTED = "connected"
+    VIVADO_VERIFIED = "vivado_verified"
+
+
+class ArchitectureStatus(str, Enum):
+    FROZEN = "frozen"
+    ARCHITECTURE_PENDING = "architecture_pending"
+
+
+class IntegrationProofStatus(str, Enum):
+    UNVERIFIED = "unverified"
+    VIVADO_VERIFIED = "vivado_verified"
+```
+
+Add frozen dataclasses with these exact fields:
+
+```python
+@dataclass(frozen=True)
+class IpFamilySpec:
+    family_id: str
+    implementation_kind: ImplementationKind
+    catalog_pattern: str
+    required: bool
+    vlnv: str | None = None
+
+
+@dataclass(frozen=True)
+class IpInstanceSpec:
+    instance_name: str
+    family_ref: str
+    logical_role: str
+    lifecycle: IpInstanceLifecycle
+    parameter_status: ParameterStatus
+    connection_status: ConnectionStatus
+
+
+@dataclass(frozen=True)
+class RfdcIntegrationMetadata:
+    instance_ref: str
+    configuration_authority: str
+    dac_analog_output_type: str
+    dac_mixer_mode: str
+    dac_mixer_scale_mode: str
+    dac_nco_frequency_hz: int
+    proof_status: IntegrationProofStatus
+
+
+@dataclass(frozen=True)
+class ArchitectureBlockSpec:
+    block_name: str
+    implementation_kind: ImplementationKind
+    responsibilities: tuple[str, ...]
+    reference_responsibilities: tuple[str, ...]
+    instance_refs: tuple[str, ...]
+    architecture_status: ArchitectureStatus
+    production_accepted: bool
+    source: str | None = None
+
+
+@dataclass(frozen=True)
+class RequiredResponsibilitiesSpec:
+    production: tuple[str, ...]
+    continuous_dual_polar_reflection: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class HardwareArchitectureConfig:
+    architecture_schema_version: int
+    architecture_config_version: int
+    vivado_version: str
+    generation_mode: str
+    topology_status: str
+    rfdc_integration: RfdcIntegrationMetadata
+    ip_families: tuple[IpFamilySpec, ...]
+    ip_instances: tuple[IpInstanceSpec, ...]
+    architecture_blocks: tuple[ArchitectureBlockSpec, ...]
+    required_responsibilities: RequiredResponsibilitiesSpec
+    device_part: str
+```
+
+Provide `family_by_id()`, `instance_by_name()`, `block_by_name()`, and `required_families()` methods that raise `KeyError` for an unknown stable ID. `RequiredResponsibilitiesSpec` must reject blank or duplicate production values, blank or duplicate chain values, a chain value outside `production`, and a chain value with the `legacy_reference.` prefix. Check the reserved prefix before production-membership validation and include `legacy_reference` in that `ValueError`, so the type boundary reports the actual namespace violation. Enforce these constructor invariants:
+
+```python
+pending_kind = self.implementation_kind is ImplementationKind.ARCHITECTURE_PENDING
+pending_status = self.architecture_status is ArchitectureStatus.ARCHITECTURE_PENDING
+if pending_kind != pending_status:
+    raise ValueError("architecture_pending kind and status must be equivalent")
+if pending_kind and (
+    self.production_accepted or self.instance_refs or self.source is not None
+):
+    raise ValueError("architecture_pending block cannot be production accepted or implemented")
+```
+
+For legacy blocks, require empty `responsibilities`, nonempty `reference_responsibilities`, `legacy_reference.` prefixes, and `production_accepted=False`. For every non-legacy block, require nonempty `responsibilities`, empty `reference_responsibilities`, and reject the reserved legacy prefix.
+
+- [ ] **Step 4: Replace both configuration copies with schema v2**
+
+Use these exact top-level keys (the two copies must remain byte-identical):
+
+```json
+{
+  "architecture_schema_version": 2,
+  "architecture_config_version": 2,
+  "vivado_version": "2025.2",
+  "device_part": "xczu27dr-fsve1156-2-i",
+  "generation_mode": "vivado_ip_first",
+  "topology_status": "unconnected_skeleton",
+  "rfdc_integration": {},
+  "ip_families": [],
+  "ip_instances": [],
+  "architecture_blocks": [],
+  "required_responsibilities": {
+    "production": [],
+    "continuous_dual_polar_reflection": []
+  }
+}
+```
+
+Set `device_part` from the existing shared `ModelConfig.device_part`, not from
+a second board constant; reject blank values and reject either installed or
+source-tree architecture data when it differs from `ModelConfig`. Declare all
+13 family IDs from `EXPECTED_FAMILIES`. RFDC uses exact pattern and exact VLNV
+`xilinx.com:ip:usp_rf_data_converter:2.6`; the other 12 use their existing
+catalog patterns. Declare exactly these two instances:
+
+```json
+[
+  {
+    "instance_name": "rfdc_0",
+    "family_ref": "rfdc",
+    "logical_role": "rfdc_frontend",
+    "lifecycle": "materialized",
+    "parameter_status": "unspecified",
+    "connection_status": "unconnected"
+  },
+  {
+    "instance_name": "monitor_fir_dec2_0",
+    "family_ref": "fir_compiler",
+    "logical_role": "monitor_decimator",
+    "lifecycle": "planned",
+    "parameter_status": "drafted",
+    "connection_status": "unconnected"
+  }
+]
+```
+
+Move current RFDC integration settings under `rfdc_integration`, replace the nested IP object with `"instance_ref": "rfdc_0"`, and retain exact mixer/NCO/output/proof values. Populate architecture blocks and required responsibilities with the exact production ownership names currently present in `ip/registry.py`, with these deliberate changes:
+
+- `rfdc_frontend` references `rfdc_0` and owns the eight RFDC functions;
+- `monitor_branch` is the only monitor/PDW architecture block and references planned `monitor_fir_dec2_0`; its instance `logical_role` remains `monitor_decimator`, but no `monitor_decimator` architecture block exists. Because the instance is planned, realization must not materialize it;
+- `fractional_delay_bank` is `architecture_pending`, references no instance, and owns `fractional_delay_processing` plus `fractional_delay_coefficient_set_scheduling`;
+- remove the separate production `fractional_delay_scheduler` owner;
+- `rx_2spc_continuous_ingress` and `tx_2spc_continuous_egress` are separate `architecture_pending` production blocks. Each has one same-named production responsibility, `architecture_status="architecture_pending"`, `production_accepted=false`, `instance_refs=[]`, and no `source`;
+- `adc_calibrated_frontend` owns `adc_channel_alignment_and_calibration`, `dual_polar_three_range_selection`, and `auto_hold_range_selection`; `continuous_stream_timebase` owns `continuous_sample_time_and_stream_integrity`, `acquisition_epoch`, and `stream_integrity_status`;
+- `integer_delay_bank` owns `integer_delay_processing`, `integer_delay_storage`, and `circular_delay_addressing`; `range_rcs_gain` owns `range_rcs_complex_gain_application`; `polarimetric_scattering` owns `polarimetric_scattering_matrix_2x2`;
+- `doppler_engine` owns `doppler_phase_generation`, `doppler_complex_modulation`, `doppler_phasor`, and `complex_multiplication`; `multi_target_accumulator` owns `target_scheduling`, `maximum_target_control`, `lane_scheduling`, `multi_target_output_alignment`, and `multi_target_accumulation`;
+- `tx_polarization_predistortion` owns `tx_polarization_predistortion`; `eight_channel_dac_router` owns `eight_channel_dac_routing` and `tx_iq16_quantization`;
+- `axis_infrastructure` retains every AXIS responsibility; `frequency_estimator` owns `frequency_estimator_atan2`; `event_to_ddr` owns `event_to_ddr_transport`; `system_status` owns `overflow_status`, `bit_status`, and `fault_management`; and `monitor_branch` owns `monitor_fir_dec2`, `adaptive_noise`, `adaptive_threshold`, `nm_voting`, `toa`, `contiguous_main_peak_fwhm`, `coarse_pdw`, and `hit_iq_event_framing` outside the traceability chain;
+- legacy blocks use only `legacy_reference.rx_group_ingress_2spc` and `legacy_reference.tx_iq_axis_boundary_2spc` as `reference_responsibilities`.
+
+The exact `required_responsibilities` JSON value is:
+
+```json
+{
+  "production": [
+    "adc", "dac", "ddc", "duc", "decimation", "interpolation", "mixer", "nco",
+    "axis_register_pipeline", "axis_buffering", "axis_clock_domain_crossing", "axis_width_conversion", "axis_combining", "axis_broadcasting", "axis_switching",
+    "monitor_fir_dec2", "fractional_delay_processing", "fractional_delay_coefficient_set_scheduling", "doppler_phasor", "complex_multiplication", "frequency_estimator_atan2", "event_to_ddr_transport",
+    "integer_delay_storage", "acquisition_epoch", "stream_integrity_status", "auto_hold_range_selection", "target_scheduling", "maximum_target_control", "circular_delay_addressing", "lane_scheduling", "multi_target_output_alignment", "multi_target_accumulation",
+    "adaptive_noise", "adaptive_threshold", "nm_voting", "toa", "contiguous_main_peak_fwhm", "coarse_pdw", "hit_iq_event_framing", "overflow_status", "bit_status", "fault_management",
+    "rx_2spc_continuous_ingress", "adc_channel_alignment_and_calibration", "dual_polar_three_range_selection", "continuous_sample_time_and_stream_integrity", "integer_delay_processing", "range_rcs_complex_gain_application", "polarimetric_scattering_matrix_2x2", "doppler_phase_generation", "doppler_complex_modulation", "tx_polarization_predistortion", "eight_channel_dac_routing", "tx_iq16_quantization", "tx_2spc_continuous_egress"
+  ],
+  "continuous_dual_polar_reflection": [
+    "rx_2spc_continuous_ingress", "adc_channel_alignment_and_calibration", "dual_polar_three_range_selection", "continuous_sample_time_and_stream_integrity", "integer_delay_processing", "fractional_delay_processing", "range_rcs_complex_gain_application", "polarimetric_scattering_matrix_2x2", "doppler_phase_generation", "doppler_complex_modulation", "multi_target_output_alignment", "multi_target_accumulation", "tx_polarization_predistortion", "eight_channel_dac_routing", "tx_iq16_quantization", "tx_2spc_continuous_egress"
+  ]
+}
+```
+
+Copy the final JSON bytes to `src/rfsoc_pulse_model/config/ip_architecture.json` without reformatting differences.
+
+- [ ] **Step 5: Run Task 1 tests and the existing config tests**
+
+Run:
+
+```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest tests.ip.test_architecture_config tests.common.test_config -v
+```
+
+Expected: PASS; the default architecture and shared `ModelConfig` have the
+same `device_part`, and unrelated `ModelConfig` tests remain unchanged.
+
+- [ ] **Step 6: Commit Task 1**
+
+```powershell
+git add config/ip_architecture.json src/rfsoc_pulse_model/config/ip_architecture.json src/rfsoc_pulse_model/ip/types.py src/rfsoc_pulse_model/ip/__init__.py tests/ip/test_architecture_config.py
+git commit -m "refactor: add schema v2 IP architecture objects"
+```
+
+---
+
+### Task 2: Derive exact production ownership and machine readiness
+
+**Files:**
+- Modify: `src/rfsoc_pulse_model/ip/registry.py`
+- Modify: `tests/ip/test_registry.py`
+- Modify: `docs/contracts/amd-ip-ownership.md`
+
+**Interfaces:**
+- Consumes: `HardwareArchitectureConfig`, `ArchitectureBlockSpec`, `RequiredResponsibilitiesSpec`, and strict enum types from Task 1.
+- Produces: `ArchitectureRegistry.from_config(config: HardwareArchitectureConfig) -> ArchitectureRegistry`, `ArchitectureRegistry.production_owner_map: dict[str, str]`, `ArchitectureRegistry.reference_responsibility_map: dict[str, str]`, `ArchitectureRegistry.reflection_chain_owner_map: tuple[tuple[str, str], ...]`, `ArchitectureRegistry.responsibility_complete`, `ArchitectureReadiness`, and `ArchitectureRegistry.evaluate_readiness(*, catalog_resolution_complete: bool, production_lock_valid: bool, production_sources_contain_reference: bool) -> ArchitectureReadiness`.
+
+- [ ] **Step 1: Write failing ownership-scope and readiness tests**
+
+Add tests with these exact behaviors:
+
+```python
+def test_production_owner_map_exactly_matches_required_set(self) -> None:
+    config = HardwareArchitectureConfig.load_default()
+    registry = ArchitectureRegistry.from_config(config)
+    self.assertTrue(registry.responsibility_complete)
+    self.assertEqual(
+        set(registry.production_owner_map),
+        set(config.required_responsibilities.production),
+    )
+
+
+def test_legacy_reference_responsibilities_are_out_of_production_scope(self) -> None:
+    config = HardwareArchitectureConfig.load_default()
+    registry = ArchitectureRegistry.from_config(config)
+    self.assertNotIn(
+        "legacy_reference.rx_group_ingress_2spc",
+        registry.production_owner_map,
+    )
+    self.assertEqual(
+        set(registry.reference_responsibility_map),
+        {
+            "legacy_reference.rx_group_ingress_2spc",
+            "legacy_reference.tx_iq_axis_boundary_2spc",
+        },
+    )
+
+
+def test_frozen_reflection_chain_has_one_nonlegacy_owner_per_item(self) -> None:
+    config = HardwareArchitectureConfig.load_default()
+    registry = ArchitectureRegistry.from_config(config)
+    self.assertEqual(
+        registry.reflection_chain_owner_map,
+        tuple(
+            (responsibility, registry.production_owner_map[responsibility])
+            for responsibility in config.required_responsibilities.continuous_dual_polar_reflection
+        ),
+    )
+    for responsibility, block_name in registry.reflection_chain_owner_map:
+        self.assertIn(
+            responsibility,
+            config.required_responsibilities.production,
+        )
+        self.assertNotEqual(
+            config.block_by_name(block_name).implementation_kind,
+            ImplementationKind.LEGACY_NON_PRODUCTION,
+        )
+
+
+def test_unknown_and_duplicate_production_responsibilities_fail(self) -> None:
+    config = HardwareArchitectureConfig.load_default()
+    unknown_fault_management = dataclasses.replace(
+        config,
+        required_responsibilities=dataclasses.replace(
+            config.required_responsibilities,
+            production=tuple(
+                responsibility
+                for responsibility in config.required_responsibilities.production
+                if responsibility != "fault_management"
+            ),
+        ),
+    )
+    with self.assertRaisesRegex(ValueError, "unknown production responsibility"):
+        ArchitectureRegistry.from_config(unknown_fault_management)
+
+    duplicate_block = dataclasses.replace(
+        config.architecture_blocks[0],
+        block_name="duplicate_adc",
+        responsibilities=("adc",),
+    )
+    with self.assertRaisesRegex(ValueError, "multiple production owners"):
+        ArchitectureRegistry.from_config(
+            dataclasses.replace(
+                config,
+                architecture_blocks=(*config.architecture_blocks, duplicate_block),
+            )
+        )
+
+
+def test_missing_and_reordered_chain_fail_in_registry_and_legacy_prefix_fails_at_type_boundary(self) -> None:
+    config = HardwareArchitectureConfig.load_default()
+    chain = config.required_responsibilities.continuous_dual_polar_reflection
+    missing = dataclasses.replace(
+        config,
+        required_responsibilities=dataclasses.replace(
+            config.required_responsibilities,
+            continuous_dual_polar_reflection=chain[:-1],
+        ),
+    )
+    with self.assertRaisesRegex(ValueError, "continuous_dual_polar_reflection.*exact"):
+        ArchitectureRegistry.from_config(missing)
+
+    reordered = dataclasses.replace(
+        config,
+        required_responsibilities=dataclasses.replace(
+            config.required_responsibilities,
+            continuous_dual_polar_reflection=(chain[1], chain[0], *chain[2:]),
+        ),
+    )
+    with self.assertRaisesRegex(ValueError, "continuous_dual_polar_reflection.*exact"):
+        ArchitectureRegistry.from_config(reordered)
+
+    with self.assertRaisesRegex(ValueError, "legacy_reference"):
+        dataclasses.replace(
+            config.required_responsibilities,
+            continuous_dual_polar_reflection=(
+                "legacy_reference.rx_group_ingress_2spc",
+                *chain[1:],
+            ),
+        )
+
+
+def test_default_is_complete_but_not_production_ready(self) -> None:
+    config = HardwareArchitectureConfig.load_default()
+    registry = ArchitectureRegistry.from_config(config)
+    readiness = registry.evaluate_readiness(
+        catalog_resolution_complete=True,
+        production_lock_valid=True,
+        production_sources_contain_reference=False,
+    )
+    self.assertTrue(readiness.responsibility_complete)
+    self.assertTrue(readiness.catalog_resolution_complete)
+    self.assertFalse(readiness.production_integration_ready)
+    self.assertIn("architecture_pending", readiness.blocking_reasons)
+```
+
+The unknown-responsibility fixture removes only the non-chain
+`fault_management` value from the required production set. It leaves
+`continuous_dual_polar_reflection` unchanged and valid, while `system_status`
+still owns `fault_management`, so construction reaches the registry's
+`unknown production responsibility` check instead of failing
+`RequiredResponsibilitiesSpec` chain validation.
+
+Add this explicit predicate table to the same test class:
+
+```python
+def test_each_external_readiness_gate_has_a_stable_blocking_reason(self) -> None:
+    registry = ArchitectureRegistry.default()
+    cases = (
+        (
+            {"catalog_resolution_complete": False, "production_lock_valid": True,
+             "production_sources_contain_reference": False},
+            "catalog_resolution_incomplete",
+        ),
+        (
+            {"catalog_resolution_complete": True, "production_lock_valid": False,
+             "production_sources_contain_reference": False},
+            "production_lock_invalid",
+        ),
+        (
+            {"catalog_resolution_complete": True, "production_lock_valid": True,
+             "production_sources_contain_reference": True},
+            "reference_rtl_in_production_sources",
+        ),
+    )
+    for arguments, expected_reason in cases:
+        with self.subTest(expected_reason=expected_reason):
+            result = registry.evaluate_readiness(**arguments)
+            self.assertFalse(result.production_integration_ready)
+            self.assertIn(expected_reason, result.blocking_reasons)
+
+
+def test_default_instance_and_block_maturity_reasons_are_explicit(self) -> None:
+    result = ArchitectureRegistry.default().evaluate_readiness(
+        catalog_resolution_complete=True,
+        production_lock_valid=True,
+        production_sources_contain_reference=False,
+    )
+    self.assertIn("architecture_pending", result.blocking_reasons)
+    self.assertIn("production_block_not_accepted", result.blocking_reasons)
+    self.assertIn("materialized_instance_parameters_not_vivado_verified", result.blocking_reasons)
+    self.assertIn("materialized_instance_connections_not_vivado_verified", result.blocking_reasons)
+    self.assertIn("rfdc_integration_not_vivado_verified", result.blocking_reasons)
+```
+
+- [ ] **Step 2: Run registry tests and verify RED**
+
+Run:
+
+```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest tests.ip.test_registry -v
+```
+
+Expected: failures because the current registry constructs owners from hard-coded families, has no reference namespace, and has no readiness evaluator.
+
+- [ ] **Step 3: Implement config-derived ownership maps and frozen-chain validation**
+
+Replace `_AMD_IP_RESPONSIBILITIES` and `_PROJECT_AND_LEGACY_BLOCKS` with configuration-derived blocks. `ArchitectureRegistry.from_config()` must build:
+
+```python
+production_owner_map: dict[str, str]
+reference_responsibility_map: dict[str, str]
+```
+
+Reject duplicate block names, duplicate owners, missing required owners, unknown production responsibilities, legacy responsibilities outside the reserved prefix, and production responsibilities using the reserved prefix. Task 1 `RequiredResponsibilitiesSpec` has already rejected blank, duplicate, unknown, and `legacy_reference.`-prefixed chain values; do not bypass that invariant with `object.__setattr__` or require registry behavior for impossible objects. For a constructible responsibility object, the registry rejects a missing or reordered frozen chain and identifies `continuous_dual_polar_reflection` and `exact` in its message.
+
+Build `reflection_chain_owner_map` only after verifying that the configured chain equals the frozen 16-item sequence, every item belongs to `required_responsibilities.production`, and every item has exactly one entry in `production_owner_map`. A legacy `reference_responsibility_map` entry never satisfies this lookup. Set `responsibility_complete=True` only when the exact production-owner set and this resolved ordered chain are both valid. Keep `ArchitectureRegistry.default()` as a thin call to `from_config(HardwareArchitectureConfig.load_default())`.
+
+- [ ] **Step 4: Implement the exact readiness conjunction**
+
+Add:
+
+```python
+@dataclass(frozen=True)
+class ArchitectureReadiness:
+    responsibility_complete: bool
+    catalog_resolution_complete: bool
+    production_lock_valid: bool
+    production_integration_ready: bool
+    blocking_reasons: tuple[str, ...]
+```
+
+`evaluate_readiness()` must return true only when every predicate frozen in design Section 4 is true: exact production ownership plus frozen resolved reflection chain, current catalog and lock, all required owners accepted, no pending owner, all accepted AMD owners reference materialized and Vivado-verified instances, accepted custom/XPM owners have production sources, RFDC proof is Vivado-verified, and the production source list contains no reference RTL. Use stable reason strings so tests can assert each failed predicate.
+
+- [ ] **Step 5: Update and run the ownership contract tests**
+
+Update `docs/contracts/amd-ip-ownership.md` to describe family, instance, block, production responsibility, legacy reference responsibility, and the three independent result values. Then run:
+
+```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest tests.ip.test_registry tests.ip.test_architecture_config -v
+```
+
+Expected: PASS.
+
+- [ ] **Step 6: Commit Task 2**
+
+```powershell
+git add src/rfsoc_pulse_model/ip/registry.py tests/ip/test_registry.py docs/contracts/amd-ip-ownership.md
+git commit -m "feat: enforce complete production architecture ownership"
+```
+
+---
+
+### Task 3: Split catalog discovery Tcl from architecture realization Tcl
+
+**Files:**
+- Modify: `src/rfsoc_pulse_model/ip/tcl.py`
+- Create: `src/rfsoc_pulse_model/ip/evidence.py`
+- Modify: `src/rfsoc_pulse_model/ip/generate.py`
+- Modify: `tests/ip/test_tcl.py`
+- Modify: `tests/ip/test_generate_architecture.py`
+
+**Interfaces:**
+- Consumes: schema-v2 families and instances from Task 1 and registry from Task 2.
+- Produces: `emit_catalog_discovery_tcl(config: HardwareArchitectureConfig) -> str`, `emit_architecture_realization_tcl(config: HardwareArchitectureConfig, resolved_vlnv: Mapping[str, str] | None = None) -> str`, `canonical_json_bytes(payload: Mapping[str, object]) -> bytes`, `build_catalog_request(config: HardwareArchitectureConfig, architecture_config_sha256: str, generated_tcl_sha256: str) -> dict[str, object]`, and deterministic `catalog_request.json` generation.
+
+- [ ] **Step 1: Write failing dual-Tcl and no-dummy-cell tests**
+
+Replace old skeleton assertions with:
+
+```python
+def test_discovery_queries_every_required_family_without_creating_cells(self) -> None:
+    config = HardwareArchitectureConfig.load_default()
+    tcl = emit_catalog_discovery_tcl(config)
+    for family in config.required_families():
+        self.assertIn(f"{{{family.family_id}}}", tcl)
+        self.assertIn(f"{{{family.catalog_pattern}}}", tcl)
+    self.assertIn(f"create_project -in_memory -part {{{config.device_part}}}", tcl)
+    self.assertIn("update_ip_catalog", tcl)
+    self.assertNotIn("create_project -force", tcl)
+    self.assertNotIn("create_bd_design", tcl)
+    self.assertNotIn("create_bd_cell", tcl)
+    self.assertNotIn("validate_bd_design", tcl)
+    self.assertIn("llength $argv", tcl)
+    self.assertIn("catalog_evidence.tsv", tcl)
+
+
+def test_realization_creates_only_materialized_instances(self) -> None:
+    config = HardwareArchitectureConfig.load_default()
+    tcl = emit_architecture_realization_tcl(config)
+    self.assertIn(f"create_project -in_memory -part {{{config.device_part}}}", tcl)
+    self.assertNotIn("xczu27dr-fsve1156-2-i", tcl.replace(config.device_part, ""))
+    self.assertIn("create_bd_cell", tcl)
+    self.assertIn("{rfdc_0}", tcl)
+    self.assertNotIn("monitor_fir_dec2_0", tcl)
+    self.assertNotIn("axis_data_fifo", tcl)
+    self.assertNotIn("validate_bd_design", tcl)
+
+
+def test_both_tcl_emitters_take_the_part_from_config(self) -> None:
+    config = HardwareArchitectureConfig.load_default()
+    for emitter in (
+        emit_catalog_discovery_tcl,
+        emit_architecture_realization_tcl,
+    ):
+        tcl = emitter(config)
+        self.assertIn(
+            f"create_project -in_memory -part {{{config.device_part}}}",
+            tcl,
+        )
+
+
+def test_request_hash_order_and_tcl_provenance_are_deterministic(self) -> None:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        architecture = generate_ip_architecture(root)
+        discovery = (root / "vivado/discover_ip_catalog.tcl").read_bytes()
+        realization = (root / "vivado/realize_ip_architecture.tcl").read_bytes()
+        request_bytes = (root / "metadata/catalog_request.json").read_bytes()
+        request = json.loads(request_bytes)
+        self.assertEqual(request["architecture_config_sha256"], architecture["source_config_sha256"])
+        self.assertEqual(request["generated_tcl_sha256"], hashlib.sha256(discovery).hexdigest())
+        self.assertEqual(architecture["realization_tcl_sha256"], hashlib.sha256(realization).hexdigest())
+        self.assertEqual(architecture["catalog_request_sha256"], hashlib.sha256(request_bytes).hexdigest())
+        self.assertNotIn(request["generated_tcl_sha256"], discovery.decode("utf-8"))
+```
+
+- [ ] **Step 2: Run Tcl tests and verify RED**
+
+Run:
+
+```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest tests.ip.test_tcl tests.ip.test_generate_architecture -v
+```
+
+Expected: failures because only `emit_ip_skeleton_tcl()` and `create_ip_architecture.tcl` exist.
+
+- [ ] **Step 3: Implement discovery Tcl for the full required family set**
+
+Remove `INITIAL_SKELETON_IP`. `emit_catalog_discovery_tcl()` must derive its
+catalog array from `config.required_families()`, require exactly three Tcl
+arguments, and first run exactly one
+`create_project -in_memory -part {<config.device_part>}` followed by
+`update_ip_catalog`. This sole project is catalog-initialization context: it
+must never write a project to disk, create a BD, create a cell, connect an
+interface, or invoke `validate_bd_design`. Then query all family patterns with
+`get_ipdefs`, preserve exact RFDC 2.6, and write strict evidence rows. It must
+contain no `create_bd_design` or `create_bd_cell` command.
+
+Use this evidence row grammar:
+
+```text
+meta<TAB>evidence_schema_version<TAB>1
+meta<TAB>architecture_config_sha256<TAB><64 lowercase hex>
+meta<TAB>generated_tcl_sha256<TAB><64 lowercase hex>
+meta<TAB>catalog_request_sha256<TAB><64 lowercase hex>
+meta<TAB>vivado_version<TAB><version -short result>
+meta<TAB>run_id<TAB><pid>-<clock milliseconds>
+ip<TAB><family_id><TAB><exact VLNV>
+```
+
+This is the only accepted evidence wire grammar. The first six rows are fixed
+metadata rows in exactly the order shown: `evidence_schema_version`,
+`architecture_config_sha256`, `generated_tcl_sha256`,
+`catalog_request_sha256`, `vivado_version`, then `run_id`. This order is the
+exact order emitted by `emit_catalog_discovery_tcl()`. Metadata rows may not be
+reordered or repeated, and no `ip` row may appear before all six metadata rows
+are complete. `run_id` must match `^[0-9]+-[0-9]+$`. One or more `ip` rows
+follow the metadata section, and the complete text ends with exactly one
+trailing newline, never zero or two.
+
+- [ ] **Step 4: Implement realization Tcl over concrete instances**
+
+`emit_architecture_realization_tcl()` must create its in-memory project with
+`config.device_part` (never a hard-coded ZU27DR part), create its unconnected
+BD, iterate `config.ip_instances`, skip planned and retired instances, and emit
+stable cell names only for materialized instances. In the initial config it
+creates exactly `rfdc_0`. Emit `IP_ARCHITECTURE_STATUS=UNCONNECTED_SKELETON`;
+do not call `validate_bd_design`.
+
+- [ ] **Step 5: Implement the acyclic request-generation order**
+
+In `generate_ip_architecture()`:
+
+1. load architecture data only after the `device_part == ModelConfig.device_part`
+   cross-authority check, then hash installed `ip_architecture.json` bytes;
+2. emit and write `discover_ip_catalog.tcl`;
+3. hash the exact discovery Tcl bytes;
+4. emit and write `realize_ip_architecture.tcl` and record its independent hash;
+5. serialize canonical `catalog_request.json` with sorted keys, indentation, UTF-8, and one trailing newline;
+6. hash exact request bytes;
+7. write architecture metadata containing all three provenance fields and
+   explain that `architecture_config_sha256` binds `device_part` transitively.
+
+Do not include any hash in the discovery Tcl itself. Do not add a duplicate
+`device_part` field to the request, evidence, candidate lock, or production
+lock: their existing `architecture_config_sha256` binds the exact JSON bytes
+that contain the part. Changing `device_part` therefore requires regenerated
+Tcl, request, evidence, candidate lock, and production-lock validation.
+
+- [ ] **Step 6: Run dual-Tcl tests and commit Task 3**
+
+Run:
+
+```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest tests.ip.test_tcl tests.ip.test_generate_architecture -v
+```
+
+Expected: PASS.
+
+```powershell
+git add src/rfsoc_pulse_model/ip/tcl.py src/rfsoc_pulse_model/ip/evidence.py src/rfsoc_pulse_model/ip/generate.py tests/ip/test_tcl.py tests/ip/test_generate_architecture.py
+git commit -m "feat: split IP discovery and realization Tcl"
+```
+
+---
+
+### Task 4: Bind full-catalog Vivado evidence and generate candidate locks
+
+**Files:**
+- Modify: `src/rfsoc_pulse_model/ip/evidence.py`
+- Modify: `src/rfsoc_pulse_model/ip/catalog.py`
+- Modify: `src/rfsoc_pulse_model/ip/generate.py`
+- Modify: `src/rfsoc_pulse_model/ip/__init__.py`
+- Create: `tests/ip/test_evidence.py`
+- Modify: `tests/ip/test_catalog.py`
+
+**Interfaces:**
+- Consumes: exact request hashes and complete required family set from Task 3.
+- Produces: `CatalogResolutionStatus`, `CatalogEvidence`, `parse_catalog_evidence(text: str) -> CatalogEvidence`, `validate_catalog_evidence(config: HardwareArchitectureConfig, request_bytes: bytes, discovery_tcl_bytes: bytes, evidence: CatalogEvidence) -> ValidatedCatalogEvidence`, and `build_candidate_lock(config: HardwareArchitectureConfig, evidence: ValidatedCatalogEvidence) -> dict[str, object]`.
+
+`CatalogEvidence`, the request, candidate lock, and production lock do not add
+a second `device_part` member. Their `architecture_config_sha256` is the exact
+bytes binding to the architecture JSON's required `device_part`; metadata and
+the published contract must state this so the target is not hidden by the
+hash-only representation.
+
+- [ ] **Step 1: Write failing complete-set and stale-binding tests**
+
+Create `tests/ip/test_evidence.py` with this concrete fixture builder. It derives one exact resolved VLNV per configured family, using RFDC 2.6 and syntactically valid `:1.0` versions for non-RFDC test identities:
+
+```python
+def make_evidence_fixture():
+    config = HardwareArchitectureConfig.load_default()
+    config_bytes = resources.files("rfsoc_pulse_model.config").joinpath(
+        "ip_architecture.json"
+    ).read_bytes()
+    discovery_tcl_bytes = emit_catalog_discovery_tcl(config).encode("utf-8")
+    request_payload = build_catalog_request(
+        config,
+        architecture_config_sha256=hashlib.sha256(config_bytes).hexdigest(),
+        generated_tcl_sha256=hashlib.sha256(discovery_tcl_bytes).hexdigest(),
+    )
+    request_bytes = canonical_json_bytes(request_payload)
+    resolved = {}
+    for family in config.required_families():
+        resolved[family.family_id] = (
+            family.vlnv
+            if family.vlnv is not None
+            else family.catalog_pattern[:-1] + "1.0"
+        )
+    evidence = CatalogEvidence(
+        evidence_schema_version=1,
+        architecture_config_sha256=request_payload["architecture_config_sha256"],
+        generated_tcl_sha256=request_payload["generated_tcl_sha256"],
+        catalog_request_sha256=hashlib.sha256(request_bytes).hexdigest(),
+        vivado_version="2025.2",
+        run_id="1234-1730000000000",
+        resolved_vlnv=tuple(sorted(resolved.items())),
+    )
+    return config, request_bytes, discovery_tcl_bytes, evidence
+
+
+def evidence_tsv(evidence: CatalogEvidence) -> str:
+    rows = [
+        ("meta", "evidence_schema_version", str(evidence.evidence_schema_version)),
+        ("meta", "architecture_config_sha256", evidence.architecture_config_sha256),
+        ("meta", "generated_tcl_sha256", evidence.generated_tcl_sha256),
+        ("meta", "catalog_request_sha256", evidence.catalog_request_sha256),
+        ("meta", "vivado_version", evidence.vivado_version),
+        ("meta", "run_id", evidence.run_id),
+    ]
+    rows.extend(("ip", family_id, vlnv) for family_id, vlnv in evidence.resolved_vlnv)
+    return "".join(f"{kind}\t{key}\t{value}\n" for kind, key, value in rows)
+
+
+def test_current_complete_evidence_is_resolved(self) -> None:
+    config, request_bytes, discovery_tcl_bytes, evidence = make_evidence_fixture()
+    result = validate_catalog_evidence(
+        config,
+        request_bytes,
+        discovery_tcl_bytes,
+        evidence,
+    )
+    self.assertEqual(result.status, CatalogResolutionStatus.ALL_REQUIRED_IP_RESOLVED)
+    self.assertEqual(
+        set(result.resolved_vlnv),
+        {family.family_id for family in config.required_families()},
+    )
+
+
+def test_old_hashes_are_stale_not_resolved(self) -> None:
+    config, request_bytes, discovery_tcl_bytes, evidence = make_evidence_fixture()
+    evidence = dataclasses.replace(
+        evidence,
+        generated_tcl_sha256="0" * 64,
+    )
+    result = validate_catalog_evidence(
+        config,
+        request_bytes,
+        discovery_tcl_bytes,
+        evidence,
+    )
+    self.assertEqual(result.status, CatalogResolutionStatus.STALE_EVIDENCE)
+    self.assertFalse(result.catalog_resolution_complete)
+
+
+def test_missing_extra_duplicate_and_wrong_identity_fail(self) -> None:
+    config, request_bytes, discovery_tcl_bytes, evidence = make_evidence_fixture()
+    resolved = dict(evidence.resolved_vlnv)
+
+    missing = dict(resolved)
+    missing.pop("axi_dma")
+    with self.assertRaisesRegex(ValueError, "family set"):
+        validate_catalog_evidence(
+            config, request_bytes, discovery_tcl_bytes,
+            dataclasses.replace(evidence, resolved_vlnv=tuple(sorted(missing.items()))),
+        )
+
+    extra = dict(resolved)
+    extra["not_required"] = "xilinx.com:ip:xlconstant:1.1"
+    with self.assertRaisesRegex(ValueError, "family set"):
+        validate_catalog_evidence(
+            config, request_bytes, discovery_tcl_bytes,
+            dataclasses.replace(evidence, resolved_vlnv=tuple(sorted(extra.items()))),
+        )
+
+    wrong = dict(resolved)
+    wrong["fir_compiler"] = "xilinx.com:ip:dds_compiler:6.0"
+    with self.assertRaisesRegex(ValueError, "does not match"):
+        validate_catalog_evidence(
+            config, request_bytes, discovery_tcl_bytes,
+            dataclasses.replace(evidence, resolved_vlnv=tuple(sorted(wrong.items()))),
+        )
+
+    duplicate_ip = (
+        evidence_tsv(evidence)
+        + "ip\trfdc\txilinx.com:ip:usp_rf_data_converter:2.6\n"
+    )
+    with self.assertRaisesRegex(ValueError, "duplicate"):
+        parse_catalog_evidence(duplicate_ip)
+
+
+def test_parser_enforces_exact_wire_grammar(self) -> None:
+    _, _, _, evidence = make_evidence_fixture()
+    valid = evidence_tsv(evidence)
+    self.assertEqual(parse_catalog_evidence(valid).run_id, "1234-1730000000000")
+
+    with self.assertRaisesRegex(ValueError, "run_id"):
+        parse_catalog_evidence(
+            valid.replace("1234-1730000000000", "unit-test-1")
+        )
+
+    first_ip = "ip\trfdc\txilinx.com:ip:usp_rf_data_converter:2.6\n"
+    with self.assertRaisesRegex(ValueError, "ip row before metadata"):
+        parse_catalog_evidence(first_ip + valid)
+
+    rows = valid.splitlines(keepends=True)
+    reordered = "".join((rows[0], rows[2], rows[1], *rows[3:]))
+    with self.assertRaisesRegex(ValueError, "metadata order"):
+        parse_catalog_evidence(reordered)
+
+    repeated = "".join((rows[0], rows[0], *rows[1:]))
+    with self.assertRaisesRegex(ValueError, "metadata.*duplicate"):
+        parse_catalog_evidence(repeated)
+
+    for malformed_ending in (valid.removesuffix("\n"), valid + "\n"):
+        with self.subTest(malformed_ending=repr(malformed_ending[-2:])):
+            with self.assertRaisesRegex(ValueError, "single trailing newline"):
+                parse_catalog_evidence(malformed_ending)
+```
+
+Add a generation test that writes a current fixture as strict TSV, reruns `generate_ip_architecture()`, and requires `ip_lock.candidate.json`. Replace its `generated_tcl_sha256` row with 64 zeros, rerun generation, and require status `stale_evidence` plus absence of `ip_lock.candidate.json`. The generator must remove only that known derived candidate path when evidence is absent or stale; it must not delete unrelated metadata.
+
+Add a separate regression that writes only the legacy path `metadata/resolved_ip_vlnv.tsv`, runs generation, and requires `catalog_resolution_status == "unverified"` plus no candidate lock. The schema-v1 TSV must never be read as schema-v2 evidence.
+
+- [ ] **Step 2: Run evidence tests and verify RED**
+
+Run:
+
+```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest tests.ip.test_evidence tests.ip.test_catalog -v
+```
+
+Expected: import failure for `ip.evidence` and old tests still accepting the nine-row legacy TSV subset.
+
+- [ ] **Step 3: Replace subset catalog validation with exact required-set validation**
+
+Delete imports and logic tied to `INITIAL_SKELETON_IP`. `validate_resolved_catalog()` must enforce:
+
+```python
+expected = {family.family_id for family in config.required_families()}
+actual = set(resolved)
+if actual != expected:
+    raise ValueError(f"resolved family set mismatch: missing={sorted(expected-actual)}, extra={sorted(actual-expected)}")
+```
+
+Then validate every exact VLNV identity and exact RFDC 2.6.
+
+- [ ] **Step 4: Implement strict evidence parsing and stale classification**
+
+Add these exact public types:
+
+```python
+class CatalogResolutionStatus(str, Enum):
+    UNVERIFIED = "unverified"
+    STALE_EVIDENCE = "stale_evidence"
+    ALL_REQUIRED_IP_RESOLVED = "all_required_ip_resolved"
+
+
+@dataclass(frozen=True)
+class CatalogEvidence:
+    evidence_schema_version: int
+    architecture_config_sha256: str
+    generated_tcl_sha256: str
+    catalog_request_sha256: str
+    vivado_version: str
+    run_id: str
+    resolved_vlnv: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class ValidatedCatalogEvidence:
+    status: CatalogResolutionStatus
+    catalog_resolution_complete: bool
+    resolved_vlnv: Mapping[str, str]
+    evidence: CatalogEvidence
+```
+
+Parse the exact three-column grammar from Task 3 with one fixed metadata order:
+
+```python
+META_ORDER = (
+    "evidence_schema_version",
+    "architecture_config_sha256",
+    "generated_tcl_sha256",
+    "catalog_request_sha256",
+    "vivado_version",
+    "run_id",
+)
+RUN_ID_RE = re.compile(r"^[0-9]+-[0-9]+$")
+```
+
+Accept exactly those six metadata rows in that order, followed only by `ip`
+rows. Reject metadata reordering or repetition, an `ip` row before the sixth
+metadata row, any metadata after the first `ip` row, unknown row kinds,
+duplicate families, missing metadata, padded values, malformed SHA-256,
+malformed `run_id`, malformed VLNV values, and a file without exactly one
+trailing newline. Treat a hash or Vivado-version mismatch as `STALE_EVIDENCE`
+only after the evidence is structurally valid and its resolved family set is
+exact. Treat malformed content and wrong family identities as errors.
+
+Remove schema-v1 ingestion of `metadata/resolved_ip_vlnv.tsv`; schema v2 reads only `metadata/catalog_evidence.tsv`.
+
+- [ ] **Step 5: Generate the deterministic candidate lock**
+
+For accepted evidence write `build/metadata/ip_lock.candidate.json` containing:
+
+```json
+{
+  "lock_schema_version": 1,
+  "architecture_config_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "generated_tcl_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "catalog_request_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "vivado_version": "2025.2",
+  "families": {
+    "rfdc": "xilinx.com:ip:usp_rf_data_converter:2.6"
+  }
+}
+```
+
+The actual `families` object must contain all 13 required family IDs. Use canonical JSON and one trailing newline. If evidence is absent, set status `unverified`; if current inputs do not match, set `stale_evidence`; if accepted, set `all_required_ip_resolved`. Ensure a candidate from an earlier run is not reported or accepted when current evidence is absent or stale.
+
+- [ ] **Step 6: Run evidence tests and commit Task 4**
+
+```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest tests.ip.test_evidence tests.ip.test_catalog tests.ip.test_generate_architecture -v
+```
+
+Expected: PASS.
+
+```powershell
+git add src/rfsoc_pulse_model/ip/evidence.py src/rfsoc_pulse_model/ip/catalog.py src/rfsoc_pulse_model/ip/generate.py src/rfsoc_pulse_model/ip/__init__.py tests/ip/test_evidence.py tests/ip/test_catalog.py tests/ip/test_generate_architecture.py
+git commit -m "feat: bind complete Vivado catalog evidence"
+```
+
+---
+
+### Task 5: Add exact production-lock validation and explicit promotion
+
+**Files:**
+- Create: `src/rfsoc_pulse_model/ip/lock.py`
+- Modify: `src/rfsoc_pulse_model/ip/generate.py`
+- Modify: `src/rfsoc_pulse_model/generate.py`
+- Modify: `src/rfsoc_pulse_model/ip/__init__.py`
+- Modify: `pyproject.toml`
+- Create: `tests/ip/test_lock.py`
+
+**Interfaces:**
+- Consumes: `ip_lock.candidate.json` from Task 4.
+- Produces: `GenerationMode`, `ProductionLock`, `validate_production_lock(config: HardwareArchitectureConfig, request_bytes: bytes, discovery_tcl_bytes: bytes, lock_payload: Mapping[str, object]) -> ProductionLockValidation`, `promote_candidate_lock(candidate_path: Path, root_lock_path: Path, package_lock_path: Path) -> None`, and `python -m rfsoc_pulse_model.ip.lock promote`.
+
+- [ ] **Step 1: Write failing exact-set and provenance tests**
+
+Create `tests/ip/test_lock.py` with:
+
+```python
+def valid_lock_fixture():
+    config = HardwareArchitectureConfig.load_default()
+    config_bytes = resources.files("rfsoc_pulse_model.config").joinpath(
+        "ip_architecture.json"
+    ).read_bytes()
+    discovery_tcl_bytes = emit_catalog_discovery_tcl(config).encode("utf-8")
+    request_payload = build_catalog_request(
+        config,
+        architecture_config_sha256=hashlib.sha256(config_bytes).hexdigest(),
+        generated_tcl_sha256=hashlib.sha256(discovery_tcl_bytes).hexdigest(),
+    )
+    request_bytes = canonical_json_bytes(request_payload)
+    families = {
+        family.family_id: (
+            family.vlnv
+            if family.vlnv is not None
+            else family.catalog_pattern[:-1] + "1.0"
+        )
+        for family in config.required_families()
+    }
+    lock_payload = {
+        "lock_schema_version": 1,
+        "architecture_config_sha256": request_payload["architecture_config_sha256"],
+        "generated_tcl_sha256": request_payload["generated_tcl_sha256"],
+        "catalog_request_sha256": hashlib.sha256(request_bytes).hexdigest(),
+        "vivado_version": "2025.2",
+        "families": families,
+    }
+    return {
+        "config": config,
+        "request_bytes": request_bytes,
+        "discovery_tcl_bytes": discovery_tcl_bytes,
+        "lock_payload": lock_payload,
+    }
+
+
+def test_lock_family_set_must_equal_required_family_set(self) -> None:
+    fixture = valid_lock_fixture()
+    self.assertTrue(validate_production_lock(**fixture).valid)
+
+    missing = copy.deepcopy(fixture["lock_payload"])
+    missing["families"].pop("axi_dma")
+    with self.assertRaisesRegex(ValueError, "missing.*axi_dma"):
+        validate_production_lock(**{**fixture, "lock_payload": missing})
+
+    extra = copy.deepcopy(fixture["lock_payload"])
+    extra["families"]["not_required"] = "xilinx.com:ip:xlconstant:1.1"
+    with self.assertRaisesRegex(ValueError, "extra.*not_required"):
+        validate_production_lock(**{**fixture, "lock_payload": extra})
+
+
+def test_lock_binds_discovery_not_realization_tcl(self) -> None:
+    fixture = valid_lock_fixture()
+    self.assertTrue(validate_production_lock(**fixture).valid)
+    self.assertNotIn("realization_tcl_sha256", fixture["lock_payload"])
+    self.assertNotIn(
+        "realization_tcl_bytes",
+        inspect.signature(validate_production_lock).parameters,
+    )
+
+    with self.assertRaisesRegex(ValueError, "generated_tcl_sha256"):
+        validate_production_lock(
+            **{
+                **fixture,
+                "discovery_tcl_bytes": b"changed discovery\n",
+            }
+        )
+
+
+def test_promotion_writes_byte_identical_source_and_package_locks(self) -> None:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        candidate = root / "candidate.json"
+        candidate.write_bytes(
+            canonical_json_bytes(valid_lock_fixture()["lock_payload"])
+        )
+        promote_candidate_lock(
+            candidate,
+            root / "config/ip_lock.json",
+            root / "src/rfsoc_pulse_model/config/ip_lock.json",
+        )
+        self.assertEqual(
+            (root / "config/ip_lock.json").read_bytes(),
+            (root / "src/rfsoc_pulse_model/config/ip_lock.json").read_bytes(),
+        )
+```
+
+- [ ] **Step 2: Run lock tests and verify RED**
+
+```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest tests.ip.test_lock -v
+```
+
+Expected: import failure for `rfsoc_pulse_model.ip.lock`.
+
+- [ ] **Step 3: Implement production-lock parsing and exact validation**
+
+Add these exact types:
+
+```python
+class GenerationMode(str, Enum):
+    DEVELOPMENT = "development"
+    PRODUCTION = "production"
+
+
+@dataclass(frozen=True)
+class ProductionLock:
+    lock_schema_version: int
+    architecture_config_sha256: str
+    generated_tcl_sha256: str
+    catalog_request_sha256: str
+    vivado_version: str
+    families: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class ProductionLockValidation:
+    valid: bool
+    lock: ProductionLock
+```
+
+Validate exact required-family set equality, exact RFDC 2.6, exact family identities, schema version 1, current architecture-config hash, discovery-Tcl hash, catalog-request hash, and Vivado version. The public validation function must not accept or compare realization Tcl provenance.
+
+Add `GenerationMode.DEVELOPMENT` and `GenerationMode.PRODUCTION`. Development permits a missing source lock and reports `production_lock_valid=False`. Production rejects a missing, stale, wildcard, incomplete, or extra-family lock before emitting a ready manifest.
+
+- [ ] **Step 4: Implement explicit promotion without normal-build source mutation**
+
+The promotion CLI accepts:
+
+```powershell
+python -m rfsoc_pulse_model.ip.lock promote --candidate build/metadata/ip_lock.candidate.json --root-lock config/ip_lock.json --package-lock src/rfsoc_pulse_model/config/ip_lock.json
+```
+
+It must parse and validate the candidate before writing, create parent directories, write identical canonical bytes to both targets, and fail without modifying either target if validation fails. Normal `generate()` must never call promotion.
+
+Add `ip_lock.json` to package data in `pyproject.toml`. Do not create a production lock from invented test versions; the real checked-in lock is produced by Task 7.
+
+- [ ] **Step 5: Add generation-mode CLI and run lock tests**
+
+Add `--ip-mode development|production` to `rfsoc_pulse_model.generate`. Pass the mode into `generate_ip_architecture()` and publish `production_lock_valid` in architecture metadata.
+
+Run:
+
+```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest tests.ip.test_lock tests.ip.test_generate_architecture -v
+```
+
+Expected: PASS.
+
+- [ ] **Step 6: Commit Task 5**
+
+```powershell
+git add src/rfsoc_pulse_model/ip/lock.py src/rfsoc_pulse_model/ip/generate.py src/rfsoc_pulse_model/generate.py src/rfsoc_pulse_model/ip/__init__.py pyproject.toml tests/ip/test_lock.py tests/ip/test_generate_architecture.py
+git commit -m "feat: add exact production IP lock workflow"
+```
+
+---
+
+### Task 6: Isolate legacy generated RTL from production artifacts
+
+**Files:**
+- Modify: `src/rfsoc_pulse_model/generate.py`
+- Modify: `tests/verilog/test_generate.py`
+- Modify: `README.md`
+
+**Interfaces:**
+- Consumes: `HARDWARE_MODULES` production flags and architecture readiness from Tasks 2 and 5.
+- Produces: `build/reference_rtl/*.v`, manifest `production_rtl`, manifest `reference_rtl`, and a production source list containing no reference modules.
+
+- [ ] **Step 1: Write failing reference-output isolation tests**
+
+Change `tests/verilog/test_generate.py` to assert:
+
+```python
+def test_nonproduction_cycle_rtl_is_emitted_only_as_reference(self) -> None:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        manifest = generate(root)
+        self.assertFalse((root / "rtl/rx_group_ingress_2spc.v").exists())
+        self.assertFalse((root / "rtl/tx_iq_axis_boundary_2spc.v").exists())
+        self.assertTrue((root / "reference_rtl/rx_group_ingress_2spc.v").exists())
+        self.assertTrue((root / "reference_rtl/tx_iq_axis_boundary_2spc.v").exists())
+        self.assertEqual(manifest["production_rtl"], [])
+        self.assertEqual(
+            {item["verilog_file"] for item in manifest["reference_rtl"]},
+            {
+                "reference_rtl/rx_group_ingress_2spc.v",
+                "reference_rtl/tx_iq_axis_boundary_2spc.v",
+            },
+        )
+        self.assertFalse(
+            manifest["ip_architecture"]["production_integration_ready"]
+        )
+```
+
+Update the stale-file test to place an unregistered file separately in `rtl/` and `reference_rtl/` and require the error to name the affected scope.
+
+- [ ] **Step 2: Run generator tests and verify RED**
+
+```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest tests.verilog.test_generate -v
+```
+
+Expected: failure because both legacy modules are still written under `rtl/` and the manifest has only one combined `modules` list.
+
+- [ ] **Step 3: Route generated modules by production classification**
+
+For each `HardwareModuleRegistration`, choose `rtl/` only when `registration.production` is true; otherwise choose `reference_rtl/`. Keep exact SHA, port, latency, and Cycle-class metadata. Publish separate `production_rtl` and `reference_rtl` arrays and retain `modules = production_rtl + reference_rtl` for current manifest compatibility.
+
+During the directory migration, remove only old files under `build/rtl/` whose exact names belong to registered `production=False` modules and whose contents match the freshly generated reference bytes. If an old production-directory file with the same name has different bytes, fail as a possible hand edit. Never remove an unknown file.
+
+Run stale-file detection independently for each generated directory. Never use a directory glob as the production source authority; the manifest list is authoritative.
+
+- [ ] **Step 4: Feed reference-source contamination into readiness**
+
+Pass `production_sources_contain_reference` into `ArchitectureRegistry.evaluate_readiness()` based on the explicit production list. A reference path or legacy registration appearing in `production_rtl` must force readiness false and fail the generator test.
+
+- [ ] **Step 5: Update README and run generator regression**
+
+Document `build/rtl/` as production-only, `build/reference_rtl/` as non-production verification output, and both Tcl paths with their distinct provenance.
+
+Run:
+
+```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest tests.verilog.test_generate tests.ip.test_registry -v
+```
+
+Expected: PASS.
+
+- [ ] **Step 6: Commit Task 6**
+
+```powershell
+git add src/rfsoc_pulse_model/generate.py tests/verilog/test_generate.py README.md
+git commit -m "refactor: isolate legacy RTL from production sources"
+```
+
+---
+
+### Task 7: Resolve every required AMD IP in Vivado 2025.2 and promote the real lock
+
+**Files:**
+- Create: `config/ip_lock.json` from validated Vivado evidence
+- Create: `src/rfsoc_pulse_model/config/ip_lock.json` as an identical copy
+- Modify: `tests/ip/test_lock.py`
+- Modify: `tests/ip/test_architecture_config.py`
+
+**Interfaces:**
+- Consumes: generated discovery Tcl, catalog request, evidence parser, candidate-lock builder, and promotion CLI from Tasks 3–5.
+- Produces: checked-in exact production lock for the installed Vivado 2025.2 catalog.
+
+- [ ] **Step 1: Run the complete Python suite before external validation**
+
+```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest discover -s tests -v
+```
+
+Expected: all tests PASS before Vivado evidence is introduced.
+
+- [ ] **Step 2: Generate current discovery inputs in development mode**
+
+```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m rfsoc_pulse_model.generate --output 'D:\AWAY\RFSOC\model\build' --ip-mode development
+```
+
+Read back `build/metadata/catalog_request.json` and verify it contains all 13 required families.
+
+- [ ] **Step 3: Run discovery Tcl with the exact acyclic hash arguments**
+
+```powershell
+$request = Get-Content -LiteralPath 'D:\AWAY\RFSOC\model\build\metadata\catalog_request.json' -Raw | ConvertFrom-Json
+& 'D:\app\AMD\2025.2\Vivado\bin\vivado.bat' -mode batch -source 'D:\AWAY\RFSOC\model\build\vivado\discover_ip_catalog.tcl' -notrace -tclargs $request.architecture_config_sha256 $request.generated_tcl_sha256 $request.catalog_request_sha256
+```
+
+Expected: exit code 0 and `build/metadata/catalog_evidence.tsv` contains one metadata section plus exactly 13 unique `ip` rows. The discovery log must show the one in-memory project for `xczu27dr-fsve1156-2-i` and catalog update, but no saved project, BD, cell, connection, or validation command. This project context is required because a no-project Vivado 2025.2 process returned no RFDC IP defs and `update_ip_catalog` reported `No open project`; with the in-memory fixed-part project, RFDC 2.6 became visible. If the sandbox blocks Vivado user-app storage, rerun the identical command with user approval rather than changing Tcl or evidence paths.
+
+- [ ] **Step 4: Ingest evidence and verify candidate lock provenance**
+
+```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m rfsoc_pulse_model.generate --output 'D:\AWAY\RFSOC\model\build' --ip-mode development
+```
+
+Expected:
+
+```text
+catalog_resolution_status = all_required_ip_resolved
+catalog_resolution_complete = true
+production_lock_valid = false
+production_integration_ready = false
+```
+
+Verify `build/metadata/ip_lock.candidate.json` family keys exactly equal the schema-v2 required family IDs and RFDC equals 2.6.
+
+- [ ] **Step 5: Promote the candidate and verify byte identity**
+
+```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m rfsoc_pulse_model.ip.lock promote --candidate 'D:\AWAY\RFSOC\model\build\metadata\ip_lock.candidate.json' --root-lock 'D:\AWAY\RFSOC\model\config\ip_lock.json' --package-lock 'D:\AWAY\RFSOC\model\src\rfsoc_pulse_model\config\ip_lock.json'
+Get-FileHash -Algorithm SHA256 'D:\AWAY\RFSOC\model\config\ip_lock.json','D:\AWAY\RFSOC\model\src\rfsoc_pulse_model\config\ip_lock.json'
+```
+
+Expected: both SHA-256 values are identical.
+
+- [ ] **Step 6: Verify production mode and realization skeleton separately**
+
+```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m rfsoc_pulse_model.generate --output 'D:\AWAY\RFSOC\model\build' --ip-mode production
+& 'D:\app\AMD\2025.2\Vivado\bin\vivado.bat' -mode batch -source 'D:\AWAY\RFSOC\model\build\vivado\realize_ip_architecture.tcl' -notrace
+```
+
+Expected: production lock validates; realization uses `config.device_part`, creates only `rfdc_0`, reports `UNCONNECTED_SKELETON`, and does not call `validate_bd_design`. `production_integration_ready` remains false because parameters, connections, RFDC proof, custom production sources, and fractional-delay architecture are not accepted.
+
+- [ ] **Step 7: Add default-lock regression and commit Task 7**
+
+Add these default-lock assertions:
+
+```python
+def test_promoted_default_lock_is_current_and_byte_identical(self) -> None:
+    root = Path(__file__).resolve().parents[2]
+    root_bytes = (root / "config/ip_lock.json").read_bytes()
+    package_bytes = (
+        root / "src/rfsoc_pulse_model/config/ip_lock.json"
+    ).read_bytes()
+    self.assertEqual(root_bytes, package_bytes)
+
+    config = HardwareArchitectureConfig.load_default()
+    config_bytes = (
+        root / "src/rfsoc_pulse_model/config/ip_architecture.json"
+    ).read_bytes()
+    discovery_bytes = emit_catalog_discovery_tcl(config).encode("utf-8")
+    request_bytes = canonical_json_bytes(build_catalog_request(
+        config,
+        architecture_config_sha256=hashlib.sha256(config_bytes).hexdigest(),
+        generated_tcl_sha256=hashlib.sha256(discovery_bytes).hexdigest(),
+    ))
+    validation = validate_production_lock(
+        config,
+        request_bytes,
+        discovery_bytes,
+        json.loads(root_bytes),
+    )
+    self.assertTrue(validation.valid)
+    self.assertEqual(
+        set(json.loads(root_bytes)["families"]),
+        {family.family_id for family in config.required_families()},
+    )
+    self.assertNotIn("realization_tcl_sha256", json.loads(root_bytes))
+```
+
+```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest tests.ip.test_lock tests.ip.test_architecture_config -v
+git add config/ip_lock.json src/rfsoc_pulse_model/config/ip_lock.json tests/ip/test_lock.py tests/ip/test_architecture_config.py
+git commit -m "build: lock Vivado 2025.2 AMD IP catalog"
+```
+
+---
+
+### Task 8: Run final regression and publish bounded acceptance evidence
+
+**Files:**
+- Modify: `README.md`
+- Modify: `docs/contracts/amd-ip-ownership.md`
+- Create: `docs/verification/amd-ip-normalization-acceptance.md`
+
+**Interfaces:**
+- Consumes: all code, generated artifacts, promoted lock, Python results, and Vivado logs from Tasks 1–7.
+- Produces: auditable acceptance record and explicit remaining integration gates.
+
+- [ ] **Step 1: Regenerate twice and check deterministic tracked inputs**
+
+Run production generation twice, recording SHA-256 for:
+
+```text
+build/vivado/discover_ip_catalog.tcl
+build/vivado/realize_ip_architecture.tcl
+build/metadata/catalog_request.json
+build/metadata/ip_architecture.json
+build/manifest.json
+```
+
+Use:
+
+```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m rfsoc_pulse_model.generate --output 'D:\AWAY\RFSOC\model\build' --ip-mode production
+Get-FileHash -Algorithm SHA256 'build\vivado\discover_ip_catalog.tcl','build\vivado\realize_ip_architecture.tcl','build\metadata\catalog_request.json','build\metadata\ip_architecture.json','build\manifest.json'
+```
+
+Expected: identical hashes on both runs when external evidence and source inputs are unchanged.
+
+- [ ] **Step 2: Run the complete Python suite**
+
+```powershell
+$env:PYTHONPATH='D:\AWAY\RFSOC\model\src'
+& 'C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest discover -s tests -v
+```
+
+Expected: all tests PASS; record the exact count and elapsed time.
+
+- [ ] **Step 3: Record the bounded Vivado evidence**
+
+Create `docs/verification/amd-ip-normalization-acceptance.md` containing:
+
+- branch and commit under test;
+- Vivado full version;
+- architecture config, discovery Tcl, request, evidence, lock, and realization Tcl hashes;
+- `device_part` value and proof that both Tcl scripts derive it from the
+  cross-authority-checked architecture config;
+- exact resolved VLNV table for all 13 required families;
+- proof that discovery created only its fixed-part in-memory catalog project,
+  then no BD, cells, or connections;
+- proof that realization created only `rfdc_0`;
+- the three derived result values;
+- Python test command and exact result;
+- explicit statement that connected BD, IP parameters, `validate_bd_design`, CDC, timing, MTS/SYSREF, DMA/Ethernet, and board loopback remain unverified.
+
+- [ ] **Step 4: Update README and ownership contract references**
+
+Link the schema-v2 design, this implementation plan, the production lock, and the acceptance record. Replace old `create_ip_architecture.tcl` instructions with separate discovery and realization commands. Preserve the statement that generated files are not hand-edited.
+
+- [ ] **Step 5: Run documentation and repository checks**
+
+```powershell
+rg -n "create_ip_architecture\.tcl|INITIAL_SKELETON_IP|vivado_2025_2_resolved" README.md src tests docs/contracts/amd-ip-ownership.md docs/verification/amd-ip-normalization-acceptance.md
+git diff --check
+git status --short
+```
+
+Expected: no live instruction, current contract, current acceptance record, source code, or test relies on old skeleton names/status; historical plans and the prior foundation acceptance remain unchanged; `git diff --check` passes; only intended documentation files are modified.
+
+- [ ] **Step 6: Commit Task 8**
+
+```powershell
+git add README.md docs/contracts/amd-ip-ownership.md docs/verification/amd-ip-normalization-acceptance.md
+git commit -m "docs: accept normalized AMD IP architecture"
+```
+
+---
+
+## Spec Coverage Map
+
+| Approved design requirement | Implemented and verified by |
+|---|---|
+| Schema-v2 device part, family, instance, block, RFDC, and machine-traceable responsibility domains | Tasks 1–2 |
+| Formal `architecture_pending` kind and status invariants | Tasks 1–2 |
+| Production versus legacy responsibility scope isolation, including distinct pending 2SPC ingress and egress blocks | Tasks 1–2 and 6 |
+| Frozen continuous dual-polar reflection chain: type-boundary legacy-prefix rejection, registry exact ordering, and one non-legacy owner per item | Tasks 1–2 |
+| Exact ownership completeness and independent readiness predicate | Task 2 |
+| Cross-authority `device_part`, catalog-context discovery, and instance realization separation | Tasks 1, 3, and 7 |
+| Acyclic config, discovery Tcl, request, evidence, candidate chain | Tasks 3–4 |
+| Discovery-only `generated_tcl_sha256` provenance | Tasks 3–5 |
+| Complete required-family evidence and stale-evidence rejection | Task 4 |
+| Strict six-row TSV metadata order, numeric run ID, row phases, and one trailing newline | Tasks 3–4 |
+| Exact production lock and explicit promotion | Tasks 5 and 7 |
+| Legacy RTL production-source isolation | Task 6 |
+| Vivado 2025.2 full-family validation and bounded claims | Tasks 7–8 |
+
+---
+
+## Final Verification Checklist
+
+- [ ] `config/ip_architecture.json` and installed package copy are byte-identical.
+- [ ] `HardwareArchitectureConfig.device_part` is nonblank, equals shared `ModelConfig.device_part`, and both Tcl scripts use it without a hard-coded target.
+- [ ] `config/ip_lock.json` and installed package copy are byte-identical.
+- [ ] `required_responsibilities` has only `production` and `continuous_dual_polar_reflection` members; no top-level schema domain was added.
+- [ ] Every required production responsibility has exactly one non-legacy owner.
+- [ ] `continuous_dual_polar_reflection` exactly matches the frozen 16-item sequence and every item resolves to its unique non-legacy owner.
+- [ ] `RequiredResponsibilitiesSpec` fail-fast rejects blank, duplicate, unknown, and `legacy_reference.`-prefixed chain values without constructing impossible objects.
+- [ ] Registry tests reject constructible missing or reordered frozen chains and enforce reachable unknown/duplicate ownership errors.
+- [ ] Legacy reference responsibilities use only the reserved namespace and do not enter production maps.
+- [ ] `rx_group_ingress_2spc` and `tx_iq_axis_boundary_2spc` own only legacy references; separate pending production blocks own the continuous 2SPC ingress and egress responsibilities without instance refs.
+- [ ] PDW and monitor responsibilities remain outside the continuous reflection traceability chain.
+- [ ] Discovery Tcl creates exactly one fixed-part in-memory project for catalog initialization and contains no disk-project, BD, cell, connection, or validation operation.
+- [ ] Realization Tcl creates only materialized instances.
+- [ ] Discovery evidence resolves exactly all required families.
+- [ ] Catalog evidence uses the fixed six-row metadata order, numeric `<pid>-<milliseconds>` run ID, metadata-before-IP phase, and exactly one trailing newline.
+- [ ] Old or mismatched evidence reports stale and cannot produce a current candidate lock.
+- [ ] Production lock family set is exact, uses RFDC 2.6, and binds discovery Tcl only.
+- [ ] Request, evidence, candidate lock, and production lock explain that `architecture_config_sha256` binds `device_part`; they do not carry a divergent duplicate field.
+- [ ] Legacy Verilog appears only under `build/reference_rtl/`.
+- [ ] `responsibility_complete=true` can coexist truthfully with `production_integration_ready=false`.
+- [ ] Full Python suite passes.
+- [ ] Vivado catalog discovery and unconnected realization both complete under 2025.2.
+- [ ] No connected-BD, CDC, timing, MTS/SYSREF, DMA/Ethernet, or board-level claim is made.

@@ -5,6 +5,7 @@ from .common.calibration_types import (
     CalibrationConditionError,
     CalibrationProfile,
     ComplexChannelCalibration,
+    FixedInternalDelay,
     RcsCalibrationAnchor,
 )
 from .common.reflection_types import (
@@ -18,6 +19,8 @@ from .common.reflection_types import (
     ReflectionStatus,
     TargetRequest,
 )
+from .common.rfdc_axis import RfdcAxisWordFormat
+from .common.numeric_formats import NumericFormatManifest
 from .common.types import (
     AuxOutputMode,
     ChannelRole,
@@ -31,12 +34,15 @@ from .common.types import (
     RangeId,
     RangeSelectionMode,
     SampleDomain,
+    SampleTimeReference,
 )
 from .golden.system import (
     GoldenReflectionSource,
     GoldenReflectionStream,
     ReflectionSourceResult,
 )
+from .golden.adc_frontend import AutoHoldState, GoldenEightChannelAdcFrontend
+from .golden.transmit import DacIq16Codes, quantize_complex_iq16
 
 __all__ = [
     "DetectorConfig",
@@ -53,12 +59,15 @@ __all__ = [
     "RangeId",
     "RangeSelectionMode",
     "SampleDomain",
+    "SampleTimeReference",
     "CalibrationConditionError",
     "CalibrationProfile",
     "ComplexChannelCalibration",
+    "FixedInternalDelay",
     "RcsCalibrationAnchor",
     "CompiledScatterer",
     "DacAuxRequest",
+    "DacIq16Codes",
     "EightChannelAdcFrame",
     "EightChannelDacFrame",
     "PhysicalChannelMapEntry",
@@ -66,7 +75,12 @@ __all__ = [
     "ReflectionScenario",
     "ReflectionStatus",
     "TargetRequest",
+    "RfdcAxisWordFormat",
+    "NumericFormatManifest",
     "GoldenReflectionSource",
+    "GoldenEightChannelAdcFrontend",
+    "AutoHoldState",
     "GoldenReflectionStream",
     "ReflectionSourceResult",
+    "quantize_complex_iq16",
 ]

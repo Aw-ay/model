@@ -5,6 +5,7 @@ import numpy as np
 from rfsoc_pulse_model.common.calibration_types import (
     CalibrationConditionError,
     CalibrationProfile,
+    FixedInternalDelay,
 )
 from rfsoc_pulse_model.common.reflection_types import PolarimetricWaveform
 from rfsoc_pulse_model.common.types import SampleDomain
@@ -12,6 +13,35 @@ from rfsoc_pulse_model.golden.calibration import GoldenTxPredistorter
 
 
 class GoldenCalibrationTest(unittest.TestCase):
+    def test_fixed_internal_delay_has_an_explicit_physical_contract(self) -> None:
+        profile = CalibrationProfile.identity(2.8e9, 25.0, 64.25, None)
+
+        self.assertIsInstance(profile.fixed_internal_delay, FixedInternalDelay)
+        self.assertEqual(profile.fixed_internal_delay.samples, 64.25)
+        self.assertEqual(
+            profile.fixed_internal_delay.sample_domain,
+            SampleDomain.RFDC_COMPLEX_INPUT,
+        )
+        self.assertEqual(profile.fixed_internal_delay.sample_rate_hz, 500_000_000)
+        self.assertEqual(
+            profile.fixed_internal_delay.reference_boundary,
+            "rfdc_adc_complex_input_to_dac_baseband_output",
+        )
+        self.assertTrue(profile.fixed_internal_delay.includes_common_hardware_latency)
+        self.assertFalse(profile.fixed_internal_delay.includes_programmable_target_delay)
+        self.assertFalse(
+            profile.fixed_internal_delay.includes_golden_fractional_kernel_center
+        )
+
+    def test_fixed_internal_delay_maps_normalized_to_physical_sample_time(self) -> None:
+        delay = FixedInternalDelay(
+            samples=64.25,
+            sample_rate_hz=500_000_000,
+        )
+
+        self.assertEqual(delay.normalized_to_physical_sample(60), 124.25)
+        self.assertEqual(delay.physical_to_normalized_sample(124.25), 60.0)
+
     def test_predistortion_recovers_desired_hv_after_forward_matrix(self) -> None:
         profile = CalibrationProfile.identity(2.8e9, 25.0, 64.0, None)
         profile = CalibrationProfile(

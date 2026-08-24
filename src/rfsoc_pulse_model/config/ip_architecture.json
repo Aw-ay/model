@@ -1,0 +1,83 @@
+{
+  "architecture_schema_version": 2,
+  "architecture_config_version": 3,
+  "vivado_version": "2025.2",
+  "device_part": "xczu27dr-fsve1156-2-i",
+  "generation_mode": "vivado_ip_first",
+  "topology_status": "connected_rfdc_shell",
+  "rfdc_integration": {
+    "instance_ref": "rfdc_0",
+    "configuration_authority": "vivado_block_design",
+    "dac_analog_output_type": "real",
+    "dac_mixer_mode": "iq_to_real",
+    "dac_mixer_scale_mode": "unity_0db",
+    "dac_nco_frequency_hz": 2800000000,
+    "proof_status": "unverified"
+  },
+  "ip_families": [
+    {"family_id": "rfdc", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:usp_rf_data_converter:2.6", "required": true, "vlnv": "xilinx.com:ip:usp_rf_data_converter:2.6"},
+    {"family_id": "zynq_ultra_ps_e", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:zynq_ultra_ps_e:3.5", "required": true, "vlnv": "xilinx.com:ip:zynq_ultra_ps_e:3.5"},
+    {"family_id": "smartconnect", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:smartconnect:1.0", "required": true, "vlnv": "xilinx.com:ip:smartconnect:1.0"},
+    {"family_id": "proc_sys_reset", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:proc_sys_reset:5.0", "required": true, "vlnv": "xilinx.com:ip:proc_sys_reset:5.0"},
+    {"family_id": "util_vector_logic", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:util_vector_logic:2.0", "required": true, "vlnv": "xilinx.com:ip:util_vector_logic:2.0"},
+    {"family_id": "xlconcat", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:xlconcat:2.1", "required": true, "vlnv": "xilinx.com:ip:xlconcat:2.1"},
+    {"family_id": "axis_register_slice", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:axis_register_slice:*", "required": true, "vlnv": null},
+    {"family_id": "axis_data_fifo", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:axis_data_fifo:*", "required": true, "vlnv": null},
+    {"family_id": "axis_clock_converter", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:axis_clock_converter:*", "required": true, "vlnv": null},
+    {"family_id": "axis_dwidth_converter", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:axis_dwidth_converter:*", "required": true, "vlnv": null},
+    {"family_id": "axis_combiner", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:axis_combiner:*", "required": true, "vlnv": null},
+    {"family_id": "axis_broadcaster", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:axis_broadcaster:*", "required": true, "vlnv": null},
+    {"family_id": "axis_switch", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:axis_switch:*", "required": true, "vlnv": null},
+    {"family_id": "fir_compiler", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:fir_compiler:*", "required": true, "vlnv": null},
+    {"family_id": "dds_compiler", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:dds_compiler:*", "required": true, "vlnv": null},
+    {"family_id": "complex_multiplier", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:cmpy:*", "required": true, "vlnv": null},
+    {"family_id": "cordic", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:cordic:*", "required": true, "vlnv": null},
+    {"family_id": "axi_dma", "implementation_kind": "amd_ip", "catalog_pattern": "xilinx.com:ip:axi_dma:*", "required": true, "vlnv": null}
+  ],
+  "ip_instances": [
+    {"instance_name": "rfdc_0", "family_ref": "rfdc", "logical_role": "rfdc_frontend", "lifecycle": "materialized", "parameter_status": "unspecified", "connection_status": "unconnected"},
+    {"instance_name": "zynq_ultra_ps_e_0", "family_ref": "zynq_ultra_ps_e", "logical_role": "ps_platform_control", "lifecycle": "materialized", "parameter_status": "unspecified", "connection_status": "unconnected"},
+    {"instance_name": "ctrl_smartconnect_0", "family_ref": "smartconnect", "logical_role": "control_axi_interconnect", "lifecycle": "materialized", "parameter_status": "unspecified", "connection_status": "unconnected"},
+    {"instance_name": "reset_inverter_0", "family_ref": "util_vector_logic", "logical_role": "control_reset_inverter", "lifecycle": "materialized", "parameter_status": "unspecified", "connection_status": "unconnected"},
+    {"instance_name": "ctrl_reset_0", "family_ref": "proc_sys_reset", "logical_role": "control_reset_domain", "lifecycle": "materialized", "parameter_status": "unspecified", "connection_status": "unconnected"},
+    {"instance_name": "rx_reset_0", "family_ref": "proc_sys_reset", "logical_role": "rx_reset_domain", "lifecycle": "materialized", "parameter_status": "unspecified", "connection_status": "unconnected"},
+    {"instance_name": "tx_reset_0", "family_ref": "proc_sys_reset", "logical_role": "tx_reset_domain", "lifecycle": "materialized", "parameter_status": "unspecified", "connection_status": "unconnected"},
+    {"instance_name": "irq_concat_0", "family_ref": "xlconcat", "logical_role": "rfdc_irq_concat", "lifecycle": "materialized", "parameter_status": "unspecified", "connection_status": "unconnected"},
+    {"instance_name": "monitor_fir_dec2_0", "family_ref": "fir_compiler", "logical_role": "monitor_decimator", "lifecycle": "planned", "parameter_status": "drafted", "connection_status": "unconnected"}
+  ],
+  "architecture_blocks": [
+    {"block_name": "rfdc_frontend", "implementation_kind": "amd_ip", "responsibilities": ["adc", "dac", "ddc", "duc", "decimation", "interpolation", "mixer", "nco"], "reference_responsibilities": [], "instance_refs": ["rfdc_0"], "architecture_status": "frozen", "production_accepted": false, "source": null},
+    {"block_name": "axis_infrastructure", "implementation_kind": "architecture_pending", "responsibilities": ["axis_register_pipeline", "axis_buffering", "axis_clock_domain_crossing", "axis_width_conversion", "axis_combining", "axis_broadcasting", "axis_switching"], "reference_responsibilities": [], "instance_refs": [], "architecture_status": "architecture_pending", "production_accepted": false, "source": null},
+    {"block_name": "monitor_branch", "implementation_kind": "amd_ip", "responsibilities": ["monitor_fir_dec2", "adaptive_noise", "adaptive_threshold", "nm_voting", "toa", "contiguous_main_peak_fwhm", "coarse_pdw", "hit_iq_event_framing"], "reference_responsibilities": [], "instance_refs": ["monitor_fir_dec2_0"], "architecture_status": "frozen", "production_accepted": false, "source": null},
+    {"block_name": "fractional_delay_bank", "implementation_kind": "architecture_pending", "responsibilities": ["fractional_delay_processing", "fractional_delay_coefficient_set_scheduling"], "reference_responsibilities": [], "instance_refs": [], "architecture_status": "architecture_pending", "production_accepted": false, "source": null},
+    {"block_name": "rx_2spc_continuous_ingress", "implementation_kind": "architecture_pending", "responsibilities": ["rx_2spc_continuous_ingress"], "reference_responsibilities": [], "instance_refs": [], "architecture_status": "architecture_pending", "production_accepted": false, "source": null},
+    {"block_name": "adc_calibrated_frontend", "implementation_kind": "architecture_pending", "responsibilities": ["adc_channel_alignment_and_calibration", "dual_polar_three_range_selection", "auto_hold_range_selection"], "reference_responsibilities": [], "instance_refs": [], "architecture_status": "architecture_pending", "production_accepted": false, "source": null},
+    {"block_name": "continuous_stream_timebase", "implementation_kind": "architecture_pending", "responsibilities": ["continuous_sample_time_and_stream_integrity", "acquisition_epoch", "stream_integrity_status"], "reference_responsibilities": [], "instance_refs": [], "architecture_status": "architecture_pending", "production_accepted": false, "source": null},
+    {"block_name": "integer_delay_bank", "implementation_kind": "architecture_pending", "responsibilities": ["integer_delay_processing", "integer_delay_storage", "circular_delay_addressing"], "reference_responsibilities": [], "instance_refs": [], "architecture_status": "architecture_pending", "production_accepted": false, "source": null},
+    {"block_name": "range_rcs_gain", "implementation_kind": "architecture_pending", "responsibilities": ["range_rcs_complex_gain_application"], "reference_responsibilities": [], "instance_refs": [], "architecture_status": "architecture_pending", "production_accepted": false, "source": null},
+    {"block_name": "polarimetric_scattering", "implementation_kind": "architecture_pending", "responsibilities": ["polarimetric_scattering_matrix_2x2"], "reference_responsibilities": [], "instance_refs": [], "architecture_status": "architecture_pending", "production_accepted": false, "source": null},
+    {"block_name": "doppler_engine", "implementation_kind": "architecture_pending", "responsibilities": ["doppler_phase_generation", "doppler_complex_modulation", "doppler_phasor", "complex_multiplication"], "reference_responsibilities": [], "instance_refs": [], "architecture_status": "architecture_pending", "production_accepted": false, "source": null},
+    {"block_name": "multi_target_accumulator", "implementation_kind": "architecture_pending", "responsibilities": ["target_scheduling", "maximum_target_control", "lane_scheduling", "multi_target_output_alignment", "multi_target_accumulation"], "reference_responsibilities": [], "instance_refs": [], "architecture_status": "architecture_pending", "production_accepted": false, "source": null},
+    {"block_name": "tx_polarization_predistortion", "implementation_kind": "architecture_pending", "responsibilities": ["tx_polarization_predistortion"], "reference_responsibilities": [], "instance_refs": [], "architecture_status": "architecture_pending", "production_accepted": false, "source": null},
+    {"block_name": "eight_channel_dac_router", "implementation_kind": "architecture_pending", "responsibilities": ["eight_channel_dac_routing", "tx_iq16_quantization"], "reference_responsibilities": [], "instance_refs": [], "architecture_status": "architecture_pending", "production_accepted": false, "source": null},
+    {"block_name": "tx_2spc_continuous_egress", "implementation_kind": "architecture_pending", "responsibilities": ["tx_2spc_continuous_egress"], "reference_responsibilities": [], "instance_refs": [], "architecture_status": "architecture_pending", "production_accepted": false, "source": null},
+    {"block_name": "frequency_estimator", "implementation_kind": "architecture_pending", "responsibilities": ["frequency_estimator_atan2"], "reference_responsibilities": [], "instance_refs": [], "architecture_status": "architecture_pending", "production_accepted": false, "source": null},
+    {"block_name": "event_to_ddr", "implementation_kind": "architecture_pending", "responsibilities": ["event_to_ddr_transport"], "reference_responsibilities": [], "instance_refs": [], "architecture_status": "architecture_pending", "production_accepted": false, "source": null},
+    {"block_name": "system_status", "implementation_kind": "architecture_pending", "responsibilities": ["overflow_status", "bit_status", "fault_management"], "reference_responsibilities": [], "instance_refs": [], "architecture_status": "architecture_pending", "production_accepted": false, "source": null},
+    {"block_name": "rx_group_ingress_2spc", "implementation_kind": "legacy_non_production", "responsibilities": [], "reference_responsibilities": ["legacy_reference.rx_group_ingress_2spc"], "instance_refs": [], "architecture_status": "frozen", "production_accepted": false, "source": "src/rfsoc_pulse_model/cycle/hardware/rx_group_ingress.py"},
+    {"block_name": "tx_iq_axis_boundary_2spc", "implementation_kind": "legacy_non_production", "responsibilities": [], "reference_responsibilities": ["legacy_reference.tx_iq_axis_boundary_2spc"], "instance_refs": [], "architecture_status": "frozen", "production_accepted": false, "source": "src/rfsoc_pulse_model/cycle/hardware/tx_iq_axis_boundary.py"}
+  ],
+  "required_responsibilities": {
+    "production": [
+      "adc", "dac", "ddc", "duc", "decimation", "interpolation", "mixer", "nco",
+      "axis_register_pipeline", "axis_buffering", "axis_clock_domain_crossing", "axis_width_conversion", "axis_combining", "axis_broadcasting", "axis_switching",
+      "monitor_fir_dec2", "fractional_delay_processing", "fractional_delay_coefficient_set_scheduling", "doppler_phasor", "complex_multiplication", "frequency_estimator_atan2", "event_to_ddr_transport",
+      "integer_delay_storage", "acquisition_epoch", "stream_integrity_status", "auto_hold_range_selection", "target_scheduling", "maximum_target_control", "circular_delay_addressing", "lane_scheduling", "multi_target_output_alignment", "multi_target_accumulation",
+      "adaptive_noise", "adaptive_threshold", "nm_voting", "toa", "contiguous_main_peak_fwhm", "coarse_pdw", "hit_iq_event_framing", "overflow_status", "bit_status", "fault_management",
+      "rx_2spc_continuous_ingress", "adc_channel_alignment_and_calibration", "dual_polar_three_range_selection", "continuous_sample_time_and_stream_integrity", "integer_delay_processing", "range_rcs_complex_gain_application", "polarimetric_scattering_matrix_2x2", "doppler_phase_generation", "doppler_complex_modulation", "tx_polarization_predistortion", "eight_channel_dac_routing", "tx_iq16_quantization", "tx_2spc_continuous_egress"
+    ],
+    "continuous_dual_polar_reflection": [
+      "rx_2spc_continuous_ingress", "adc_channel_alignment_and_calibration", "dual_polar_three_range_selection", "continuous_sample_time_and_stream_integrity", "integer_delay_processing", "fractional_delay_processing", "range_rcs_complex_gain_application", "polarimetric_scattering_matrix_2x2", "doppler_phase_generation", "doppler_complex_modulation", "multi_target_output_alignment", "multi_target_accumulation", "tx_polarization_predistortion", "eight_channel_dac_routing", "tx_iq16_quantization", "tx_2spc_continuous_egress"
+    ]
+  }
+}

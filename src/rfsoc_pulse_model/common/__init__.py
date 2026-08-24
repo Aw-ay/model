@@ -26,11 +26,13 @@ from .types import (
     RangeId,
     RangeSelectionMode,
     SampleDomain,
+    SampleTimeReference,
 )
 from .calibration_types import (
     CalibrationConditionError,
     CalibrationProfile,
     ComplexChannelCalibration,
+    FixedInternalDelay,
     RcsCalibrationAnchor,
 )
 from .reflection_types import (
@@ -44,6 +46,8 @@ from .reflection_types import (
     ReflectionStatus,
     TargetRequest,
 )
+from .rfdc_axis import RfdcAxisWordFormat
+from .numeric_formats import NumericFormatManifest
 
 __all__ = [
     "FixedFormat",
@@ -63,10 +67,12 @@ __all__ = [
     "RangeId",
     "RangeSelectionMode",
     "SampleDomain",
+    "SampleTimeReference",
     "ModelConfig",
     "CalibrationConditionError",
     "CalibrationProfile",
     "ComplexChannelCalibration",
+    "FixedInternalDelay",
     "RcsCalibrationAnchor",
     "CompiledScatterer",
     "DacAuxRequest",
@@ -77,6 +83,8 @@ __all__ = [
     "ReflectionScenario",
     "ReflectionStatus",
     "TargetRequest",
+    "RfdcAxisWordFormat",
+    "NumericFormatManifest",
     "associate_range_records",
     "associate_polarimetric_range_records",
     "round_array_ties_away_from_zero",

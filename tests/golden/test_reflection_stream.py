@@ -118,6 +118,14 @@ class GoldenReflectionStreamTest(unittest.TestCase):
             np.concatenate([chunk.dac_frame.samples for chunk in chunks], axis=1),
             whole.dac_frame.samples,
         )
+        for field in ("i", "q", "clipped"):
+            np.testing.assert_array_equal(
+                np.concatenate(
+                    [getattr(chunk.dac_iq_codes, field) for chunk in chunks],
+                    axis=1,
+                ),
+                getattr(whole.dac_iq_codes, field),
+            )
         self.assertEqual(
             tuple(record for chunk in chunks for record in chunk.pulse_records),
             whole.pulse_records,
@@ -228,6 +236,108 @@ class GoldenReflectionStreamTest(unittest.TestCase):
 
         self.assertTrue(whole.pulse_records)
         self.assertEqual(tuple(records), whole.pulse_records)
+
+    def test_stream_emits_closed_pdw_and_events_before_final(self) -> None:
+        detector = dataclasses.replace(
+            self.config.detector,
+            noise_boot_samples=16,
+            threshold_scale=2.0,
+            moving_average=1,
+            vote_window=1,
+            vote_required=1,
+        )
+        config = dataclasses.replace(self.config, detector=detector)
+        samples = np.zeros((8, 512), dtype=np.complex128)
+        for high, mid, low in ((0, 1, 2), (4, 5, 6)):
+            samples[high, 40:80] = 10_000.0
+            samples[mid, 40:80] = 1_000.0
+            samples[low, 40:80] = 100.0
+        stream = GoldenReflectionStream(config, self.profile)
+
+        first = stream.process_chunk(
+            EightChannelAdcFrame(
+                samples[:, :256],
+                np.zeros((8, 256), dtype=np.bool_),
+                SampleDomain.RFDC_COMPLEX_INPUT,
+                500_000_000,
+                0,
+            ),
+            self.make_scenario(256, 0),
+        )
+        second = stream.process_chunk(
+            EightChannelAdcFrame(
+                samples[:, 256:],
+                np.zeros((8, 256), dtype=np.bool_),
+                SampleDomain.RFDC_COMPLEX_INPUT,
+                500_000_000,
+                256,
+            ),
+            self.make_scenario(256, 256),
+            final=True,
+        )
+
+        self.assertTrue(first.pulse_records)
+        self.assertTrue(first.pulse_events)
+        self.assertFalse(second.pulse_records)
+        self.assertFalse(second.pulse_events)
+        self.assertEqual(first.status.monitor_pulse_count, len(first.pulse_records))
+        self.assertEqual(
+            first.status.monitor_pulse_count_total,
+            len(first.pulse_records),
+        )
+        self.assertEqual(
+            second.status.monitor_pulse_count_total,
+            len(first.pulse_records),
+        )
+        self.assertEqual(first.status.processed_stop_sample, 256)
+        self.assertLess(first.status.emitted_stop_sample, 256)
+        self.assertFalse(first.status.stream_final)
+        self.assertEqual(second.status.processed_stop_sample, 512)
+        self.assertEqual(second.status.emitted_stop_sample, 512)
+        self.assertTrue(second.status.stream_final)
+
+    def test_stream_does_not_emit_a_pdw_closed_only_by_chunk_end(self) -> None:
+        detector = dataclasses.replace(
+            self.config.detector,
+            noise_boot_samples=16,
+            threshold_scale=2.0,
+            moving_average=1,
+            vote_window=1,
+            vote_required=1,
+        )
+        config = dataclasses.replace(self.config, detector=detector)
+        samples = np.zeros((8, 512), dtype=np.complex128)
+        for high, mid, low in ((0, 1, 2), (4, 5, 6)):
+            samples[high, 180:320] = 10_000.0
+            samples[mid, 180:320] = 1_000.0
+            samples[low, 180:320] = 100.0
+        stream = GoldenReflectionStream(config, self.profile)
+
+        first = stream.process_chunk(
+            EightChannelAdcFrame(
+                samples[:, :256],
+                np.zeros((8, 256), dtype=np.bool_),
+                SampleDomain.RFDC_COMPLEX_INPUT,
+                500_000_000,
+                0,
+            ),
+            self.make_scenario(256, 0),
+        )
+        final = stream.process_chunk(
+            EightChannelAdcFrame(
+                samples[:, 256:],
+                np.zeros((8, 256), dtype=np.bool_),
+                SampleDomain.RFDC_COMPLEX_INPUT,
+                500_000_000,
+                256,
+            ),
+            self.make_scenario(256, 256),
+            final=True,
+        )
+
+        self.assertFalse(first.pulse_records)
+        self.assertTrue(final.pulse_records)
+        self.assertTrue(all(not record.truncated for record in final.pulse_records))
 
 
 if __name__ == "__main__":

@@ -1,18 +1,19 @@
 # Polarimetric Golden Acceptance
 
 - Date: 2026-08-10
-- Branch: local `main`
+- Branch: `agent/model-update-20260810`
 - Interpreter: bundled Python 3.12.13
 - NumPy: 2.3.5
 - Python executable: `C:\Users\40836\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe`
 - Source path: `D:\AWAY\RFSOC\model\src`
 - Golden test command: `python -m unittest discover -s tests\golden -v`
-- Golden result: 81 tests passed
+- Golden result: 114 tests passed
+- Full Python result: 128 tests passed (114 Golden + 14 Cycle/generator)
 - Config mirrors: byte-identical
 - Public imports: `GoldenReflectionSource` and `GoldenReflectionStream`
 - Main reflection domain: `RFDC_COMPLEX_INPUT` at 500 MSPS complex
 - Monitor domain: `DETECTOR` at 250 MSPS
-- Config schema/version: `6/9`
+- Config schema/version: `12/18`
 - RFDC fabric contract: two complete complex samples per 250 MHz cycle
 
 The verified Golden path is:
@@ -48,24 +49,132 @@ The continuous-stream checkpoint additionally verifies:
   including target delay, fractional ADC/DAC alignment and nonzero Doppler;
 - monitor FIR/detector records from the finalized stream equal the one-shot
   reference and use absolute detector-domain ToA;
-- AUTO_HOLD does not reset at a software chunk boundary;
+- AUTO_HOLD retains independent H/V range and last-switch state on the
+  absolute RFDC sample timeline across contiguous frames;
+- AUTO_HOLD rejects an input gap until explicitly reset and makes its decision
+  from delay-aligned raw codes/clipping corresponding to the calibrated sample;
 - H and V records cannot be combined into one three-range event;
 - `dataclasses.replace()` cannot bypass `ModelConfig` validation;
 - DAC0..5 cover H/V x HIGH/MID/LOW exactly once;
 - system fixtures use physical 10:1:0.1 ADC range ratios and an end-to-end
   impulse test checks hand-derived amplitude, delay and complex phase.
 
+The physical-channel checkpoint additionally verifies:
+
+- all eight ADC routes uniquely cover RFDC `00/02/10/12/20/22/30/32`;
+- all eight DAC routes uniquely cover RFDC `00..03/10..13`;
+- logical indices cannot be detached from their canonical RFDC tile/slice;
+- every default route carries its package bank, board net and carrier endpoint;
+- the two installed default-config copies remain byte-identical.
+
+The RFDC AXI word-format checkpoint additionally verifies:
+
+- ADC0..7 map to the exact even-I/adjacent-odd-Q stream pairs from
+  `m00/m01` through `m32/m33`;
+- every component stream is two signed-16 samples in a 32-bit word with the
+  earlier sample in bits `[15:0]`;
+- the paired complex beat is exactly `{Q1,I1,Q0,I0}`;
+- DAC0..7 map to `s00..s13`, accept complex I/Q PL data and pack
+  `{Q1,I1,Q0,I0}` into 64 bits while producing independent real analogue
+  outputs through the RFDC I/Q-to-real mixer;
+- known signed-rail words catch byte, half-word, I/Q and time-order swaps;
+- the current partial 125 MHz/64-bit ADC BD is rejected as the target format.
+
+The RCS fail-closed checkpoint additionally verifies:
+
+- anchors carry an ID, explicit validity and bounded frequency, temperature
+  and physical-range conditions;
+- absolute mode rejects missing, invalid and out-of-condition anchors;
+- absolute mode also rejects an out-of-condition calibration profile even if
+  the anchor tolerance itself is wider;
+- explicit relative mode ignores an invalid anchor and reports uncalibrated
+  relative gain rather than applying stale absolute scaling.
+
+The stream-status/online-PDW checkpoint additionally verifies:
+
+- a fully closed pulse emits PDWs and associated events before `final=True`;
+- a pulse that merely reaches a software chunk boundary is withheld;
+- online PDWs/events are emitted once as a global stable prefix and concatenate
+  to the exact one-shot ordering;
+- per-call and cumulative PDW counts are distinct;
+- accepted-input, stable-output and final-state sample fronts are explicit.
+
+The fixed-internal-delay checkpoint additionally verifies:
+
+- the delay is a typed 500 MSPS `RFDC_COMPLEX_INPUT` quantity measured from
+  the ADC complex-input mathematical boundary to the DAC baseband-output
+  mathematical boundary;
+- a profile from another sample rate is rejected before target compilation;
+- the 63-tap kernel center is exactly 31 samples and remains internal to the
+  Golden implementation rather than appearing on the public time axis;
+- the fixed value includes measured common hardware latency exactly once and
+  excludes the target-programmed delay.
+- Golden DAC frames declare `latency_normalized` time and carry their typed
+  fixed-delay mapping; with the 64-sample test placeholder, offset 60 maps to
+  physical sample 124;
+- the generated manifest records kernel center 31 and the calibration-profile
+  source but contains no fabricated `fixed_internal_delay_samples` value.
+
+The fixed-point-width checkpoint additionally verifies:
+
+- all Cycle data-path and metadata formats are present in one immutable
+  `ModelConfig.numeric_formats` manifest;
+- a one-bit width drift fails configuration loading;
+- FIR, moving-sum, noise-boot, vote, channel, target-count and delay-address
+  widths are checked against their configured capacities;
+- lossless intermediates use `error`, requantization boundaries use
+  `saturate`, and only declared modulo fields use `wrap`;
+- threshold scale `13.815510557...` quantizes to unsigned Q16 code `905413`
+  using ties-away-from-zero.
+
 The stream implementation is deliberately a buffer-backed Golden oracle. It
 defines chunk-invariant observable mathematics, but does not claim bounded
 memory or Cycle architecture equivalence.
 
+The initial Cycle 2SPC checkpoint additionally verifies:
+
+- restricted `compute()`/`clock()` simulation uses one simultaneous register
+  commit with nonblocking semantics;
+- the eight RFDC I/Q word pairs unpack both complete complex samples without
+  dropping the later half-beat;
+- the registered ingress latency is one 250 MHz clock and its public base index
+  advances by two 500 MSPS samples per accepted group;
+- the interface has no backpressure, ignores RFDC startup valid patterns before
+  `acquisition_enable_i`, and asserts `stream_active_o` after the first accepted
+  group;
+- after arming, an all-idle group sets sticky `gap_error_o`, a partial
+  16-stream valid group sets sticky `format_error_o`, and either fault fails
+  closed until reset without compressing later samples;
+- configuration and generated metadata record the intended
+  `common_pl_clock_mts` architecture, its current `unverified` proof status and
+  `single_clock_ingress_integration_ready=false`;
+- every emitted RTL module is registered and records ports, latency,
+  throughput and SHA-256 in `manifest.json`;
+- Vivado 2025.2 `xvlog`, `xelab` and XSim pass the generated ingress testbench.
+
 Explicitly not verified by this acceptance:
 
-- Cycle timing or fixed-point equivalence;
-- generated Verilog bit/cycle equivalence;
-- RFDC DAC AXI word representation;
+- Cycle timing or fixed-point equivalence beyond the RFDC ingress;
+- generated Verilog bit/cycle equivalence beyond the RFDC ingress;
 - Vivado Block Design interfaces, clocks, reset or CDC;
+- proof that `m0_axis_aclk` through `m3_axis_aclk` share one physical clock
+  network and synchronous reset/MTS release;
 - synthesis, implementation or timing closure;
 - J4 expansion hardware population;
 - board-level eight-channel RF performance;
 - absolute RCS accuracy without measured calibration data.
+
+## AMD IP-first architecture boundary
+
+The Golden acceptance above remains the mathematical oracle. The later AMD
+IP-first foundation does not turn Golden tests into hardware evidence. RFDC
+converter-internal mixer/NCO settings now live only in
+`HardwareArchitectureConfig.rfdc`, while `ModelConfig.rfdc_axis` retains the
+PL-observable word and rate contract.
+
+The target production owners for RFDC, AXIS infrastructure and FIR are AMD IP.
+The current generated `rx_group_ingress_2spc` and
+`tx_iq_axis_boundary_2spc` modules are `legacy_non_production` references.
+Vivado 2025.2 Catalog resolution of the unconnected skeleton does not prove
+connected-BD validation, CDC, timing, MTS/SYSREF or board loopback; those gates
+remain explicitly open in `amd-ip-foundation-acceptance.md`.
