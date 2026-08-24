@@ -100,3 +100,78 @@ OK (skipped=6)
 ## Concerns
 
 - `signed_mul()` currently emits a sign-extended Verilog multiply whose intermediate product is wider than the declared output width, then relies on assignment width to trim to the requested 48-bit result. That is correct for the current contract and test coverage, but if a later slice needs an exact intermediate-width proof in RTL, it may want an explicit width-limiting helper.
+
+## Fix Round 1
+
+### Changed files
+
+- `src/rfsoc_pulse_model/cycle/dsl/fixed.py`
+- `tests/cycle/test_fixed_point_expr.py`
+
+### Root cause
+
+The evaluator for `round_shift_ties_away_from_zero()` already rounded negative values by magnitude and then reapplied the sign. The emitted Verilog did not do that for negative non-half values. It subtracted the bias from the negative signed input directly, which made values such as `-5 >> 2` diverge between the simulator and RTL text.
+
+### Fix
+
+- Updated the negative Verilog branch to:
+  - sign-extend the operand by one bit for safe magnitude handling;
+  - negate the extended value to form the magnitude;
+  - add the rounding bias to that magnitude;
+  - arithmetic-shift the magnitude;
+  - reapply the sign by negating the shifted result.
+- Extended the focused tests to cover:
+  - negative non-half inputs `-5` and `-7`;
+  - positive non-half input `5`;
+  - the corresponding emitted Verilog branch text.
+
+### Covering test commands and output
+
+Command:
+
+```powershell
+$env:PYTHONPATH='E:\AWAY\RFSOC-model\src;E:\AWAY\RFSOC-model'
+& 'C:\Users\Administrator\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest discover -s 'E:\AWAY\RFSOC-model\tests\cycle' -p 'test_fixed_point_expr.py' -v
+```
+
+Output:
+
+```text
+Ran 8 tests in 0.001s
+OK
+```
+
+Command:
+
+```powershell
+$env:PYTHONPATH='E:\AWAY\RFSOC-model\src;E:\AWAY\RFSOC-model'
+& 'C:\Users\Administrator\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest discover -s 'E:\AWAY\RFSOC-model\tests\cycle' -v
+```
+
+Output:
+
+```text
+Ran 31 tests in 0.027s
+OK
+```
+
+Command:
+
+```powershell
+$env:PYTHONPATH='E:\AWAY\RFSOC-model\src;E:\AWAY\RFSOC-model'
+& 'C:\Users\Administrator\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest discover -s 'E:\AWAY\RFSOC-model\tests\verilog' -v
+```
+
+Output:
+
+```text
+Ran 13 tests in 0.399s
+OK (skipped=6)
+```
+
+### Self-review
+
+- The change is narrowly scoped to the negative rounding branch in the fixed-point expression emitter.
+- The simulator logic was already correct, and it was left unchanged.
+- The updated tests now cover the exact mismatch called out by review, including negative non-half values that previously slipped through.
+- Existing cycle and Verilog regression suites remained green after the fix.

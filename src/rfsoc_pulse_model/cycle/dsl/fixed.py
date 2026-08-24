@@ -96,9 +96,10 @@ class RoundShiftTiesAwayFromZeroExpr(Expr):
         signed_value = _signed_expr(self.value)
         if self.shift == 0:
             return signed_value
+        extended = _sign_extend_verilog(self.value, self.value.width + 1)
         bias = _signed_literal(self.result_width, 1 << (self.shift - 1))
         positive = f"(({signed_value} + {bias}) >>> {self.shift})"
-        negative = f"(({signed_value} - {bias}) >>> {self.shift})"
+        negative = f"(-(((-{extended}) + {bias}) >>> {self.shift}))"
         return f"(({signed_value} < 0) ? {negative} : {positive})"
 
 

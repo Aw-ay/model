@@ -130,6 +130,31 @@ class RoundShiftTest(unittest.TestCase):
         self.assertEqual(negative.evaluate(), _twos_complement(24, -2))
         self.assertEqual(passthrough.evaluate(), _twos_complement(24, -7))
 
+    def test_round_shift_ties_away_from_zero_handles_non_half_values(self) -> None:
+        positive = round_shift_ties_away_from_zero(
+            ConstExpr(5, 32, signed=True),
+            2,
+            24,
+        )
+        negative = round_shift_ties_away_from_zero(
+            ConstExpr(-5, 32, signed=True),
+            2,
+            24,
+        )
+        more_negative = round_shift_ties_away_from_zero(
+            ConstExpr(-7, 32, signed=True),
+            2,
+            24,
+        )
+
+        self.assertEqual(positive.evaluate(), _twos_complement(24, 1))
+        self.assertEqual(negative.evaluate(), _twos_complement(24, -1))
+        self.assertEqual(more_negative.evaluate(), _twos_complement(24, -2))
+        self.assertIn("(($signed(32'sd5) + 24'sd2) >>> 2)", positive.verilog())
+        self.assertIn("(-(((-", negative.verilog())
+        self.assertIn("(($signed(32'sd-5) < 0)", negative.verilog())
+        self.assertIn("($signed(32'sd-7) < 0)", more_negative.verilog())
+
     def test_round_shift_emits_an_arithmetic_shift(self) -> None:
         expr = round_shift_ties_away_from_zero(ConstExpr(-6, 32, signed=True), 2, 24)
 
