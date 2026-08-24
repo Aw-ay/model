@@ -175,3 +175,164 @@ OK (skipped=6)
 - The simulator logic was already correct, and it was left unchanged.
 - The updated tests now cover the exact mismatch called out by review, including negative non-half values that previously slipped through.
 - Existing cycle and Verilog regression suites remained green after the fix.
+
+## Final Review Fix
+
+### Changed files
+
+- `src/rfsoc_pulse_model/cycle/dsl/fixed.py`
+- `tests/cycle/test_fixed_point_expr.py`
+- `docs/handoff/VERIFICATION_EVIDENCE.md`
+- `docs/handoff/CURRENT_STATE.md`
+- `docs/superpowers/plans/2026-08-24-production-2spc-calibrated-hv.md`
+- This report file, appended in the follow-up documentation commit.
+
+### Implementation commit
+
+- `2a7335f76b121e4078f10f8dbe07c3a958f8499a` - `fix: size fixed-point round-shift RTL results`
+
+### Root cause and fix
+
+The round-shift evaluator returned a masked `result_width` value, but its
+emitted RTL retained the source or intermediate arithmetic width. The
+positive/negative conditional could also become unsigned because the negative
+magnitude path contains a concatenation. Consequently, a 48-bit rounded value
+requested as 32 bits evaluated as a 49-bit raw result in the repository
+Verilog evaluator, and a zero-shift 32-to-24 expression remained 32 bits when
+composed with saturation.
+
+The emitter now uses the existing signed resize/truncate contract on every
+round-shift path: zero shift uses `_truncate_signed_verilog()`, and positive
+and negative rounded branches are each explicitly signed-resized to
+`result_width` before forming the conditional. The simulator semantics are
+unchanged. Both narrowing and widening signed cases are covered.
+
+### TDD regression evidence
+
+The new evaluator-backed assertions were added to the existing round-shift
+test method so the focused calibrated-H/V and full Cycle counts remain 14 and
+51 respectively. Before the implementation change, the covering focused test
+failed on the intended width mismatch:
+
+Command:
+
+```powershell
+$env:PYTHONPATH='E:\AWAY\RFSOC-model\src;E:\AWAY\RFSOC-model'
+& 'C:\Users\Administrator\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest discover -s 'E:\AWAY\RFSOC-model\tests\cycle' -p 'test_fixed_point_expr.py' -v
+```
+
+Output summary:
+
+```text
+FAIL: test_round_shift_emits_explicit_result_width_for_all_paths
+AssertionError: 49 != 32
+Ran 13 tests in 0.003s
+FAILED (failures=1)
+exit_code=1
+```
+
+The regression uses `tests.cycle.verilog_eval.evaluate_verilog_expression`
+for positive and negative rounded branches, zero-shift widening and
+narrowing, and composed saturation at both signed rails.
+
+### Final covering test commands and output
+
+Focused fixed-point expressions:
+
+```powershell
+$env:PYTHONPATH='E:\AWAY\RFSOC-model\src;E:\AWAY\RFSOC-model'
+& 'C:\Users\Administrator\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest discover -s 'E:\AWAY\RFSOC-model\tests\cycle' -p 'test_fixed_point_expr.py' -v
+```
+
+```text
+Ran 13 tests in 0.003s
+OK
+exit_code=0
+```
+
+Calibrated H/V candidate:
+
+```powershell
+$env:PYTHONPATH='E:\AWAY\RFSOC-model\src;E:\AWAY\RFSOC-model'
+& 'C:\Users\Administrator\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest discover -s 'E:\AWAY\RFSOC-model\tests\cycle' -p 'test_production_calibrated_hv.py' -v
+```
+
+```text
+Ran 14 tests in 0.255s
+OK
+exit_code=0
+```
+
+Full Cycle suite:
+
+```powershell
+$env:PYTHONPATH='E:\AWAY\RFSOC-model\src;E:\AWAY\RFSOC-model'
+& 'C:\Users\Administrator\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest discover -s 'E:\AWAY\RFSOC-model\tests\cycle' -v
+```
+
+```text
+Ran 51 tests in 0.282s
+OK
+exit_code=0
+```
+
+Full Verilog suite:
+
+```powershell
+$env:PYTHONPATH='E:\AWAY\RFSOC-model\src;E:\AWAY\RFSOC-model'
+& 'C:\Users\Administrator\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -m unittest discover -s 'E:\AWAY\RFSOC-model\tests\verilog' -v
+```
+
+```text
+Ran 13 tests in 0.402s
+OK (skipped=6)
+exit_code=0
+```
+
+### Authority hash verification
+
+Command:
+
+```powershell
+Get-FileHash -Algorithm SHA256 -LiteralPath 'config\default.json'
+Get-FileHash -Algorithm SHA256 -LiteralPath 'config\ip_architecture.json'
+Get-FileHash -Algorithm SHA256 -LiteralPath 'config\ip_lock.json'
+Get-FileHash -Algorithm SHA256 -LiteralPath 'config\ps_platform.json'
+```
+
+Verified values:
+
+```text
+config/default.json       D92C4A334728AF441B22FA907E55CF4D6D236D899F46CBE3CD3ED7F26F9D5EB3
+config/ip_architecture.json 36034E9C7B64061CDD449FB43030AEA96368C95D6E88C8C6A0A9154DA9E0BD96
+config/ip_lock.json       0B1C92166B605A0A56C867FB144896D23599ADE95538A29B72C9C274437FBE97
+config/ps_platform.json   A1243D78A90CCB8E00F34749A8C3F18BF55870130C8F8372402407CF5591D11F
+exit_code=0
+```
+
+### Provenance and scope review
+
+- Historical `327 passed / 8 skipped` is explicitly scoped to baseline
+  `commit:c118362` in both handoff documents.
+- The current branch's full Python regression is recorded as interrupted,
+  exit 1 with no unittest summary, and unclaimed; no branch-wide pass count
+  is asserted.
+- Current focused counts are calibrated H/V 14 tests and Cycle 51 tests.
+- `production_integration_ready=false` remains unchanged.
+- Task 5/6, OOC, Vivado/build/evidence, authority JSON, RFDC/MTS, and
+  production registration content were not changed. No Vivado attempt was
+  created.
+- The corrected plan-file wording was included in the implementation commit.
+
+### Self-review
+
+- Direct evaluator output now has `result_width` and signed metadata on the
+  shift-0, positive, and negative paths.
+- The max-positive 48-bit/16-bit-shift case, negative branch, signed widening
+  and narrowing, and composed positive/negative saturation rails all agree
+  between `Expr.evaluate()` and emitted-expression evaluation.
+- The existing 24-bit lane packing/saturation fix remains intact; the
+  calibrated H/V candidate and full Cycle suites pass.
+- No new concerns were found. The earlier report's unchanged note about the
+  signed multiplication intermediate relying on assignment-width truncation
+  remains outside this fix's scope.
