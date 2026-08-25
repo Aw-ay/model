@@ -1,5 +1,4 @@
 import unittest
-import re
 
 from rfsoc_pulse_model.cycle.dsl.emitter import VerilogEmitter
 from rfsoc_pulse_model.cycle.dsl import concat
@@ -282,7 +281,7 @@ class SaturateSignedTest(unittest.TestCase):
     def test_saturate_signed_emits_an_explicit_24_bit_result(self) -> None:
         expr = saturate_signed(ConstExpr((1 << 30) + 3, 48, signed=True), 24)
 
-        self.assertRegex(expr.verilog(), r"\[23:0\]")
+        self.assertIn("$signed(24'(", expr.verilog())
 
     def test_saturate_signed_sign_extends_when_result_is_wider_than_source(self) -> None:
         expr = saturate_signed(ConstExpr(-7, 16, signed=True), 24)
@@ -318,7 +317,7 @@ class SaturateSignedTest(unittest.TestCase):
         rtl = VerilogEmitter().emit(SaturateConcatProbe())
         assignment = next(line for line in rtl.splitlines() if "next_packed =" in line)
 
-        self.assertGreaterEqual(len(re.findall(r"\[23:0\]", assignment)), 2)
+        self.assertGreaterEqual(assignment.count("$signed(24'("), 2)
 
 
 class SignedOutOfRangeTest(unittest.TestCase):
@@ -356,6 +355,14 @@ class VerilogEvaluatorLiteralTest(unittest.TestCase):
     def test_rejects_illegal_inline_minus_sized_literal(self) -> None:
         with self.assertRaisesRegex(ValueError, "missing literal digits|unexpected token"):
             evaluate_verilog_expression("24'sd-8388608", {})
+
+    def test_evaluates_sized_casts_emitted_for_signed_narrowing(self) -> None:
+        value = evaluate_verilog_expression("$signed(4'(5'sd25))", {})
+
+        self.assertEqual(value.width, 4)
+        self.assertTrue(value.signed)
+        self.assertEqual(value.raw, 9)
+        self.assertEqual(value.integer, -7)
 
 
 if __name__ == "__main__":

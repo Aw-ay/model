@@ -37,7 +37,7 @@ def _truncate_signed_verilog(expr: Expr, target_width: int) -> str:
         return f"$signed({_sign_extend_verilog(expr, target_width)})"
     if target_width == expr.width:
         return _signed_expr(expr)
-    return f"$signed(({expr.verilog()})[{target_width - 1}:0])"
+    return f"$signed({target_width}'({expr.verilog()}))"
 
 
 def _resize_signed_verilog_text(
@@ -51,7 +51,7 @@ def _resize_signed_verilog_text(
         return f"$signed({{{{{extra}{{{sign_bit}}}}}, {expression}}})"
     if target_width == source_width:
         return f"$signed({expression})"
-    return f"$signed(({expression})[{target_width - 1}:0])"
+    return f"$signed({target_width}'({expression}))"
 
 
 @dataclass(frozen=True)

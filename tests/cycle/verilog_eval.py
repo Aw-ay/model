@@ -65,6 +65,9 @@ def _tokenize(source: str) -> list[_Token]:
                 index += 1
             if index < len(source) and source[index] == "'":
                 index += 1
+                if index < len(source) and source[index] == "(":
+                    tokens.append(_Token("cast", source[start:index - 1]))
+                    continue
                 signed = False
                 if index < len(source) and source[index] in "sS":
                     signed = True
@@ -211,6 +214,12 @@ class _Parser:
 
     def _parse_primary(self) -> VerilogValue:
         token = self._peek()
+        if token.kind == "cast":
+            self._take()
+            self._expect("(")
+            value = self._parse_conditional()
+            self._expect(")")
+            return self._parse_slices(value.resize(int(token.text)))
         if token.kind == "literal":
             self._take()
             text = token.text
