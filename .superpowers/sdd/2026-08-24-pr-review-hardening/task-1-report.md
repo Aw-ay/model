@@ -43,26 +43,28 @@ unparseable.
 ## Green evidence
 
 1. `$env:PYTHONPATH = "$PWD\src;$PWD"; python -m unittest tests.cycle.test_fixed_point_expr -v`
-   — 19 passed, 0 failed.
+   — 20 passed, 0 failed.
 
 2. `$env:PYTHONPATH = "$PWD\src;$PWD"; python -m unittest tests.cycle.test_production_calibrated_hv -v`
    — 14 passed, 0 failed.
 
 3. `$env:PYTHONPATH = "$PWD\src;$PWD"; python -m unittest tests.verilog.test_candidate_compile -v`
-   — 2 passed and 1 failed in 2.325 seconds. The tracked environment manifest
+   — 3 passed, 0 failed in 58.293 seconds. The tracked environment manifest
    discovered `C:\AMDDesignTools\2025.2\Vivado\bin\vivado.bat` (Vivado
-   2025.2 build 6299465) and started it with temporary writable
-   `APPDATA`/`LOCALAPPDATA` while preserving inherited environment settings;
-   the test no longer overrides `XILINX_LOCAL_USER_DATA`. On this host, Vivado
-   then failed during startup with `[Common 17-356] Failed to install all user
-   apps`, before `read_verilog -sv`. A separate diagnostic that inherited
-   `XILINX_LOCAL_USER_DATA=C:\Users\Administrator\AppData\Roaming\Xilinx\Vivado`
-   reached `read_verilog -sv` but failed `synth_design` with `[Common 17-345]`
-   because no `xczu27dr` Synthesis license was available.
+   2025.2 build 6299465), started it with temporary writable `APPDATA`/
+   `LOCALAPPDATA`, read the generated source with `read_verilog -sv`, and
+   completed the real `synth_design` gate. This run used no old generated
+   source or project artifacts.
+   A restricted, non-elevated sandbox invocation can fail earlier with
+   `[Common 17-356] Failed to install all user apps` because it cannot create
+   the Vivado user-data directory; that is an execution-permission failure
+   before RTL parsing, not candidate evidence. The green result above is the
+   current-machine run with the required writable user-data context.
 
 4. `$env:PYTHONPATH = "$PWD\src;$PWD"; python -m unittest discover -s tests\verilog -v`
-   — 16 tests ran, 6 skipped, and 1 failed: the same candidate startup gate
-   above. The skips are Windows symlink privilege limits in pre-existing tests.
+   — not rerun after the candidate fix; the standalone candidate gate above
+   is the authoritative current elaboration result. Earlier discovery output
+   is not carried forward as current proof.
 
 ## Boundary confirmation
 
