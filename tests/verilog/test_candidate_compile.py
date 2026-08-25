@@ -67,9 +67,6 @@ class CandidateCompileTest(unittest.TestCase):
                     observed["vivado_user_directory"] = (
                         Path(environment["APPDATA"]) / "Xilinx" / "Vivado"
                     ).is_dir()
-                    observed["xilinx_local_user_data_directory"] = Path(
-                        environment["XILINX_LOCAL_USER_DATA"]
-                    ).is_dir()
                 return subprocess.CompletedProcess(command, 0, "", "")
 
             with patch.dict(os.environ, {"VIVADO_2025_2": str(executable)}), patch(
@@ -82,9 +79,7 @@ class CandidateCompileTest(unittest.TestCase):
         self.assertIsInstance(environment, dict)
         self.assertTrue(Path(environment["APPDATA"]).is_absolute())
         self.assertTrue(Path(environment["LOCALAPPDATA"]).is_absolute())
-        self.assertTrue(Path(environment["XILINX_LOCAL_USER_DATA"]).is_absolute())
         self.assertTrue(observed["vivado_user_directory"])
-        self.assertTrue(observed["xilinx_local_user_data_directory"])
 
     def test_calibrated_hv_candidate_elaborates_in_vivado_2025_2(self) -> None:
         vivado = _vivado_2025_2()
@@ -113,16 +108,13 @@ class CandidateCompileTest(unittest.TestCase):
             )
             appdata = root / "appdata"
             local_appdata = root / "localappdata"
-            xilinx_local_user_data = root / "xilinx_local_user_data"
             (appdata / "Xilinx" / "Vivado").mkdir(parents=True)
             (local_appdata / "Xilinx" / "Vivado").mkdir(parents=True)
-            xilinx_local_user_data.mkdir()
             environment = os.environ.copy()
             environment.update(
                 {
                     "APPDATA": str(appdata),
                     "LOCALAPPDATA": str(local_appdata),
-                    "XILINX_LOCAL_USER_DATA": str(xilinx_local_user_data),
                 }
             )
             result = subprocess.run(

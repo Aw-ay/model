@@ -49,13 +49,20 @@ unparseable.
    — 14 passed, 0 failed.
 
 3. `$env:PYTHONPATH = "$PWD\src;$PWD"; python -m unittest tests.verilog.test_candidate_compile -v`
-   — 1 skipped, 0 failed. The only local executable is Vivado 2025.1;
-   Vivado 2025.2 is unavailable, so the 2025.2-only elaboration test correctly
-   skipped and no Vivado invocation occurred.
+   — 2 passed and 1 failed in 2.325 seconds. The tracked environment manifest
+   discovered `C:\AMDDesignTools\2025.2\Vivado\bin\vivado.bat` (Vivado
+   2025.2 build 6299465) and started it with temporary writable
+   `APPDATA`/`LOCALAPPDATA` while preserving inherited environment settings;
+   the test no longer overrides `XILINX_LOCAL_USER_DATA`. On this host, Vivado
+   then failed during startup with `[Common 17-356] Failed to install all user
+   apps`, before `read_verilog -sv`. A separate diagnostic that inherited
+   `XILINX_LOCAL_USER_DATA=C:\Users\Administrator\AppData\Roaming\Xilinx\Vivado`
+   reached `read_verilog -sv` but failed `synth_design` with `[Common 17-345]`
+   because no `xczu27dr` Synthesis license was available.
 
 4. `$env:PYTHONPATH = "$PWD\src;$PWD"; python -m unittest discover -s tests\verilog -v`
-   — 14 tests run, 7 skipped, 0 failed. Skips are the unavailable Vivado 2025.2
-   executable and Windows symlink privileges in pre-existing tests.
+   — 16 tests ran, 6 skipped, and 1 failed: the same candidate startup gate
+   above. The skips are Windows symlink privilege limits in pre-existing tests.
 
 ## Boundary confirmation
 
