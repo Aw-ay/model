@@ -27,9 +27,11 @@ class CalibratorVivadoTclTest(unittest.TestCase):
             self.assertIn(f"adc{channel}_iq_subset", script)
             self.assertIn(f"adc{channel}_rx_slice", script)
             self.assertIn(f"adc{channel}_broadcaster", script)
+            self.assertIn(f"dac{channel}_mute_gate", script)
             self.assertNotIn(f"adc{channel}_to_dac_cdc", script)
 
         self.assertIn("calibrator_control_cdc.sv", script)
+        self.assertIn("axis_dac_mute_gate.sv", script)
         self.assertIn("calibrator_control_cdc_0", script)
 
     def test_script_locks_board_io_loopback_mapping_interrupts_and_final_reports(self) -> None:
@@ -47,6 +49,14 @@ class CalibratorVivadoTclTest(unittest.TestCase):
         expected = {0: "s01_axis", 1: "s03_axis", 2: "s11_axis", 3: "s13_axis", 4: "s00_axis", 5: "s02_axis", 6: "s10_axis", 7: "s12_axis"}
         for adc, dac_axis in expected.items():
             self.assertIn(
+                f"adc{adc}_broadcaster/M00_AXIS}}] [get_bd_intf_pins {{dac{adc}_mute_gate/s_axis}}",
+                script,
+            )
+            self.assertIn(
+                f"dac{adc}_mute_gate/m_axis}}] [get_bd_intf_pins {{rfdc_0/{dac_axis}}}",
+                script,
+            )
+            self.assertNotIn(
                 f"adc{adc}_broadcaster/M00_AXIS}}] [get_bd_intf_pins {{rfdc_0/{dac_axis}}}",
                 script,
             )
@@ -79,6 +89,14 @@ class CalibratorVivadoTclTest(unittest.TestCase):
         self.assertIn("rfdc_dac1_reset", script)
         self.assertIn("calibrator_control_cdc_0/event_count_rx_i", script)
         self.assertIn("calibrator_control_cdc_0/acquisition_enable_rx_o", script)
+        self.assertIn("calibrator_control_0/dac_loopback_enable_o", script)
+        self.assertIn("calibrator_control_0/dac_mute_o", script)
+        self.assertIn("calibrator_control_cdc_0/dac_loopback_enable_rx_o", script)
+        self.assertIn("calibrator_control_cdc_0/dac_mute_rx_o", script)
+        self.assertIn("dac${channel}_mute_gate/loopback_enable_i", script)
+        self.assertIn("dac${channel}_mute_gate/mute_i", script)
+        self.assertIn("dac${channel}_mute_gate/aclk", script)
+        self.assertIn("dac${channel}_mute_gate/aresetn", script)
         self.assertNotIn(
             "calibrator_control_0/acquisition_enable_o}] [get_bd_pins {calibrator_core_0/acquisition_enable_i}",
             script,

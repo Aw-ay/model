@@ -43,6 +43,12 @@ python -m rfsoc_pulse_model.ip.calibrator_build --finalize-xsa `
   build\calibrator_project\calibrator.xsa
 ```
 
+The following completed local build is retained as historical implementation
+evidence.  The DAC AXIS safety-gate source added after that run requires a
+fresh Vivado implementation and embedded-bit XSA before it can be used for a
+new PetaLinux image; do not treat the hashes below as artifacts of the newer
+gate-enabled source.
+
 The completed local build produced:
 
 - `build/calibrator_project/calibrator.bit`, SHA-256
@@ -107,6 +113,27 @@ bash software/petalinux/build_image.sh \
   /work/calibrator-petalinux
 ```
 
+PetaLinux 2025.2's XSCT tools require `libtinfo.so.5`, which is not normally
+installed on Ubuntu 22.04.  Extract it without root privileges before the
+build; this does not modify the VM or pollute ordinary BitBake recipes:
+
+```bash
+COMPAT_ROOT="$HOME/.local/calibrator-xsct-libtinfo5"
+mkdir -p "$COMPAT_ROOT/pkg" "$COMPAT_ROOT/root"
+(
+  cd "$COMPAT_ROOT/pkg"
+  apt download libtinfo5
+  dpkg-deb -x libtinfo5_*.deb "$COMPAT_ROOT/root"
+)
+export CALIBRATOR_XSCT_LIBTINFO_DIR="$COMPAT_ROOT/root/lib/x86_64-linux-gnu"
+test -f "$CALIBRATOR_XSCT_LIBTINFO_DIR/libtinfo.so.5"
+```
+
+`build_image.sh` uses that directory only for its parse-time launcher and the
+four XSCT-invoking recipes (`device-tree`, `bitstream-extraction`,
+`pmu-firmware`, and `fsbl-firmware`); normal tasks keep both `LD_PRELOAD` and
+`LIBRARY_PATH` empty.
+
 The script refuses an existing destination, verifies Ubuntu/tool versions,
 creates a ZynqMP project, imports the XSA and repository `meta-user` layer,
 builds Linux, packages `BOOT.BIN`, and emits the WIC image. The image must be
@@ -126,7 +153,13 @@ Set the receiver address in `/etc/default/calibratord`. The `shutdown`
 command stops acquisition and the service; it powers off Linux only when
 `CALIBRATOR_ALLOW_POWEROFF=1` is explicitly enabled.
 
-### Verified PetaLinux artifact handoff (2026-08-28)
+### Historical PetaLinux artifact handoff (2026-08-28)
+
+This handoff predates the DAC AXIS safety-gate source change documented above.
+It remains useful provenance for the earlier image, but it is not a claim that
+the listed `system.bit`, XSA, `BOOT.BIN`, or WIC contains that new gate.  A
+controller-run Vivado implementation followed by an image rebuild is required
+before publishing replacement hashes.
 
 The PetaLinux 2025.2 build in the Ubuntu 22.04.5 VM completed its untargeted
 incremental build with `6,498/6,498` tasks successful.  The exact generated
@@ -158,7 +191,7 @@ FSBL, PL `system.bit`, BL31, `system.dtb`, and U-Boot.  `fdisk` identifies a
 bootable 2 GiB FAT32 WIC partition and a 4 GiB Linux partition. The FAT
 partition contains `BOOT.BIN`, `Image`, `boot.scr`, and the rebuilt
 `system.dtb`. The DTB selects `root=/dev/mmcblk0p2 rootwait rw`; the kernel
-has no embedded initramfs. A direct read-only extraction of the WIC's second
+has no bootable embedded rootfs/initramfs. A direct read-only extraction of the WIC's second
 partition verifies the enabled daemon plus `uio_pdrv_genirq` autoload and
 `of_id=generic-uio` module option.
 
@@ -196,8 +229,9 @@ Verified on this workstation:
 
 Not yet release-verified:
 
-1. The deployable RTL still uses a direct raw ADC-to-DAC loopback and a simple
-   `I²+Q² >= threshold` hit detector. The Cycle/Golden implementation of the
+1. The generated design now gates every ADC-to-DAC route through reset-safe
+   loopback/mute control, but the recorded pre-gate artifacts above must be
+   regenerated. The Cycle/Golden implementation of the
    0–2047 integer delay, 63-tap fractional delay, s24.Q20 complex correction,
    H/V automatic range selection, 15-tap decimating FIR, adaptive noise,
    moving average and 3/5 vote has not yet been integrated into the bitstream.

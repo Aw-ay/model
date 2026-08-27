@@ -12,6 +12,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class CalibratordSocketContractTest(unittest.TestCase):
+    def test_reader_uses_a_monotonic_total_deadline(self) -> None:
+        source = (ROOT / "software/calibratord/src/control.c").read_text(encoding="utf-8")
+        self.assertIn("CLOCK_MONOTONIC", source)
+        self.assertIn("remaining_timeout_ms", source)
+
     def test_socket_segmentation_timeout_and_boundaries(self) -> None:
         if not sys.platform.startswith("linux"):
             self.skipTest("AF_UNIX C socket contract is executed in the PetaLinux Ubuntu VM")

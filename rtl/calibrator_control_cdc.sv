@@ -17,9 +17,13 @@ module calibrator_control_cdc (
     input  wire          rx_resetn,
 
     input  wire          acquisition_enable_ctrl_i,
+    input  wire          dac_loopback_enable_ctrl_i,
+    input  wire          dac_mute_ctrl_i,
     input  wire [31:0]   detect_threshold_ctrl_i,
     input  wire [31:0]   config_version_ctrl_i,
     output reg           acquisition_enable_rx_o,
+    output reg           dac_loopback_enable_rx_o,
+    output reg           dac_mute_rx_o,
     output reg  [31:0]   detect_threshold_rx_o,
     output reg  [31:0]   config_version_rx_o,
 
@@ -31,14 +35,16 @@ module calibrator_control_cdc (
     output reg  [31:0]   stream_errors_ctrl_o
 );
 
-    wire [64:0] control_input = {config_version_ctrl_i,
+    wire [66:0] control_input = {config_version_ctrl_i,
                                  detect_threshold_ctrl_i,
+                                 dac_mute_ctrl_i,
+                                 dac_loopback_enable_ctrl_i,
                                  acquisition_enable_ctrl_i};
-    reg  [64:0] control_payload;
-    reg  [64:0] control_committed;
+    reg  [66:0] control_payload;
+    reg  [66:0] control_committed;
     reg         control_send;
     wire        control_received;
-    wire [64:0] control_dest_payload;
+    wire [66:0] control_dest_payload;
     wire        control_dest_req;
 
     wire [159:0] status_input = {stream_errors_rx_i,
@@ -53,8 +59,8 @@ module calibrator_control_cdc (
 
     always @(posedge ctrl_clk) begin
         if (!ctrl_resetn) begin
-            control_payload <= 65'd0;
-            control_committed <= 65'd0;
+            control_payload <= 67'd0;
+            control_committed <= 67'd0;
             control_send <= 1'b0;
             event_count_ctrl_o <= 64'd0;
             drop_count_ctrl_o <= 64'd0;
@@ -80,6 +86,8 @@ module calibrator_control_cdc (
     always @(posedge rx_clk) begin
         if (!rx_resetn) begin
             acquisition_enable_rx_o <= 1'b0;
+            dac_loopback_enable_rx_o <= 1'b0;
+            dac_mute_rx_o <= 1'b0;
             detect_threshold_rx_o <= 32'd0;
             config_version_rx_o <= 32'd0;
             status_payload <= 160'd0;
@@ -87,7 +95,8 @@ module calibrator_control_cdc (
             status_send <= 1'b0;
         end else begin
             if (control_dest_req) begin
-                {config_version_rx_o, detect_threshold_rx_o, acquisition_enable_rx_o}
+                {config_version_rx_o, detect_threshold_rx_o, dac_mute_rx_o,
+                 dac_loopback_enable_rx_o, acquisition_enable_rx_o}
                     <= control_dest_payload;
             end
 
@@ -109,7 +118,7 @@ module calibrator_control_cdc (
         .INIT_SYNC_FF(0),
         .SIM_ASSERT_CHK(1),
         .SRC_SYNC_FF(4),
-        .WIDTH(65)
+        .WIDTH(67)
     ) control_handshake (
         .src_clk(ctrl_clk),
         .src_in(control_payload),

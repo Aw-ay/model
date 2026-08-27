@@ -157,6 +157,18 @@ class DeploymentContractTest(unittest.TestCase):
             self.assertIn(f"LIBRARY_PATH:pn-{recipe}", script)
         self.assertIn("env -u LD_PRELOAD", script)
 
+    def test_petalinux_reproduction_documents_nonroot_libtinfo5_extraction(self) -> None:
+        guide = (ROOT / "docs/deployment/calibrator-v1.md").read_text(encoding="utf-8")
+        self.assertIn("apt download libtinfo5", guide)
+        self.assertIn("dpkg-deb -x libtinfo5_*.deb", guide)
+        self.assertIn("CALIBRATOR_XSCT_LIBTINFO_DIR", guide)
+        self.assertIn("libtinfo.so.5", guide)
+
+    def test_artifact_handoff_does_not_overstate_rootfs_delivery(self) -> None:
+        guide = (ROOT / "docs/deployment/calibrator-v1.md").read_text(encoding="utf-8")
+        self.assertIn("no bootable embedded rootfs/initramfs", guide)
+        self.assertIn("predates the DAC AXIS safety-gate source change", guide)
+
     def test_vitis_platform_script_is_xsa_driven_and_version_locked(self) -> None:
         script = (ROOT / "software/vitis/create_linux_platform.py").read_text("utf-8")
         self.assertIn('EXPECTED_VERSION = "2025.2"', script)
