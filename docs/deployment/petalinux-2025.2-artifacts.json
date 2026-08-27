@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "verification_date": "2026-08-27",
+  "verification_date": "2026-08-28",
   "toolchain": {
     "host_os": "Ubuntu 22.04.5 LTS",
     "petalinux_version": "2025.2"
@@ -12,18 +12,18 @@
     "board_execution_claimed": false
   },
   "artifacts": [
-    { "name": "BOOT.BIN", "bytes": 36177568, "sha256": "6bfa16054cf149dc1915c6d96237bb51f3b47352f0e53bf190e11dc3a826fdd2" },
+    { "name": "BOOT.BIN", "bytes": 36177568, "sha256": "de74686e9edfe3af91741d727d15a74fa5e593099afb3069d2a43ea7e27fff45" },
     { "name": "Image", "bytes": 32371200, "sha256": "a7660de82ddff9fc6b7d49b5c82df21e88f4e2cc534339f4269cd6d7399c3ba5" },
     { "name": "boot.scr", "bytes": 3837, "sha256": "d54bbcd5bb8112c53d22d340752c80309c8c9dcf1e91edc86448eef3416c6309" },
-    { "name": "rootfs.tar.gz", "bytes": 46730508, "sha256": "ed24055ccc16e7076978dc7f32e2a7fe524e7d3f044e812c4f42d30844330840" },
-    { "name": "rootfs.ext4", "bytes": 200064000, "sha256": "929a67be65ce72f0b8dfe56378f0bdcf10aa16085df9eaf271e07748fd76bd1a" },
-    { "name": "petalinux-sdimage.wic", "bytes": 6442455040, "sha256": "04cf66062ffe8a7189423d08f4578a80aceee4686a9b9a680aa759e7ba637708" },
-    { "name": "system.dtb", "bytes": 42817, "sha256": "bdfb2911d6c9a4f8c91f2b621a9f4049648bb4bb785953aab7097734743c0fab" },
+    { "name": "rootfs.tar.gz", "bytes": 46730469, "sha256": "0af88c64fba63a229ee9098c98b57210376c9fc38e25eb780506174f1c0e4b70" },
+    { "name": "rootfs.ext4", "bytes": 200074240, "sha256": "0bf1931564bfaa9c5305179a971c4760369efa8bd21063aa3e82d0eddc316e62" },
+    { "name": "petalinux-sdimage.wic", "bytes": 6442455040, "sha256": "ecfa72c53c5d63db0defcad780c1cdfab0ea7b799ba73cf34ba1889c2a0cf01c" },
+    { "name": "system.dtb", "bytes": 42825, "sha256": "e3089512849a4593cb0e62c20a26f49773e437654974828117a13b4eda3bb0ae" },
     { "name": "system.bit", "bytes": 34437496, "sha256": "307d36a1cb6f1af449fb34c146cacc1db2c58c0ce8dac2f8997961e3c3ce8f88" }
   ],
   "rootfs_payload": [
     { "path": "/usr/sbin/calibratord", "bytes": 67560 },
-    { "path": "/usr/lib/systemd/system/calibratord.service", "bytes": 458 },
+    { "path": "/usr/lib/systemd/system/calibratord.service", "bytes": 487 },
     { "path": "/etc/default/calibratord", "bytes": 156 },
     { "path": "/usr/lib/modules/6.12.40-xilinx-g31626ef92ff1/updates/calibrator_dma_proxy.ko", "bytes": 12288 }
   ]

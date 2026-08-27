@@ -23,3 +23,9 @@ Task 2: Ruling: do not globally delete zero-byte pkgdata; current-build zero-byt
 Task 2: complete (commits b3b95f9..90e717c, final review approved; PetaLinux 6498/6498, calibrator runtime rootfs payload, BOOT.BIN, and WIC verified)
 
 Task 3: complete (VM-source and Windows-copy SHA-256 equality for all eight deployable artifacts; local ignored handoff includes both rootfs forms and manifest; deployment tests 12/12 and shell syntax pass; physical-board gates remain open)
+
+Task 4: Ruling: define TCP control as one newline-terminated request per connection; execute the first line and close, so behavior is independent of TCP segmentation, while a bounded read timeout prevents an incomplete client from blocking the single-threaded control loop — if this interpretation is wrong, the cost is changing both endpoints to a persistent multi-request protocol.
+
+Task 4: complete (commits f891fcd..b82f63e; clean hardware authorities committed, TCP Linux socket contract passed, calibratord/device-tree targeted builds passed)
+
+Task 5: complete (PetaLinux 6498/6498 with 6475 reused; BOOT.BIN/WIC repackaged; DTB selects mmcblk0p2; WIC FAT and ext4 contents inspected directly; eight fresh artifact hashes recorded; physical-board gates remain open)

@@ -18,13 +18,13 @@ hashed with Windows SHA-256.  The VM and Windows values exactly match.
 
 | Artifact | Bytes | SHA-256 |
 | --- | ---: | --- |
-| `BOOT.BIN` | 36,177,568 | `6bfa16054cf149dc1915c6d96237bb51f3b47352f0e53bf190e11dc3a826fdd2` |
+| `BOOT.BIN` | 36,177,568 | `de74686e9edfe3af91741d727d15a74fa5e593099afb3069d2a43ea7e27fff45` |
 | `Image` | 32,371,200 | `a7660de82ddff9fc6b7d49b5c82df21e88f4e2cc534339f4269cd6d7399c3ba5` |
 | `boot.scr` | 3,837 | `d54bbcd5bb8112c53d22d340752c80309c8c9dcf1e91edc86448eef3416c6309` |
-| `rootfs.tar.gz` | 46,729,879 | `9e8fd4108444bcd732b5470ae97c9eb77aef1e85e1c09a2b56b3b19894fdab39` |
-| `rootfs.ext4` | 200,064,000 | `f1a0cb043b64b046288ab253a9f159656a5bbe1d6c5b8a20d4d24b8234da3ea3` |
-| `petalinux-sdimage.wic` | 6,442,455,040 | `750906412879f6cdc5c545bd7fdd5ae0f6f2d0a5563b383555015840ef99d402` |
-| `system.dtb` | 42,817 | `bdfb2911d6c9a4f8c91f2b621a9f4049648bb4bb785953aab7097734743c0fab` |
+| `rootfs.tar.gz` | 46,730,469 | `0af88c64fba63a229ee9098c98b57210376c9fc38e25eb780506174f1c0e4b70` |
+| `rootfs.ext4` | 200,074,240 | `0bf1931564bfaa9c5305179a971c4760369efa8bd21063aa3e82d0eddc316e62` |
+| `petalinux-sdimage.wic` | 6,442,455,040 | `ecfa72c53c5d63db0defcad780c1cdfab0ea7b799ba73cf34ba1889c2a0cf01c` |
+| `system.dtb` | 42,825 | `e3089512849a4593cb0e62c20a26f49773e437654974828117a13b4eda3bb0ae` |
 | `system.bit` | 34,437,496 | `307d36a1cb6f1af449fb34c146cacc1db2c58c0ce8dac2f8997961e3c3ce8f88` |
 
 `docs/deployment/petalinux-2025.2-artifacts.json` is the committed,
@@ -36,7 +36,7 @@ handoff directory.
 `rootfs.ext4` contains the deployed runtime payload:
 
 - `/usr/sbin/calibratord` — 67,560 bytes;
-- `/usr/lib/systemd/system/calibratord.service` — 458 bytes;
+- `/usr/lib/systemd/system/calibratord.service` — 487 bytes;
 - `/etc/default/calibratord` — 156 bytes;
 - `/usr/lib/modules/6.12.40-xilinx-g31626ef92ff1/updates/calibrator_dma_proxy.ko`
   — 12,288 bytes.
@@ -44,7 +44,11 @@ handoff directory.
 A fresh read-only Bootgen inspection reports six boot images, including
 `zynqmp_fsbl.elf`, PL-destination `system.bit`, `bl31.elf`, `system.dtb`, and
 `u-boot.elf`.  The WIC inspection reports a bootable 2 GiB FAT32 partition
-and a 4 GiB Linux partition.
+and a 4 GiB Linux partition. The rebuilt FAT partition contains
+`BOOT.BIN`, `Image`, `boot.scr`, and `system.dtb`; the DTB selects the ext4
+root with `root=/dev/mmcblk0p2 rootwait rw`. Direct read-only inspection of
+the WIC's second partition confirms `calibratord`, its enabled service,
+`uio_pdrv_genirq` autoload, and `of_id=generic-uio`.
 
 ## Local verification
 

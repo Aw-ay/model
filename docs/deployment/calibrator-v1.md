@@ -126,7 +126,7 @@ Set the receiver address in `/etc/default/calibratord`. The `shutdown`
 command stops acquisition and the service; it powers off Linux only when
 `CALIBRATOR_ALLOW_POWEROFF=1` is explicitly enabled.
 
-### Verified PetaLinux artifact handoff (2026-08-27)
+### Verified PetaLinux artifact handoff (2026-08-28)
 
 The PetaLinux 2025.2 build in the Ubuntu 22.04.5 VM completed its untargeted
 incremental build with `6,498/6,498` tasks successful.  The exact generated
@@ -140,22 +140,27 @@ identical copy is placed alongside the ignored local artifacts.
 
 | Artifact | Bytes | SHA-256 |
 | --- | ---: | --- |
-| `BOOT.BIN` | 36,177,568 | `6bfa16054cf149dc1915c6d96237bb51f3b47352f0e53bf190e11dc3a826fdd2` |
+| `BOOT.BIN` | 36,177,568 | `de74686e9edfe3af91741d727d15a74fa5e593099afb3069d2a43ea7e27fff45` |
 | `Image` | 32,371,200 | `a7660de82ddff9fc6b7d49b5c82df21e88f4e2cc534339f4269cd6d7399c3ba5` |
 | `boot.scr` | 3,837 | `d54bbcd5bb8112c53d22d340752c80309c8c9dcf1e91edc86448eef3416c6309` |
-| `rootfs.tar.gz` | 46,730,508 | `ed24055ccc16e7076978dc7f32e2a7fe524e7d3f044e812c4f42d30844330840` |
-| `rootfs.ext4` | 200,064,000 | `929a67be65ce72f0b8dfe56378f0bdcf10aa16085df9eaf271e07748fd76bd1a` |
-| `petalinux-sdimage.wic` | 6,442,455,040 | `04cf66062ffe8a7189423d08f4578a80aceee4686a9b9a680aa759e7ba637708` |
-| `system.dtb` | 42,817 | `bdfb2911d6c9a4f8c91f2b621a9f4049648bb4bb785953aab7097734743c0fab` |
+| `rootfs.tar.gz` | 46,730,469 | `0af88c64fba63a229ee9098c98b57210376c9fc38e25eb780506174f1c0e4b70` |
+| `rootfs.ext4` | 200,074,240 | `0bf1931564bfaa9c5305179a971c4760369efa8bd21063aa3e82d0eddc316e62` |
+| `petalinux-sdimage.wic` | 6,442,455,040 | `ecfa72c53c5d63db0defcad780c1cdfab0ea7b799ba73cf34ba1889c2a0cf01c` |
+| `system.dtb` | 42,825 | `e3089512849a4593cb0e62c20a26f49773e437654974828117a13b4eda3bb0ae` |
 | `system.bit` | 34,437,496 | `307d36a1cb6f1af449fb34c146cacc1db2c58c0ce8dac2f8997961e3c3ce8f88` |
 
 The `rootfs.ext4` inspection proves the runtime payload: `/usr/sbin/calibratord`
-(67,560 bytes), `/usr/lib/systemd/system/calibratord.service` (458 bytes),
+(67,560 bytes), `/usr/lib/systemd/system/calibratord.service` (487 bytes),
 `/etc/default/calibratord` (156 bytes), and
 `/usr/lib/modules/6.12.40-xilinx-g31626ef92ff1/updates/calibrator_dma_proxy.ko`
 (12,288 bytes).  A fresh Bootgen read finds six boot images, including the
 FSBL, PL `system.bit`, BL31, `system.dtb`, and U-Boot.  `fdisk` identifies a
-bootable 2 GiB FAT32 WIC partition and a 4 GiB Linux partition.
+bootable 2 GiB FAT32 WIC partition and a 4 GiB Linux partition. The FAT
+partition contains `BOOT.BIN`, `Image`, `boot.scr`, and the rebuilt
+`system.dtb`. The DTB selects `root=/dev/mmcblk0p2 rootwait rw`; the kernel
+has no embedded initramfs. A direct read-only extraction of the WIC's second
+partition verifies the enabled daemon plus `uio_pdrv_genirq` autoload and
+`of_id=generic-uio` module option.
 
 ## Windows control and capture
 
