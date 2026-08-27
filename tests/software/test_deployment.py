@@ -93,6 +93,8 @@ class DeploymentContractTest(unittest.TestCase):
         self.assertIn("static void cal_remove", source)
         self.assertIn("all:", makefile)
         self.assertIn("$(MAKE) -C $(KERNEL_SRC) M=$(PWD) modules", makefile)
+        self.assertIn("modules_install:", makefile)
+        self.assertIn("$(MAKE) -C $(KERNEL_SRC) M=$(PWD) modules_install", makefile)
 
     def test_daemon_compiles_against_the_public_libmetal_2025_2_headers(self) -> None:
         """Reject removed umbrella headers before a PetaLinux image build does."""
