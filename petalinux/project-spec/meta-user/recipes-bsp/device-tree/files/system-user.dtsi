@@ -1,0 +1,35 @@
+/include/ "system-conf.dtsi"
+
+/ {
+    calibrator@a0000000 {
+        compatible = "away,rfsoc-calibrator-1.0";
+        reg = <0x0 0xa0000000 0x0 0x10000>;
+    };
+
+    calibrator-dma-proxy {
+        compatible = "away,calibrator-dma-proxy-1.0";
+        dmas = <&axi_dma_0 0>;
+        dma-names = "rx";
+    };
+};
+
+&{/calibrator@a0000000} {
+    compatible = "away,rfsoc-calibrator-1.0", "generic-uio";
+    linux,uio-name = "calibrator-control";
+};
+
+&gem3 {
+    phy-mode = "rgmii-id";
+    phy-handle = <&calibrator_phy>;
+    status = "okay";
+
+    mdio {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        calibrator_phy: ethernet-phy@7 {
+            compatible = "ethernet-phy-id001c.c916";
+            reg = <7>;
+        };
+    };
+};
