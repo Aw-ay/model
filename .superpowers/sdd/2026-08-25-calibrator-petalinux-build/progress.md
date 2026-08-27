@@ -29,3 +29,11 @@ Task 4: Ruling: define TCP control as one newline-terminated request per connect
 Task 4: complete (commits f891fcd..b82f63e; clean hardware authorities committed, TCP Linux socket contract passed, calibratord/device-tree targeted builds passed)
 
 Task 5: complete (PetaLinux 6498/6498 with 6475 reused; BOOT.BIN/WIC repackaged; DTB selects mmcblk0p2; WIC FAT and ext4 contents inspected directly; eight fresh artifact hashes recorded; physical-board gates remain open)
+
+Task 2: reopened by final whole-branch review. Commit `306d49d` adds the
+reset-safe DAC AXIS gate, carries the two DAC controls through the existing
+handshake CDC, bounds the TCP read by an absolute monotonic deadline, and
+documents the non-root XSCT `libtinfo.so.5` setup. The previously verified
+hardware/XSA/image artifacts predate this source change and must be regenerated
+by the controller's single consolidated Vivado/PetaLinux run; they are not
+claimed as gate-enabled artifacts.
