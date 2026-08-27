@@ -143,9 +143,9 @@ identical copy is placed alongside the ignored local artifacts.
 | `BOOT.BIN` | 36,177,568 | `6bfa16054cf149dc1915c6d96237bb51f3b47352f0e53bf190e11dc3a826fdd2` |
 | `Image` | 32,371,200 | `a7660de82ddff9fc6b7d49b5c82df21e88f4e2cc534339f4269cd6d7399c3ba5` |
 | `boot.scr` | 3,837 | `d54bbcd5bb8112c53d22d340752c80309c8c9dcf1e91edc86448eef3416c6309` |
-| `rootfs.tar.gz` | 46,729,879 | `9e8fd4108444bcd732b5470ae97c9eb77aef1e85e1c09a2b56b3b19894fdab39` |
-| `rootfs.ext4` | 200,064,000 | `f1a0cb043b64b046288ab253a9f159656a5bbe1d6c5b8a20d4d24b8234da3ea3` |
-| `petalinux-sdimage.wic` | 6,442,455,040 | `750906412879f6cdc5c545bd7fdd5ae0f6f2d0a5563b383555015840ef99d402` |
+| `rootfs.tar.gz` | 46,730,508 | `ed24055ccc16e7076978dc7f32e2a7fe524e7d3f044e812c4f42d30844330840` |
+| `rootfs.ext4` | 200,064,000 | `929a67be65ce72f0b8dfe56378f0bdcf10aa16085df9eaf271e07748fd76bd1a` |
+| `petalinux-sdimage.wic` | 6,442,455,040 | `04cf66062ffe8a7189423d08f4578a80aceee4686a9b9a680aa759e7ba637708` |
 | `system.dtb` | 42,817 | `bdfb2911d6c9a4f8c91f2b621a9f4049648bb4bb785953aab7097734743c0fab` |
 | `system.bit` | 34,437,496 | `307d36a1cb6f1af449fb34c146cacc1db2c58c0ce8dac2f8997961e3c3ce8f88` |
 
