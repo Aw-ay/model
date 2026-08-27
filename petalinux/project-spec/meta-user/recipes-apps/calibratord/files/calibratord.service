@@ -1,0 +1,21 @@
+[Unit]
+Description=RFSoC calibrator service
+After=network-online.target dev-calibrator\x2devents.device
+Wants=network-online.target
+Requires=dev-calibrator\x2devents.device
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/calibratord
+ExecStart=/usr/sbin/calibratord
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/dev /run
+
+[Install]
+WantedBy=multi-user.target
