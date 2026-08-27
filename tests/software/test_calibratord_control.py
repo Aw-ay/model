@@ -97,7 +97,10 @@ class CalibratordControlContractTest(unittest.TestCase):
     def test_socket_reader_is_timeout_bounded_and_one_request_per_connection(self) -> None:
         source = (ROOT / "software/calibratord/src/control.c").read_text("utf-8")
         daemon = (ROOT / "software/calibratord/src/calibratord.c").read_text("utf-8")
-        self.assertIn("poll(&ready, 1, timeout_ms)", source)
+        self.assertIn("clock_gettime(CLOCK_MONOTONIC, &deadline)", source)
+        self.assertIn("remaining_timeout_ms(&deadline)", source)
+        self.assertIn("poll(&ready, 1, remaining_ms)", source)
+        self.assertNotIn("poll(&ready, 1, timeout_ms)", source)
         self.assertIn("CAL_JSON_LINE_TIMEOUT", source)
         self.assertIn("cal_read_json_request(client, line, CAL_MAX_LINE, CAL_REQUEST_TIMEOUT_MS)", daemon)
         self.assertNotIn("read_request_line", daemon)
