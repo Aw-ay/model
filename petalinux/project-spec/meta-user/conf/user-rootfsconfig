@@ -1,2 +1,3 @@
 # Packages in this file are exposed by PetaLinux in the rootfs menu.
 CONFIG_calibratord
+CONFIG_calibrator-dma-proxy

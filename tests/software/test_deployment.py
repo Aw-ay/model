@@ -174,9 +174,11 @@ class DeploymentContractTest(unittest.TestCase):
         rootfs_menu = (ROOT / "petalinux/project-spec/meta-user/conf/user-rootfsconfig").read_text("utf-8")
         fragment = (ROOT / "petalinux/project-spec/configs/rootfs_config.fragment").read_text("utf-8").splitlines()
         self.assertIn("CONFIG_calibratord", rootfs_menu)
+        self.assertIn("CONFIG_calibrator-dma-proxy", rootfs_menu)
         self.assertEqual(
             {
                 "CONFIG_calibratord=y",
+                "CONFIG_calibrator-dma-proxy=y",
                 "CONFIG_libmetal=y",
                 "CONFIG_packagegroup-networking-stack=y",
                 "CONFIG_Init-manager-systemd=y",
