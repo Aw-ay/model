@@ -89,6 +89,8 @@ class DeploymentContractTest(unittest.TestCase):
             "CAL_EVENT_BYTES", "copy_to_user", "dmaengine_terminate_sync", "O_NONBLOCK",
         ):
             self.assertIn(contract, source)
+        self.assertIn(".llseek = noop_llseek", source)
+        self.assertIn("static void cal_remove", source)
         self.assertIn("all:", makefile)
         self.assertIn("$(MAKE) -C $(KERNEL_SRC) M=$(PWD) modules", makefile)
 
