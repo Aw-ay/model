@@ -1,6 +1,10 @@
 /include/ "system-conf.dtsi"
 
 / {
+    chosen {
+        bootargs = "earlycon console=hvc0 cpuidle.off=1 maxcpus=1 root=/dev/mmcblk0p2 rootwait rw";
+    };
+
     calibrator@a0000000 {
         compatible = "away,rfsoc-calibrator-1.0";
         reg = <0x0 0xa0000000 0x0 0x10000>;

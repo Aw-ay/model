@@ -52,7 +52,10 @@ class CalibratordControlContractTest(unittest.TestCase):
             "    if (cal_json_line_append(&reader, line, sizeof(line), \"12345678\", 8) != CAL_JSON_LINE_TOO_LONG)\n"
             "        return 1;\n"
             "    reader = (struct cal_json_line_reader){0};\n"
-            "    return cal_json_line_append(&reader, line, sizeof(line), \"a\\nb\", 3) != CAL_JSON_LINE_EXTRA_DATA;\n"
+            "    if (cal_json_line_append(&reader, line, sizeof(line), \"a\\nb\", 3) != CAL_JSON_LINE_COMPLETE ||\n"
+            "        strcmp(line, \"a\"))\n"
+            "        return 1;\n"
+            "    return cal_json_line_append(&reader, line, sizeof(line), \"b\\n\", 2) != CAL_JSON_LINE_EXTRA_DATA;\n"
             "}\n"
             "\n"
             "int main(int argc, char **argv) {\n"
@@ -88,8 +91,16 @@ class CalibratordControlContractTest(unittest.TestCase):
     def test_fragmented_tcp_json_line_is_accumulated_until_newline(self) -> None:
         self._run_contract("fragmented")
 
-    def test_missing_newline_overlong_and_multiple_lines_are_rejected(self) -> None:
+    def test_missing_newline_and_overlong_input_are_rejected_but_only_first_line_is_consumed(self) -> None:
         self._run_contract("invalid")
+
+    def test_socket_reader_is_timeout_bounded_and_one_request_per_connection(self) -> None:
+        source = (ROOT / "software/calibratord/src/control.c").read_text("utf-8")
+        daemon = (ROOT / "software/calibratord/src/calibratord.c").read_text("utf-8")
+        self.assertIn("poll(&ready, 1, timeout_ms)", source)
+        self.assertIn("CAL_JSON_LINE_TIMEOUT", source)
+        self.assertIn("cal_read_json_request(client, line, CAL_MAX_LINE, CAL_REQUEST_TIMEOUT_MS)", daemon)
+        self.assertNotIn("read_request_line", daemon)
 
 
 if __name__ == "__main__":

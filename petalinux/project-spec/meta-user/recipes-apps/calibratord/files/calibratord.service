@@ -1,6 +1,6 @@
 [Unit]
 Description=RFSoC calibrator service
-After=network-online.target dev-calibrator\x2devents.device
+After=systemd-modules-load.service network-online.target dev-calibrator\x2devents.device
 Wants=network-online.target
 Requires=dev-calibrator\x2devents.device
 

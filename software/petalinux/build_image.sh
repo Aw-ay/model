@@ -33,6 +33,24 @@ for command in petalinux-create petalinux-config petalinux-build petalinux-packa
     command -v "$command" >/dev/null || { echo "missing $command" >&2; exit 2; }
 done
 
+XSCT_LIBTINFO_DIR="${CALIBRATOR_XSCT_LIBTINFO_DIR:-}"
+if [[ -z "$XSCT_LIBTINFO_DIR" ]]; then
+    XSCT_LIBTINFO_FILE="$(ldconfig -p 2>/dev/null | awk '/libtinfo\.so\.5 / {print $NF; exit}')"
+    XSCT_LIBTINFO_DIR="${XSCT_LIBTINFO_FILE%/*}"
+fi
+if [[ -z "$XSCT_LIBTINFO_DIR" || ! -f "$XSCT_LIBTINFO_DIR/libtinfo.so.5" ]]; then
+    echo "PetaLinux XSCT requires libtinfo.so.5; set CALIBRATOR_XSCT_LIBTINFO_DIR to its directory" >&2
+    exit 2
+fi
+XSCT_LIBTINFO_DIR="$(realpath "$XSCT_LIBTINFO_DIR")"
+
+run_petalinux() {
+    env -u LD_PRELOAD \
+        LIBRARY_PATH="$XSCT_LIBTINFO_DIR" \
+        BB_ENV_PASSTHROUGH_ADDITIONS="${BB_ENV_PASSTHROUGH_ADDITIONS:-} LIBRARY_PATH" \
+        "$@"
+}
+
 PROJECT_PARENT="$(dirname "$PROJECT_PATH")"
 PROJECT_NAME="$(basename "$PROJECT_PATH")"
 mkdir -p "$PROJECT_PARENT"
@@ -70,14 +88,30 @@ install -m 0644 "$REPOSITORY_ROOT/software/kernel/Makefile" \
 
 (
     cd "$PROJECT_PATH"
-    petalinux-config --get-hw-description="$PROJECT_PATH/hardware" --silentconfig
+    run_petalinux petalinux-config --get-hw-description="$PROJECT_PATH/hardware" --silentconfig
+    cat >> "$PROJECT_PATH/build/conf/local.conf" <<EOF
+
+# Scope the host libtinfo.so.5 compatibility library to recipes that invoke XSCT.
+LD_PRELOAD = ""
+LIBRARY_PATH = ""
+LD_PRELOAD:pn-device-tree = "$XSCT_LIBTINFO_DIR/libtinfo.so.5"
+LIBRARY_PATH:pn-device-tree = "$XSCT_LIBTINFO_DIR"
+LD_PRELOAD:pn-bitstream-extraction = "$XSCT_LIBTINFO_DIR/libtinfo.so.5"
+LIBRARY_PATH:pn-bitstream-extraction = "$XSCT_LIBTINFO_DIR"
+LD_PRELOAD:pn-pmu-firmware = "$XSCT_LIBTINFO_DIR/libtinfo.so.5"
+LIBRARY_PATH:pn-pmu-firmware = "$XSCT_LIBTINFO_DIR"
+LD_PRELOAD:pn-fsbl-firmware = "$XSCT_LIBTINFO_DIR/libtinfo.so.5"
+LIBRARY_PATH:pn-fsbl-firmware = "$XSCT_LIBTINFO_DIR"
+LD_PRELOAD[export] = "1"
+LIBRARY_PATH[export] = "1"
+EOF
     ROOTFS_CONFIG="$PROJECT_PATH/project-spec/configs/rootfs_config"
     while IFS= read -r setting; do
         [[ -z "$setting" ]] && continue
         grep -qxF "$setting" "$ROOTFS_CONFIG" || printf '%s\n' "$setting" >> "$ROOTFS_CONFIG"
     done < "$REPOSITORY_ROOT/petalinux/project-spec/configs/rootfs_config.fragment"
-    petalinux-config -c rootfs --silentconfig
-    petalinux-build
+    run_petalinux petalinux-config -c rootfs --silentconfig
+    run_petalinux petalinux-build
     python3 "$REPOSITORY_ROOT/software/petalinux/extract_xsa_bitstream.py" \
         "$PROJECT_PATH/hardware/calibrator.xsa" images/linux/system.bit
     petalinux-package --boot \
@@ -89,7 +123,7 @@ install -m 0644 "$REPOSITORY_ROOT/software/kernel/Makefile" \
         --force
     petalinux-package --wic \
         --images-dir images/linux \
-        --bootfiles "BOOT.BIN Image boot.scr"
+        --bootfiles "BOOT.BIN Image boot.scr system.dtb"
 )
 
 echo "PetaLinux image: $PROJECT_PATH/images/linux/petalinux-sdimage.wic"

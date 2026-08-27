@@ -37,6 +37,7 @@
 #define CAL_CONTROL_PORT 47001
 #define CAL_DATA_PORT 47000
 #define CAL_MAX_LINE 4096u
+#define CAL_REQUEST_TIMEOUT_MS 2000
 
 struct cal_hw {
     int fd;
@@ -402,25 +403,6 @@ static int create_control_listener(void)
     return listener;
 }
 
-static int read_request_line(int client, char line[CAL_MAX_LINE])
-{
-    struct cal_json_line_reader reader = {0};
-    char chunk[512];
-    for (;;) {
-        ssize_t count = read(client, chunk, sizeof(chunk));
-        int status;
-        if (count < 0 && errno == EINTR)
-            continue;
-        if (count < 0)
-            return -4;
-        if (count == 0)
-            return cal_json_line_eof(&reader);
-        status = cal_json_line_append(&reader, line, CAL_MAX_LINE, chunk, (size_t)count);
-        if (status != CAL_JSON_LINE_INCOMPLETE)
-            return status;
-    }
-}
-
 static void on_signal(int signal_number)
 {
     (void)signal_number;
@@ -487,13 +469,13 @@ int main(void)
                 continue;
             goto fail;
         }
-        count = read_request_line(client, line);
+        count = cal_read_json_request(client, line, CAL_MAX_LINE, CAL_REQUEST_TIMEOUT_MS);
         if (count == CAL_JSON_LINE_TOO_LONG)
             send_error(client, "request line exceeds 4095 bytes");
         else if (count == CAL_JSON_LINE_MISSING_NEWLINE)
             send_error(client, "request must be newline terminated");
-        else if (count == CAL_JSON_LINE_EXTRA_DATA)
-            send_error(client, "request must contain one JSON line");
+        else if (count == CAL_JSON_LINE_TIMEOUT)
+            send_error(client, "request timed out before newline");
         else if (count != CAL_JSON_LINE_COMPLETE)
             send_error(client, "request read failed");
         else {

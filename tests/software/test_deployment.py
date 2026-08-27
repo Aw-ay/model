@@ -127,7 +127,35 @@ class DeploymentContractTest(unittest.TestCase):
         self.assertIn('"$CALIBRATORD_RECIPE_FILES/calibrator_control.h"', script)
         self.assertIn('"$REPOSITORY_ROOT/software/kernel/Makefile"', script)
         self.assertIn("Restart=on-failure", unit)
-        self.assertIn("After=network-online.target", unit)
+        self.assertIn("network-online.target", unit)
+        self.assertIn("After=systemd-modules-load.service", unit)
+
+    def test_emmc_wic_boots_the_ext4_rootfs_and_carries_an_explicit_dtb(self) -> None:
+        overlay = (ROOT / "petalinux/project-spec/meta-user/recipes-bsp/device-tree/files/system-user.dtsi").read_text("utf-8")
+        script = (ROOT / "software/petalinux/build_image.sh").read_text("utf-8")
+        self.assertIn("root=/dev/mmcblk0p2 rootwait rw", overlay)
+        self.assertNotIn("root=/dev/ram0", overlay)
+        self.assertIn('--bootfiles "BOOT.BIN Image boot.scr system.dtb"', script)
+
+    def test_generic_uio_is_configured_and_loaded_before_the_daemon(self) -> None:
+        recipe = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibratord/calibratord.bb").read_text("utf-8")
+        modules = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibratord/files/calibrator-uio-modules.conf").read_text("utf-8")
+        options = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibratord/files/uio-pdrv-genirq.conf").read_text("utf-8")
+        self.assertEqual(modules, "uio_pdrv_genirq\n")
+        self.assertEqual(options, "options uio_pdrv_genirq of_id=generic-uio\n")
+        self.assertIn("file://calibrator-uio-modules.conf", recipe)
+        self.assertIn("file://uio-pdrv-genirq.conf", recipe)
+        self.assertIn("${sysconfdir}/modules-load.d/calibrator-uio.conf", recipe)
+        self.assertIn("${sysconfdir}/modprobe.d/uio-pdrv-genirq.conf", recipe)
+
+    def test_petalinux_build_automates_the_recipe_scoped_xsct_compatibility_library(self) -> None:
+        script = (ROOT / "software/petalinux/build_image.sh").read_text("utf-8")
+        self.assertIn("CALIBRATOR_XSCT_LIBTINFO_DIR", script)
+        self.assertIn("PetaLinux XSCT requires libtinfo.so.5", script)
+        for recipe in ("device-tree", "bitstream-extraction", "pmu-firmware", "fsbl-firmware"):
+            self.assertIn(f"LD_PRELOAD:pn-{recipe}", script)
+            self.assertIn(f"LIBRARY_PATH:pn-{recipe}", script)
+        self.assertIn("env -u LD_PRELOAD", script)
 
     def test_vitis_platform_script_is_xsa_driven_and_version_locked(self) -> None:
         script = (ROOT / "software/vitis/create_linux_platform.py").read_text("utf-8")
