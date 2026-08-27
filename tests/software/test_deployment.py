@@ -171,13 +171,13 @@ class DeploymentContractTest(unittest.TestCase):
             {
                 "CONFIG_calibratord=y",
                 "CONFIG_libmetal=y",
-                "CONFIG_libxrfdc=y",
-                "CONFIG_kernel-module-uio-pdrv-genirq=y",
                 "CONFIG_packagegroup-networking-stack=y",
                 "CONFIG_Init-manager-systemd=y",
             },
             set(fragment),
         )
+        self.assertNotIn("CONFIG_libxrfdc=y", fragment)
+        self.assertNotIn("CONFIG_kernel-module-uio-pdrv-genirq=y", fragment)
 
     def test_daemon_recipe_owns_daemon_payload_and_depends_on_split_proxy_module(self) -> None:
         daemon_recipe = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibratord/calibratord.bb").read_text("utf-8")
@@ -185,7 +185,10 @@ class DeploymentContractTest(unittest.TestCase):
         self.assertNotIn("inherit module", daemon_recipe)
         self.assertIn("inherit systemd", daemon_recipe)
         self.assertIn("${sbindir}/calibratord", daemon_recipe)
+        self.assertIn("librfdc", daemon_recipe)
+        self.assertNotIn("libxrfdc", daemon_recipe)
         self.assertIn("kernel-module-calibrator-dma-proxy", daemon_recipe)
+        self.assertIn("kernel-module-uio-pdrv-genirq", daemon_recipe)
         self.assertIn("inherit module", module_recipe)
         self.assertIn("KERNEL_MODULE_AUTOLOAD", module_recipe)
 

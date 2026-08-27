@@ -1,6 +1,4 @@
 CONFIG_calibratord=y
 CONFIG_libmetal=y
-CONFIG_libxrfdc=y
-CONFIG_kernel-module-uio-pdrv-genirq=y
 CONFIG_packagegroup-networking-stack=y
 CONFIG_Init-manager-systemd=y

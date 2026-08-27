@@ -10,7 +10,7 @@ SRC_URI = "file://calibratord.c \
            file://calibratord.default"
 
 S = "${WORKDIR}"
-DEPENDS = "libmetal libxrfdc"
+DEPENDS = "libmetal librfdc"
 
 inherit systemd
 
@@ -19,7 +19,7 @@ SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 
 do_compile() {
     ${CC} ${CFLAGS} ${LDFLAGS} -I${S} -o calibratord \
-        calibratord.c protocol.c -pthread -lmetal -lxrfdc
+        calibratord.c protocol.c -pthread -lmetal -lrfdc
 }
 
 do_install() {
@@ -30,4 +30,4 @@ do_install() {
 }
 
 FILES:${PN} += "${sbindir}/calibratord ${systemd_system_unitdir}/calibratord.service ${sysconfdir}/default/calibratord"
-RDEPENDS:${PN} += "libmetal libxrfdc kernel-module-calibrator-dma-proxy kernel-module-uio-pdrv-genirq"
+RDEPENDS:${PN} += "libmetal librfdc kernel-module-calibrator-dma-proxy kernel-module-uio-pdrv-genirq"
