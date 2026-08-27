@@ -89,6 +89,13 @@ class DeploymentContractTest(unittest.TestCase):
         ):
             self.assertIn(contract, source)
 
+    def test_daemon_compiles_against_the_public_libmetal_2025_2_headers(self) -> None:
+        """Reject removed umbrella headers before a PetaLinux image build does."""
+        source = (ROOT / "software/calibratord/src/calibratord.c").read_text("utf-8")
+        self.assertIn("#include <metal/sys.h>", source)
+        self.assertIn("#include <metal/device.h>", source)
+        self.assertNotIn("#include <metal/metal.h>", source)
+
     def test_petalinux_recipe_installs_daemon_module_and_systemd_unit(self) -> None:
         recipe = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibratord/calibratord.bb").read_text("utf-8")
         module_recipe = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibrator-dma-proxy/calibrator-dma-proxy.bb").read_text("utf-8")
