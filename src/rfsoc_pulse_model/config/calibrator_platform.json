@@ -1,0 +1,43 @@
+{
+  "calibrator_platform_schema_version": 1,
+  "device_part": "xczu27dr-fsve1156-2-i",
+  "vivado_version": "2025.2",
+  "vitis_version": "2025.2",
+  "petalinux_version": "2025.2",
+  "maximum_channel_alignment_samples": 2047,
+  "source_authority": {
+    "schematic_path": "save_v2.1/XCZU27DR-v2.1.pdf",
+    "legacy_bd_path": "save_v2.1/XCZU27_MEM_TEST_TOP/XCZU27_TOP.srcs/sources_1/bd/design_1/design_1.bd",
+    "legacy_bd_sha256": "63dc103980f369d1ba7246652cd533382b9ab96bed9ccede4b2dd5536df8517a"
+  },
+  "gem3": {
+    "enabled": true,
+    "controller": 3,
+    "phy_model": "RTL8211FD",
+    "phy_address": 7,
+    "interface": "rgmii-id",
+    "mio_range": [64, 77],
+    "mdc_mio": 76,
+    "mdio_mio": 77,
+    "reset_source": "PS_POR_B",
+    "reset_active_low": true,
+    "optional_mio24_reset_populated": false
+  },
+  "emmc": {
+    "enabled": true,
+    "mio_range": [13, 23],
+    "bus_width_bits": 8
+  },
+  "dma": {
+    "vlnv": "xilinx.com:ip:axi_dma:7.1",
+    "mode": "scatter_gather_s2mm",
+    "stream_width_bits": 128,
+    "address_width_bits": 64,
+    "ps_slave_port": "S_AXI_HP0_FPD"
+  },
+  "network": {
+    "data_transport": "udp",
+    "control_transport": "tcp",
+    "mtu_bytes": 1500
+  }
+}
