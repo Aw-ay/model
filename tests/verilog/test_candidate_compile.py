@@ -63,10 +63,6 @@ class CandidateCompileTest(unittest.TestCase):
                 observed["environment"] = kwargs.get("env")
                 observed["script"] = Path(command[-1]).read_text(encoding="utf-8")
                 environment = kwargs.get("env")
-                if isinstance(environment, dict):
-                    observed["vivado_user_directory"] = (
-                        Path(environment["APPDATA"]) / "Xilinx" / "Vivado"
-                    ).is_dir()
                 return subprocess.CompletedProcess(command, 0, "", "")
 
             with patch.dict(os.environ, {"VIVADO_2025_2": str(executable)}), patch(
@@ -77,9 +73,7 @@ class CandidateCompileTest(unittest.TestCase):
         self.assertIn("read_verilog -sv", observed["script"])
         environment = observed["environment"]
         self.assertIsInstance(environment, dict)
-        self.assertTrue(Path(environment["APPDATA"]).is_absolute())
-        self.assertTrue(Path(environment["LOCALAPPDATA"]).is_absolute())
-        self.assertTrue(observed["vivado_user_directory"])
+        self.assertEqual(environment["XILINX_LOCAL_USER_DATA"], "no")
 
     def test_calibrated_hv_candidate_elaborates_in_vivado_2025_2(self) -> None:
         vivado = _vivado_2025_2()
@@ -97,6 +91,7 @@ class CandidateCompileTest(unittest.TestCase):
             script.write_text(
                 "\n".join(
                     (
+                        "create_project -in_memory -part xczu27dr-fsve1156-2-i",
                         f"read_verilog -sv {{{source.as_posix()}}}",
                         "synth_design -top rx_2spc_calibrated_hv_frontend -part xczu27dr-fsve1156-2-i",
                         "exit",
@@ -106,17 +101,8 @@ class CandidateCompileTest(unittest.TestCase):
                 encoding="utf-8",
                 newline="\n",
             )
-            appdata = root / "appdata"
-            local_appdata = root / "localappdata"
-            (appdata / "Xilinx" / "Vivado").mkdir(parents=True)
-            (local_appdata / "Xilinx" / "Vivado").mkdir(parents=True)
             environment = os.environ.copy()
-            environment.update(
-                {
-                    "APPDATA": str(appdata),
-                    "LOCALAPPDATA": str(local_appdata),
-                }
-            )
+            environment["XILINX_LOCAL_USER_DATA"] = "no"
             result = subprocess.run(
                 [str(vivado), "-mode", "batch", "-nojournal", "-nolog", "-source", str(script)],
                 cwd=root,

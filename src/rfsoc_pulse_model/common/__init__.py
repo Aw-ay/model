@@ -48,6 +48,16 @@ from .reflection_types import (
 )
 from .rfdc_axis import RfdcAxisWordFormat
 from .numeric_formats import NumericFormatManifest
+from .control_abi import ControlAbi, RegisterSpec
+from .network_protocol import (
+    DecodedEvent,
+    DecodedPdw,
+    ProtocolError,
+    decode_event_datagrams,
+    encode_event_payload,
+    encode_pdw_payload,
+    encode_event_datagrams,
+)
 
 __all__ = [
     "FixedFormat",
@@ -89,4 +99,13 @@ __all__ = [
     "associate_polarimetric_range_records",
     "round_array_ties_away_from_zero",
     "round_ties_away_from_zero",
+    "ControlAbi",
+    "RegisterSpec",
+    "DecodedEvent",
+    "DecodedPdw",
+    "ProtocolError",
+    "decode_event_datagrams",
+    "encode_event_payload",
+    "encode_pdw_payload",
+    "encode_event_datagrams",
 ]

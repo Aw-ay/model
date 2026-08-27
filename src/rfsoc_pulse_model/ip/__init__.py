@@ -28,6 +28,13 @@ from .evidence import (
     validate_catalog_evidence,
 )
 from .platform import Gem3BoardIoConfig, PS_VLNV, PsPlatformConfig
+from .calibrator_platform import (
+    CalibratorPlatformConfig,
+    DmaConfig,
+    EmmcConfig,
+    Gem3Config,
+)
+from .calibrator_vivado import emit_calibrator_vivado_tcl
 from .connected import (
     AxisInterface,
     ClockNet,
@@ -91,6 +98,11 @@ __all__ = [
     "build_candidate_evidence",
     "build_vivado_command",
     "GenerationMode",
+    "CalibratorPlatformConfig",
+    "DmaConfig",
+    "EmmcConfig",
+    "Gem3Config",
+    "emit_calibrator_vivado_tcl",
     "Gem3BoardIoConfig",
     "CatalogEvidence",
     "CatalogResolutionStatus",

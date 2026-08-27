@@ -13,6 +13,24 @@ adapters remain tested legacy references while production RFDC, AXIS and FIR
 ownership moves to AMD IP. `build/` is generated evidence and never becomes
 authoritative source code.
 
+## Calibrator deployment milestone
+
+The repository now also contains a reproducible Vivado 2025.2 calibrator
+build, the generated AXI-Lite ABI, a Linux RFDC/MTS and UDP/TCP service, a
+DMAengine event proxy, a PetaLinux layer, a Vitis Linux-platform script, and a
+Windows host CLI. The current implementation evidence and the exact build and
+board-acceptance commands are recorded in
+[`docs/deployment/calibrator-v1.md`](docs/deployment/calibrator-v1.md).
+
+The generated bitstream is an integration milestone, not yet the final signal
+processing acceptance build. It implements the RFDC/PS/DMA data skeleton,
+ADC-to-DAC mapping, threshold hits, fixed PDW framing and 16-before/16-after IQ
+capture. The 63-tap fractional-delay calibration, complex correction,
+automatic H/V range selection and full FIR/adaptive-threshold/voting detector
+remain executable Cycle/Golden contracts and still have to replace the simple
+RTL detector before final RF acceptance. No board-run claim is made until the
+documented JTAG, MTS, Ethernet, eMMC and two-hour tests have completed.
+
 ## Golden model
 
 Golden consumes whole NumPy arrays and answers mathematical questions: whether
