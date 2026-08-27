@@ -2,6 +2,7 @@
 
 #include "calibrator_protocol.h"
 #include "calibrator_regs.h"
+#include "calibrator_control.h"
 #include "calibrator_uio_path.h"
 
 #include <arpa/inet.h>
@@ -374,7 +375,7 @@ static void handle_request(struct daemon_state *state, int client, const char *l
         dprintf(client, "{\"ok\":true}\n");
     } else if (json_command(line, "shutdown")) {
         cal_hw_force_safe(&state->hw);
-        state->poweroff_requested = getenv("CALIBRATOR_ALLOW_POWEROFF") != NULL;
+        state->poweroff_requested = cal_poweroff_allowed(getenv("CALIBRATOR_ALLOW_POWEROFF"));
         state->running = 0;
         dprintf(client, "{\"ok\":true}\n");
     } else {
@@ -399,6 +400,25 @@ static int create_control_listener(void)
         return -1;
     }
     return listener;
+}
+
+static int read_request_line(int client, char line[CAL_MAX_LINE])
+{
+    struct cal_json_line_reader reader = {0};
+    char chunk[512];
+    for (;;) {
+        ssize_t count = read(client, chunk, sizeof(chunk));
+        int status;
+        if (count < 0 && errno == EINTR)
+            continue;
+        if (count < 0)
+            return -4;
+        if (count == 0)
+            return cal_json_line_eof(&reader);
+        status = cal_json_line_append(&reader, line, CAL_MAX_LINE, chunk, (size_t)count);
+        if (status != CAL_JSON_LINE_INCOMPLETE)
+            return status;
+    }
 }
 
 static void on_signal(int signal_number)
@@ -467,11 +487,16 @@ int main(void)
                 continue;
             goto fail;
         }
-        count = read(client, line, sizeof(line) - 1);
-        if (count <= 0 || memchr(line, '\n', (size_t)count) == NULL)
-            send_error(client, "request must be one JSON line");
+        count = read_request_line(client, line);
+        if (count == CAL_JSON_LINE_TOO_LONG)
+            send_error(client, "request line exceeds 4095 bytes");
+        else if (count == CAL_JSON_LINE_MISSING_NEWLINE)
+            send_error(client, "request must be newline terminated");
+        else if (count == CAL_JSON_LINE_EXTRA_DATA)
+            send_error(client, "request must contain one JSON line");
+        else if (count != CAL_JSON_LINE_COMPLETE)
+            send_error(client, "request read failed");
         else {
-            line[count] = '\0';
             handle_request(&state, client, line);
         }
         close(client);

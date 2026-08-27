@@ -3,7 +3,9 @@ LICENSE = "CLOSED"
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 SRC_URI = "file://calibratord.c \
+           file://control.c \
            file://protocol.c \
+           file://calibrator_control.h \
            file://calibrator_protocol.h \
            file://calibrator_regs.h \
            file://calibrator_uio_path.h \
@@ -20,7 +22,7 @@ SYSTEMD_AUTO_ENABLE:${PN} = "enable"
 
 do_compile() {
     ${CC} ${CFLAGS} ${LDFLAGS} -I${S} -o calibratord \
-        calibratord.c protocol.c -pthread -lmetal -lrfdc
+        calibratord.c control.c protocol.c -pthread -lmetal -lrfdc
 }
 
 do_install() {

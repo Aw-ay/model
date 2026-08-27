@@ -51,10 +51,14 @@ DMA_PROXY_RECIPE_FILES="$PROJECT_PATH/project-spec/meta-user/recipes-apps/calibr
 mkdir -p "$CALIBRATORD_RECIPE_FILES" "$DMA_PROXY_RECIPE_FILES"
 install -m 0644 "$REPOSITORY_ROOT/software/calibratord/src/calibratord.c" \
     "$CALIBRATORD_RECIPE_FILES/calibratord.c"
+install -m 0644 "$REPOSITORY_ROOT/software/calibratord/src/control.c" \
+    "$CALIBRATORD_RECIPE_FILES/control.c"
 install -m 0644 "$REPOSITORY_ROOT/software/calibratord/src/protocol.c" \
     "$CALIBRATORD_RECIPE_FILES/protocol.c"
 install -m 0644 "$REPOSITORY_ROOT/software/calibratord/include/calibrator_protocol.h" \
     "$CALIBRATORD_RECIPE_FILES/calibrator_protocol.h"
+install -m 0644 "$REPOSITORY_ROOT/software/calibratord/include/calibrator_control.h" \
+    "$CALIBRATORD_RECIPE_FILES/calibrator_control.h"
 install -m 0644 "$REPOSITORY_ROOT/software/calibratord/include/calibrator_regs.h" \
     "$CALIBRATORD_RECIPE_FILES/calibrator_regs.h"
 install -m 0644 "$REPOSITORY_ROOT/software/calibratord/include/calibrator_uio_path.h" \

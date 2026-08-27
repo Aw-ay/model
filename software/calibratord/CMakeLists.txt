@@ -3,7 +3,7 @@ project(calibratord C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
-add_executable(calibratord src/calibratord.c src/protocol.c)
+add_executable(calibratord src/calibratord.c src/control.c src/protocol.c)
 target_include_directories(calibratord PRIVATE include)
 target_compile_options(calibratord PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(calibratord PRIVATE pthread metal xrfdc)
