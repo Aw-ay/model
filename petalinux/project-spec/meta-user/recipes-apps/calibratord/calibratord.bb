@@ -6,6 +6,7 @@ SRC_URI = "file://calibratord.c \
            file://protocol.c \
            file://calibrator_protocol.h \
            file://calibrator_regs.h \
+           file://calibrator_uio_path.h \
            file://calibratord.service \
            file://calibratord.default"
 

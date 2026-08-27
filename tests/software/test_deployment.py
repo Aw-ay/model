@@ -103,6 +103,33 @@ class DeploymentContractTest(unittest.TestCase):
         self.assertIn("#include <metal/device.h>", source)
         self.assertNotIn("#include <metal/metal.h>", source)
 
+    def test_uio_sysfs_name_path_maps_to_its_device_node(self) -> None:
+        compiler = shutil.which("gcc")
+        if compiler is None:
+            self.skipTest("gcc is unavailable")
+        with tempfile.TemporaryDirectory() as directory:
+            program = Path(directory) / "uio_path.c"
+            executable = Path(directory) / "uio_path"
+            program.write_text(
+                "#include <string.h>\n"
+                "#include \"calibrator_uio_path.h\"\n"
+                "int main(void) { char path[32] = {0}; return "
+                "cal_uio_device_from_sysfs_name(\"/sys/class/uio/uio0/name\", path) || "
+                "strcmp(path, \"/dev/uio0\") != 0; }\n",
+                encoding="utf-8",
+            )
+            subprocess.run(
+                [compiler, "-std=c11", "-Wall", "-Wextra", "-Werror",
+                 "-I", str(ROOT / "software/calibratord/include"), str(program),
+                 "-o", str(executable)],
+                check=True, capture_output=True,
+            )
+            self.assertEqual(subprocess.run([str(executable)], check=False).returncode, 0)
+        recipe = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibratord/calibratord.bb").read_text("utf-8")
+        script = (ROOT / "software/petalinux/build_image.sh").read_text("utf-8")
+        self.assertIn("file://calibrator_uio_path.h", recipe)
+        self.assertIn("calibrator_uio_path.h", script)
+
     def test_petalinux_recipe_installs_daemon_module_and_systemd_unit(self) -> None:
         recipe = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibratord/calibratord.bb").read_text("utf-8")
         module_recipe = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibrator-dma-proxy/calibrator-dma-proxy.bb").read_text("utf-8")

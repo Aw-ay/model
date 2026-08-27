@@ -2,6 +2,7 @@
 
 #include "calibrator_protocol.h"
 #include "calibrator_regs.h"
+#include "calibrator_uio_path.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -94,18 +95,18 @@ static int find_control_uio(char path[32])
         return -1;
     for (index = 0; index < matches.gl_pathc; ++index) {
         char name[64] = {0};
-        char *uio;
         FILE *stream = fopen(matches.gl_pathv[index], "r");
         if (stream == NULL)
             continue;
-        (void)fgets(name, sizeof(name), stream);
+        if (fgets(name, sizeof(name), stream) == NULL) {
+            fclose(stream);
+            continue;
+        }
         fclose(stream);
         name[strcspn(name, "\r\n")] = '\0';
         if (strcmp(name, "calibrator-control") != 0)
             continue;
-        uio = strstr(matches.gl_pathv[index], "/uio");
-        if (uio != NULL && sscanf(uio, "/uio%31[^/]", path + 8) == 1) {
-            memcpy(path, "/dev/uio", 8);
+        if (cal_uio_device_from_sysfs_name(matches.gl_pathv[index], path) == 0) {
             globfree(&matches);
             return 0;
         }

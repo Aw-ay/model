@@ -57,6 +57,8 @@ install -m 0644 "$REPOSITORY_ROOT/software/calibratord/include/calibrator_protoc
     "$CALIBRATORD_RECIPE_FILES/calibrator_protocol.h"
 install -m 0644 "$REPOSITORY_ROOT/software/calibratord/include/calibrator_regs.h" \
     "$CALIBRATORD_RECIPE_FILES/calibrator_regs.h"
+install -m 0644 "$REPOSITORY_ROOT/software/calibratord/include/calibrator_uio_path.h" \
+    "$CALIBRATORD_RECIPE_FILES/calibrator_uio_path.h"
 install -m 0644 "$REPOSITORY_ROOT/software/kernel/calibrator_dma_proxy.c" \
     "$DMA_PROXY_RECIPE_FILES/calibrator_dma_proxy.c"
 install -m 0644 "$REPOSITORY_ROOT/software/kernel/Makefile" \
