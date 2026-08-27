@@ -47,6 +47,8 @@ cp -a "$REPOSITORY_ROOT/petalinux/project-spec/meta-user/." \
       "$PROJECT_PATH/project-spec/meta-user/"
 
 CALIBRATORD_RECIPE_FILES="$PROJECT_PATH/project-spec/meta-user/recipes-apps/calibratord/files"
+DMA_PROXY_RECIPE_FILES="$PROJECT_PATH/project-spec/meta-user/recipes-apps/calibrator-dma-proxy/files"
+mkdir -p "$CALIBRATORD_RECIPE_FILES" "$DMA_PROXY_RECIPE_FILES"
 install -m 0644 "$REPOSITORY_ROOT/software/calibratord/src/calibratord.c" \
     "$CALIBRATORD_RECIPE_FILES/calibratord.c"
 install -m 0644 "$REPOSITORY_ROOT/software/calibratord/src/protocol.c" \
@@ -56,20 +58,22 @@ install -m 0644 "$REPOSITORY_ROOT/software/calibratord/include/calibrator_protoc
 install -m 0644 "$REPOSITORY_ROOT/software/calibratord/include/calibrator_regs.h" \
     "$CALIBRATORD_RECIPE_FILES/calibrator_regs.h"
 install -m 0644 "$REPOSITORY_ROOT/software/kernel/calibrator_dma_proxy.c" \
-    "$CALIBRATORD_RECIPE_FILES/calibrator_dma_proxy.c"
+    "$DMA_PROXY_RECIPE_FILES/calibrator_dma_proxy.c"
 install -m 0644 "$REPOSITORY_ROOT/software/kernel/Makefile" \
-    "$CALIBRATORD_RECIPE_FILES/Makefile"
-
-ROOTFS_CONFIG="$PROJECT_PATH/project-spec/configs/rootfs_config"
-while IFS= read -r setting; do
-    [[ -z "$setting" ]] && continue
-    grep -qxF "$setting" "$ROOTFS_CONFIG" || printf '%s\n' "$setting" >> "$ROOTFS_CONFIG"
-done < "$REPOSITORY_ROOT/petalinux/project-spec/configs/rootfs_config.fragment"
+    "$DMA_PROXY_RECIPE_FILES/Makefile"
 
 (
     cd "$PROJECT_PATH"
     petalinux-config --get-hw-description="$PROJECT_PATH/hardware" --silentconfig
+    ROOTFS_CONFIG="$PROJECT_PATH/project-spec/configs/rootfs_config"
+    while IFS= read -r setting; do
+        [[ -z "$setting" ]] && continue
+        grep -qxF "$setting" "$ROOTFS_CONFIG" || printf '%s\n' "$setting" >> "$ROOTFS_CONFIG"
+    done < "$REPOSITORY_ROOT/petalinux/project-spec/configs/rootfs_config.fragment"
+    petalinux-config -c rootfs --silentconfig
     petalinux-build
+    python3 "$REPOSITORY_ROOT/software/petalinux/extract_xsa_bitstream.py" \
+        "$PROJECT_PATH/hardware/calibrator.xsa" images/linux/system.bit
     petalinux-package --boot \
         --fsbl images/linux/zynqmp_fsbl.elf \
         --fpga images/linux/system.bit \

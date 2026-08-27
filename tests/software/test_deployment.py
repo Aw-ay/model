@@ -6,8 +6,10 @@ import re
 import shutil
 import struct
 import subprocess
+import sys
 import tempfile
 import unittest
+import zipfile
 
 from rfsoc_pulse_model.common.control_abi import ControlAbi
 from rfsoc_pulse_model.common.network_protocol import encode_event_datagrams, encode_event_payload
@@ -89,13 +91,18 @@ class DeploymentContractTest(unittest.TestCase):
 
     def test_petalinux_recipe_installs_daemon_module_and_systemd_unit(self) -> None:
         recipe = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibratord/calibratord.bb").read_text("utf-8")
+        module_recipe = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibrator-dma-proxy/calibrator-dma-proxy.bb").read_text("utf-8")
         unit = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibratord/files/calibratord.service").read_text("utf-8")
         script = (ROOT / "software/petalinux/build_image.sh").read_text("utf-8")
-        self.assertIn("inherit module systemd", recipe)
-        self.assertIn("file://calibrator_dma_proxy.c", recipe)
-        self.assertIn("module_do_install", recipe)
+        self.assertIn("inherit systemd", recipe)
+        self.assertNotIn("inherit module", recipe)
+        self.assertIn("${sbindir}/calibratord", recipe)
+        self.assertIn("inherit module", module_recipe)
+        self.assertIn("file://calibrator_dma_proxy.c", module_recipe)
+        self.assertIn("KERNEL_MODULE_AUTOLOAD", module_recipe)
         self.assertIn('FILESEXTRAPATHS:prepend := "${THISDIR}/files:"', recipe)
         self.assertIn('CALIBRATORD_RECIPE_FILES="$PROJECT_PATH/project-spec/meta-user/recipes-apps/calibratord/files"', script)
+        self.assertIn('DMA_PROXY_RECIPE_FILES="$PROJECT_PATH/project-spec/meta-user/recipes-apps/calibrator-dma-proxy/files"', script)
         self.assertIn('"$REPOSITORY_ROOT/software/calibratord/src/calibratord.c"', script)
         self.assertIn('"$CALIBRATORD_RECIPE_FILES/calibratord.c"', script)
         self.assertIn('"$REPOSITORY_ROOT/software/kernel/Makefile"', script)
@@ -119,6 +126,68 @@ class DeploymentContractTest(unittest.TestCase):
         self.assertIn("petalinux-build", script)
         self.assertIn("petalinux-package --boot", script)
         self.assertIn("petalinux-package --wic", script)
+
+    def test_embedded_xsa_bitstream_helper_emits_the_archived_payload(self) -> None:
+        helper = ROOT / "software/petalinux/extract_xsa_bitstream.py"
+        payload = b"calibrator-bitstream-fixture\x00\xff"
+        with tempfile.TemporaryDirectory() as directory:
+            xsa = Path(directory) / "fixture.xsa"
+            output = Path(directory) / "images/linux/system.bit"
+            with zipfile.ZipFile(xsa, "w") as archive:
+                archive.writestr("fixture.bit", payload)
+                archive.writestr("fixture.hwh", "hardware")
+            completed = subprocess.run(
+                [sys.executable, str(helper), str(xsa), str(output)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(output.read_bytes(), payload)
+            self.assertIn("fixture.bit", completed.stdout)
+            self.assertIn(str(len(payload)), completed.stdout)
+
+    def test_embedded_xsa_bitstream_helper_rejects_an_xsa_without_a_bitstream(self) -> None:
+        helper = ROOT / "software/petalinux/extract_xsa_bitstream.py"
+        with tempfile.TemporaryDirectory() as directory:
+            xsa = Path(directory) / "fixture.xsa"
+            output = Path(directory) / "images/linux/system.bit"
+            with zipfile.ZipFile(xsa, "w") as archive:
+                archive.writestr("fixture.hwh", "hardware")
+            completed = subprocess.run(
+                [sys.executable, str(helper), str(xsa), str(output)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertFalse(output.exists())
+            self.assertIn("exactly one embedded .bit", completed.stderr)
+
+    def test_rootfs_selection_registers_the_deployable_daemon_with_2025_2_symbols(self) -> None:
+        rootfs_menu = (ROOT / "petalinux/project-spec/meta-user/conf/user-rootfsconfig").read_text("utf-8")
+        fragment = (ROOT / "petalinux/project-spec/configs/rootfs_config.fragment").read_text("utf-8").splitlines()
+        self.assertIn("CONFIG_calibratord", rootfs_menu)
+        self.assertEqual(
+            {
+                "CONFIG_calibratord=y",
+                "CONFIG_libmetal=y",
+                "CONFIG_libxrfdc=y",
+                "CONFIG_kernel-module-uio-pdrv-genirq=y",
+                "CONFIG_packagegroup-networking-stack=y",
+                "CONFIG_Init-manager-systemd=y",
+            },
+            set(fragment),
+        )
+
+    def test_daemon_recipe_owns_daemon_payload_and_depends_on_split_proxy_module(self) -> None:
+        daemon_recipe = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibratord/calibratord.bb").read_text("utf-8")
+        module_recipe = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibrator-dma-proxy/calibrator-dma-proxy.bb").read_text("utf-8")
+        self.assertNotIn("inherit module", daemon_recipe)
+        self.assertIn("inherit systemd", daemon_recipe)
+        self.assertIn("${sbindir}/calibratord", daemon_recipe)
+        self.assertIn("kernel-module-calibrator-dma-proxy", daemon_recipe)
+        self.assertIn("inherit module", module_recipe)
+        self.assertIn("KERNEL_MODULE_AUTOLOAD", module_recipe)
 
 
 if __name__ == "__main__":
