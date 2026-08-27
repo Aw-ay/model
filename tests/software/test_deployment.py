@@ -83,11 +83,14 @@ class DeploymentContractTest(unittest.TestCase):
 
     def test_dma_proxy_uses_dmaengine_coherent_ring_and_whole_event_reads(self) -> None:
         source = (ROOT / "software/kernel/calibrator_dma_proxy.c").read_text("utf-8")
+        makefile = (ROOT / "software/kernel/Makefile").read_text("utf-8")
         for contract in (
             "dma_request_chan", "dma_alloc_coherent", "dmaengine_prep_slave_single",
             "CAL_EVENT_BYTES", "copy_to_user", "dmaengine_terminate_sync", "O_NONBLOCK",
         ):
             self.assertIn(contract, source)
+        self.assertIn("all:", makefile)
+        self.assertIn("$(MAKE) -C $(KERNEL_SRC) M=$(PWD) modules", makefile)
 
     def test_daemon_compiles_against_the_public_libmetal_2025_2_headers(self) -> None:
         """Reject removed umbrella headers before a PetaLinux image build does."""
