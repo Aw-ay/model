@@ -37,3 +37,18 @@ documents the non-root XSCT `libtinfo.so.5` setup. The previously verified
 hardware/XSA/image artifacts predate this source change and must be regenerated
 by the controller's single consolidated Vivado/PetaLinux run; they are not
 claimed as gate-enabled artifacts.
+
+Task 2: reclosed after regeneration. The Vivado 2025.2 gate-enabled build
+completed implementation with setup WNS +0.308 ns, hold WHS +0.010 ns, zero
+route failures, and zero DRC errors. The regenerated XSA SHA-256 is
+`91b1ccdcfd2903afe186059b05b01ff7c0558318a834bf8e664fa41abe098ee0`;
+its embedded `system.bit` SHA-256 is
+`a5a6a7a3c7eda7a0185a1666fcccbb7835424c29d4a66d8266193afdb43cbf70`.
+PetaLinux completed 6,498/6,498 tasks, then regenerated BOOT.BIN and WIC.
+Both WIC partitions, the daemon/service/UIO/DMA payload, the absolute TCP
+deadline diagnostic, Bootgen's six-image container, and VM-to-Windows hashes
+were verified. Commits `042eaaa`, `aaec37a`, and `98e35de` record the
+reproducibility fix, regression correction, and evidence reconciliation.
+Post-review regression: 420 tests passed with 9 environment skips. Physical
+board, RF/MTS, eMMC cold-boot, network-load, and two-hour acceptance gates
+remain open.
