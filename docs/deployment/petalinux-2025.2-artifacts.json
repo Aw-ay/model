@@ -1,12 +1,14 @@
 {
   "schema_version": 1,
   "verification_date": "2026-08-28",
+  "runtime_source_git_commit": "d039dcf582e6cea1a69c569f3890b9b4e9825289",
   "toolchain": {
     "host_os": "Ubuntu 22.04.5 LTS",
     "vivado_version": "2025.2",
     "petalinux_version": "2025.2"
   },
   "vivado": {
+    "xsa_path": "build/calibrator_project_gate/calibrator.xsa",
     "xsa": {
       "bytes": 1964999,
       "sha256": "91b1ccdcfd2903afe186059b05b01ff7c0558318a834bf8e664fa41abe098ee0"
@@ -28,6 +30,8 @@
     "vm_to_windows_hashes_match": true,
     "wic_boot_partition_inspected": true,
     "wic_root_partition_inspected": true,
+    "boot_bin_contains_named_system_bit_partition": true,
+    "wic_boot_partition_contains_boot_bin": true,
     "board_execution_claimed": false
   },
   "artifacts": [

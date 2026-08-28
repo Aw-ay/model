@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import ctypes
+import json
 import re
 import shutil
 import struct
@@ -171,6 +172,11 @@ class DeploymentContractTest(unittest.TestCase):
 
     def test_gate_enabled_artifact_handoff_is_current_and_bounded(self) -> None:
         guide = (ROOT / "docs/deployment/calibrator-v1.md").read_text(encoding="utf-8")
+        manifest = json.loads(
+            (ROOT / "docs/deployment/petalinux-2025.2-artifacts.json").read_text(
+                encoding="utf-8"
+            )
+        )
         self.assertIn("no bootable embedded rootfs/initramfs", guide)
         self.assertIn("Gate-enabled PetaLinux artifact handoff", guide)
         self.assertIn("build/petalinux_output_gate/", guide)
@@ -180,6 +186,19 @@ class DeploymentContractTest(unittest.TestCase):
         )
         self.assertIn("has not yet been integrated into the bitstream", guide)
         self.assertIn("have not been claimed", guide)
+        self.assertEqual(
+            manifest["vivado"]["xsa_path"],
+            "build/calibrator_project_gate/calibrator.xsa",
+        )
+        self.assertEqual(
+            manifest["vivado"]["bitstream"]["sha256"],
+            next(
+                artifact["sha256"]
+                for artifact in manifest["artifacts"]
+                if artifact["name"] == "system.bit"
+            ),
+        )
+        self.assertFalse(manifest["build_evidence"]["board_execution_claimed"])
 
     def test_vitis_platform_script_is_xsa_driven_and_version_locked(self) -> None:
         script = (ROOT / "software/vitis/create_linux_platform.py").read_text("utf-8")

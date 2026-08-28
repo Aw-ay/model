@@ -136,14 +136,17 @@ builds Linux, packages `BOOT.BIN`, and emits the WIC image. The image must be
 written to the intended eMMC target only after independently confirming the
 target device name.
 
-The installed system contains:
+The packaged root filesystem contains:
 
 - `/usr/sbin/calibratord`;
-- `/dev/calibrator-events`, backed by a 256-entry coherent DMA ring;
 - the `calibratord.service` systemd unit;
-- automatic RFDC validation and DAC0–1 / ADC0–3 MTS;
-- fail-safe DAC mute until initialization succeeds;
-- UDP events and all nine TCP v1 commands.
+- the DMA proxy module plus UIO autoload configuration;
+- the configuration required for UDP events and all nine TCP v1 commands.
+
+After successful driver probe on the physical board, the service is designed
+to create `/dev/calibrator-events` backed by a 256-entry coherent DMA ring,
+validate RFDC state, run DAC0–1 / ADC0–3 MTS, and keep the DAC fail-safe muted
+until initialization succeeds. These runtime outcomes remain board-only gates.
 
 Set the receiver address in `/etc/default/calibratord`. The `shutdown`
 command stops acquisition and the service; it powers off Linux only when

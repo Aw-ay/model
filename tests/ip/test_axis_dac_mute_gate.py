@@ -47,6 +47,23 @@ module testbench;
         mute_i = 0;
         #1;
         if (m_axis_tvalid !== 1 || m_axis_tdata !== 64'h0123_4567_89ab_cdef || s_axis_tready !== 0) $fatal(1, "enabled path did not preserve backpressure");
+        // A control change while a beat is stalled must immediately enter the
+        // documented drop-safe state and must not retain a stale output beat.
+        @(negedge aclk);
+        mute_i = 1;
+        expect_safe();
+        s_axis_tdata = 64'hfedc_ba98_7654_3210;
+        @(negedge aclk);
+        mute_i = 0;
+        #1;
+        if (m_axis_tvalid !== 1 || m_axis_tdata !== 64'hfedc_ba98_7654_3210 || s_axis_tready !== 0) $fatal(1, "unmute replayed a stale stalled beat");
+        @(negedge aclk);
+        loopback_enable_i = 0;
+        expect_safe();
+        @(negedge aclk);
+        loopback_enable_i = 1;
+        #1;
+        if (m_axis_tvalid !== 1 || m_axis_tdata !== 64'hfedc_ba98_7654_3210 || s_axis_tready !== 0) $fatal(1, "loopback re-enable did not restore live input");
         m_axis_tready = 1;
         #1;
         if (s_axis_tready !== 1) $fatal(1, "enabled path did not propagate ready");
