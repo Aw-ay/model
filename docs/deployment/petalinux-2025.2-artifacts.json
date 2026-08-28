@@ -3,23 +3,42 @@
   "verification_date": "2026-08-28",
   "toolchain": {
     "host_os": "Ubuntu 22.04.5 LTS",
+    "vivado_version": "2025.2",
     "petalinux_version": "2025.2"
   },
+  "vivado": {
+    "xsa": {
+      "bytes": 1964999,
+      "sha256": "91b1ccdcfd2903afe186059b05b01ff7c0558318a834bf8e664fa41abe098ee0"
+    },
+    "bitstream": {
+      "bytes": 34437496,
+      "sha256": "a5a6a7a3c7eda7a0185a1666fcccbb7835424c29d4a66d8266193afdb43cbf70"
+    },
+    "setup_wns_ns": 0.308,
+    "hold_whs_ns": 0.010,
+    "route_failures": 0,
+    "drc_errors": 0
+  },
   "vm_source_directory": "/home/petalinux/work/calibrator-petalinux/images/linux",
-  "local_handoff_directory": "build/petalinux_output",
+  "local_handoff_directory": "build/petalinux_output_gate",
   "build_evidence": {
-    "untargeted_petalinux_build": "6498/6498 tasks succeeded",
+    "untargeted_petalinux_build": "6498/6498 tasks succeeded; 6438 reused",
+    "dac_safety_gate_in_bitstream": true,
+    "vm_to_windows_hashes_match": true,
+    "wic_boot_partition_inspected": true,
+    "wic_root_partition_inspected": true,
     "board_execution_claimed": false
   },
   "artifacts": [
-    { "name": "BOOT.BIN", "bytes": 36177568, "sha256": "de74686e9edfe3af91741d727d15a74fa5e593099afb3069d2a43ea7e27fff45" },
+    { "name": "BOOT.BIN", "bytes": 36177568, "sha256": "42dca14ef82ff06109c4ccf52f9dff88aee77bb7d682c4058150685261b874c5" },
     { "name": "Image", "bytes": 32371200, "sha256": "a7660de82ddff9fc6b7d49b5c82df21e88f4e2cc534339f4269cd6d7399c3ba5" },
     { "name": "boot.scr", "bytes": 3837, "sha256": "d54bbcd5bb8112c53d22d340752c80309c8c9dcf1e91edc86448eef3416c6309" },
-    { "name": "rootfs.tar.gz", "bytes": 46730469, "sha256": "0af88c64fba63a229ee9098c98b57210376c9fc38e25eb780506174f1c0e4b70" },
-    { "name": "rootfs.ext4", "bytes": 200074240, "sha256": "0bf1931564bfaa9c5305179a971c4760369efa8bd21063aa3e82d0eddc316e62" },
-    { "name": "petalinux-sdimage.wic", "bytes": 6442455040, "sha256": "ecfa72c53c5d63db0defcad780c1cdfab0ea7b799ba73cf34ba1889c2a0cf01c" },
+    { "name": "rootfs.tar.gz", "bytes": 46752507, "sha256": "7d97cbf82fad6b26a5127a030f588cb36368a12ad41af1af12fc166c93b0040f" },
+    { "name": "rootfs.ext4", "bytes": 200197120, "sha256": "1a87221b21f4944ff8146a72d6244fb19239242614b560d004fb7b69ac4e900a" },
+    { "name": "petalinux-sdimage.wic", "bytes": 6442455040, "sha256": "4d6946121e1d896b12ed9ed763bbb1afddbdec0fb75d4e4424b7d819e3d83076" },
     { "name": "system.dtb", "bytes": 42825, "sha256": "e3089512849a4593cb0e62c20a26f49773e437654974828117a13b4eda3bb0ae" },
-    { "name": "system.bit", "bytes": 34437496, "sha256": "307d36a1cb6f1af449fb34c146cacc1db2c58c0ce8dac2f8997961e3c3ce8f88" }
+    { "name": "system.bit", "bytes": 34437496, "sha256": "a5a6a7a3c7eda7a0185a1666fcccbb7835424c29d4a66d8266193afdb43cbf70" }
   ],
   "rootfs_payload": [
     { "path": "/usr/sbin/calibratord", "bytes": 67560 },

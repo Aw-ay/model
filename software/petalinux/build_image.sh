@@ -51,6 +51,16 @@ run_petalinux() {
         "$@"
 }
 
+# gen-machineconf launches XSCT before BitBake's recipe-scoped environment
+# exists. Preload libtinfo only for this command; ordinary Linux tasks keep
+# using the clean launcher above.
+run_petalinux_xsct() {
+    env LD_PRELOAD="$XSCT_LIBTINFO_DIR/libtinfo.so.5" \
+        LIBRARY_PATH="$XSCT_LIBTINFO_DIR" \
+        BB_ENV_PASSTHROUGH_ADDITIONS="${BB_ENV_PASSTHROUGH_ADDITIONS:-} LIBRARY_PATH" \
+        "$@"
+}
+
 PROJECT_PARENT="$(dirname "$PROJECT_PATH")"
 PROJECT_NAME="$(basename "$PROJECT_PATH")"
 mkdir -p "$PROJECT_PARENT"
@@ -88,7 +98,7 @@ install -m 0644 "$REPOSITORY_ROOT/software/kernel/Makefile" \
 
 (
     cd "$PROJECT_PATH"
-    run_petalinux petalinux-config --get-hw-description="$PROJECT_PATH/hardware" --silentconfig
+    run_petalinux_xsct petalinux-config --get-hw-description="$PROJECT_PATH/hardware" --silentconfig
     cat >> "$PROJECT_PATH/build/conf/local.conf" <<EOF
 
 # Scope the host libtinfo.so.5 compatibility library to recipes that invoke XSCT.

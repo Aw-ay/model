@@ -152,6 +152,11 @@ class DeploymentContractTest(unittest.TestCase):
         script = (ROOT / "software/petalinux/build_image.sh").read_text("utf-8")
         self.assertIn("CALIBRATOR_XSCT_LIBTINFO_DIR", script)
         self.assertIn("PetaLinux XSCT requires libtinfo.so.5", script)
+        self.assertIn('LD_PRELOAD="$XSCT_LIBTINFO_DIR/libtinfo.so.5"', script)
+        self.assertIn(
+            "run_petalinux_xsct petalinux-config --get-hw-description=",
+            script,
+        )
         for recipe in ("device-tree", "bitstream-extraction", "pmu-firmware", "fsbl-firmware"):
             self.assertIn(f"LD_PRELOAD:pn-{recipe}", script)
             self.assertIn(f"LIBRARY_PATH:pn-{recipe}", script)
@@ -164,10 +169,17 @@ class DeploymentContractTest(unittest.TestCase):
         self.assertIn("CALIBRATOR_XSCT_LIBTINFO_DIR", guide)
         self.assertIn("libtinfo.so.5", guide)
 
-    def test_artifact_handoff_does_not_overstate_rootfs_delivery(self) -> None:
+    def test_gate_enabled_artifact_handoff_is_current_and_bounded(self) -> None:
         guide = (ROOT / "docs/deployment/calibrator-v1.md").read_text(encoding="utf-8")
         self.assertIn("no bootable embedded rootfs/initramfs", guide)
-        self.assertIn("predates the DAC AXIS safety-gate source change", guide)
+        self.assertIn("Gate-enabled PetaLinux artifact handoff", guide)
+        self.assertIn("build/petalinux_output_gate/", guide)
+        self.assertIn(
+            "a5a6a7a3c7eda7a0185a1666fcccbb7835424c29d4a66d8266193afdb43cbf70",
+            guide,
+        )
+        self.assertIn("has not yet been integrated into the bitstream", guide)
+        self.assertIn("have not been claimed", guide)
 
     def test_vitis_platform_script_is_xsa_driven_and_version_locked(self) -> None:
         script = (ROOT / "software/vitis/create_linux_platform.py").read_text("utf-8")

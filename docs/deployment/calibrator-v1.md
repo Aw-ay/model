@@ -43,18 +43,14 @@ python -m rfsoc_pulse_model.ip.calibrator_build --finalize-xsa `
   build\calibrator_project\calibrator.xsa
 ```
 
-The following completed local build is retained as historical implementation
-evidence.  The DAC AXIS safety-gate source added after that run requires a
-fresh Vivado implementation and embedded-bit XSA before it can be used for a
-new PetaLinux image; do not treat the hashes below as artifacts of the newer
-gate-enabled source.
+The current gate-enabled implementation is retained in
+`build/calibrator_project_gate/`. It includes the reset-safe DAC AXIS gates
+driven by the synchronized loopback and mute controls. The build produced:
 
-The completed local build produced:
-
-- `build/calibrator_project/calibrator.bit`, SHA-256
-  `307d36a1cb6f1af449fb34c146cacc1db2c58c0ce8dac2f8997961e3c3ce8f88`;
-- `build/calibrator_project/calibrator.xsa`, SHA-256
-  `4a2decaebadb0e92dc4b6e6eddf1fae3a765db3b5ffddde148b22d87029db211`.
+- `build/calibrator_project_gate/calibrator.bit`, SHA-256
+  `a5a6a7a3c7eda7a0185a1666fcccbb7835424c29d4a66d8266193afdb43cbf70`;
+- `build/calibrator_project_gate/calibrator.xsa`, SHA-256
+  `91b1ccdcfd2903afe186059b05b01ff7c0558318a834bf8e664fa41abe098ee0`.
 
 The embedded-bit XSA was reopened and checked for `xsa.json`, `xsa.xml` and
 the exact generated `calibrator.bit` bytes.
@@ -67,9 +63,9 @@ placement, routing, sign-off reports, bitstream and XSA export.
 | Check | Result |
 | --- | --- |
 | Route status | 0 failed, 0 unrouted, 0 partially routed, 0 overlaps |
-| Setup | WNS +0.181 ns, TNS 0, 0 failing endpoints |
-| Hold | WHS +0.013 ns, THS 0, 0 failing endpoints |
-| Bus skew | all met; minimum reported slack +3.691 ns |
+| Setup | WNS +0.308 ns, TNS 0, 0 failing endpoints |
+| Hold | WHS +0.010 ns, THS 0, 0 failing endpoints |
+| Bus skew | all met; minimum reported slack +2.846 ns |
 | CDC | 0 critical; 188 CDC-15 warnings confined to RFDC vendor false paths and AMD asynchronous FIFO structures |
 | DRC | 0 critical/errors; four AMD-IP advisory warnings (DMA BRAM collision advisories and reset nets with no routable loads) |
 
@@ -84,7 +80,7 @@ The platform is generated only from the embedded-bit XSA:
 ```powershell
 & 'C:\AMDDesignTools\2025.2\Vitis\bin\vitis.bat' -s `
   software\vitis\create_linux_platform.py `
-  build\calibrator_project\calibrator.xsa `
+  build\calibrator_project_gate\calibrator.xsa `
   build\vitis_workspace
 ```
 
@@ -109,7 +105,7 @@ Use a supported Ubuntu 22.04 VM with PetaLinux 2025.2 installed and sourced:
 source /opt/petalinux/2025.2/settings.sh
 cd /path/to/RFSOC-model-calibrator
 bash software/petalinux/build_image.sh \
-  build/calibrator_project/calibrator.xsa \
+  build/calibrator_project_gate/calibrator.xsa \
   /work/calibrator-petalinux
 ```
 
@@ -153,19 +149,14 @@ Set the receiver address in `/etc/default/calibratord`. The `shutdown`
 command stops acquisition and the service; it powers off Linux only when
 `CALIBRATOR_ALLOW_POWEROFF=1` is explicitly enabled.
 
-### Historical PetaLinux artifact handoff (2026-08-28)
-
-This handoff predates the DAC AXIS safety-gate source change documented above.
-It remains useful provenance for the earlier image, but it is not a claim that
-the listed `system.bit`, XSA, `BOOT.BIN`, or WIC contains that new gate.  A
-controller-run Vivado implementation followed by an image rebuild is required
-before publishing replacement hashes.
+### Gate-enabled PetaLinux artifact handoff (2026-08-28)
 
 The PetaLinux 2025.2 build in the Ubuntu 22.04.5 VM completed its untargeted
-incremental build with `6,498/6,498` tasks successful.  The exact generated
+incremental build with `6,498/6,498` tasks successful, of which 6,438 were
+reused. The exact generated
 artifacts were then verified in
 `/home/petalinux/work/calibrator-petalinux/images/linux`, copied to the
-ignored local handoff directory `build/petalinux_output/`, and hashed again on
+ignored local handoff directory `build/petalinux_output_gate/`, and hashed again on
 Windows.  Each local SHA-256 exactly matched the VM source.  The
 machine-readable source manifest is
 [`petalinux-2025.2-artifacts.json`](petalinux-2025.2-artifacts.json); an
@@ -173,14 +164,14 @@ identical copy is placed alongside the ignored local artifacts.
 
 | Artifact | Bytes | SHA-256 |
 | --- | ---: | --- |
-| `BOOT.BIN` | 36,177,568 | `de74686e9edfe3af91741d727d15a74fa5e593099afb3069d2a43ea7e27fff45` |
+| `BOOT.BIN` | 36,177,568 | `42dca14ef82ff06109c4ccf52f9dff88aee77bb7d682c4058150685261b874c5` |
 | `Image` | 32,371,200 | `a7660de82ddff9fc6b7d49b5c82df21e88f4e2cc534339f4269cd6d7399c3ba5` |
 | `boot.scr` | 3,837 | `d54bbcd5bb8112c53d22d340752c80309c8c9dcf1e91edc86448eef3416c6309` |
-| `rootfs.tar.gz` | 46,730,469 | `0af88c64fba63a229ee9098c98b57210376c9fc38e25eb780506174f1c0e4b70` |
-| `rootfs.ext4` | 200,074,240 | `0bf1931564bfaa9c5305179a971c4760369efa8bd21063aa3e82d0eddc316e62` |
-| `petalinux-sdimage.wic` | 6,442,455,040 | `ecfa72c53c5d63db0defcad780c1cdfab0ea7b799ba73cf34ba1889c2a0cf01c` |
+| `rootfs.tar.gz` | 46,752,507 | `7d97cbf82fad6b26a5127a030f588cb36368a12ad41af1af12fc166c93b0040f` |
+| `rootfs.ext4` | 200,197,120 | `1a87221b21f4944ff8146a72d6244fb19239242614b560d004fb7b69ac4e900a` |
+| `petalinux-sdimage.wic` | 6,442,455,040 | `4d6946121e1d896b12ed9ed763bbb1afddbdec0fb75d4e4424b7d819e3d83076` |
 | `system.dtb` | 42,825 | `e3089512849a4593cb0e62c20a26f49773e437654974828117a13b4eda3bb0ae` |
-| `system.bit` | 34,437,496 | `307d36a1cb6f1af449fb34c146cacc1db2c58c0ce8dac2f8997961e3c3ce8f88` |
+| `system.bit` | 34,437,496 | `a5a6a7a3c7eda7a0185a1666fcccbb7835424c29d4a66d8266193afdb43cbf70` |
 
 The `rootfs.ext4` inspection proves the runtime payload: `/usr/sbin/calibratord`
 (67,560 bytes), `/usr/lib/systemd/system/calibratord.service` (487 bytes),
@@ -190,10 +181,14 @@ The `rootfs.ext4` inspection proves the runtime payload: `/usr/sbin/calibratord`
 FSBL, PL `system.bit`, BL31, `system.dtb`, and U-Boot.  `fdisk` identifies a
 bootable 2 GiB FAT32 WIC partition and a 4 GiB Linux partition. The FAT
 partition contains `BOOT.BIN`, `Image`, `boot.scr`, and the rebuilt
-`system.dtb`. The DTB selects `root=/dev/mmcblk0p2 rootwait rw`; the kernel
-has no bootable embedded rootfs/initramfs. A direct read-only extraction of the WIC's second
-partition verifies the enabled daemon plus `uio_pdrv_genirq` autoload and
-`of_id=generic-uio` module option.
+`system.dtb`. The DTB selects `root=/dev/mmcblk0p2 rootwait rw`; the unchanged
+kernel has no bootable embedded rootfs/initramfs. Direct read-only WIC
+inspection verifies `/usr/sbin/calibratord` and the enabled
+`calibratord.service`; rootfs inspection also verifies `uio_pdrv_genirq`
+autoload, `of_id=generic-uio`, the DMA proxy module, and the daemon's absolute
+TCP request-deadline diagnostic. The packaged `system.bit` hash exactly
+matches the gate-enabled Vivado bitstream and the bitstream embedded in the
+recorded XSA.
 
 ## Windows control and capture
 
@@ -229,10 +224,9 @@ Verified on this workstation:
 
 Not yet release-verified:
 
-1. The generated design now gates every ADC-to-DAC route through reset-safe
-   loopback/mute control, but the recorded pre-gate artifacts above must be
-   regenerated. The Cycle/Golden implementation of the
-   0–2047 integer delay, 63-tap fractional delay, s24.Q20 complex correction,
+1. The generated design and packaged artifacts now gate every ADC-to-DAC route
+   through reset-safe loopback/mute control. The Cycle/Golden implementation of
+   the 0–2047 integer delay, 63-tap fractional delay, s24.Q20 complex correction,
    H/V automatic range selection, 15-tap decimating FIR, adaptive noise,
    moving average and 3/5 vote has not yet been integrated into the bitstream.
 2. The PetaLinux image and runtime payload are now built and hash-verified,
