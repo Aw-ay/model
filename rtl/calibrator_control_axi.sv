@@ -148,16 +148,29 @@ module calibrator_control_axi (
         end
     endfunction
 
+    function automatic [31:0] channel_reset(input integer word);
+        begin
+            case (word)
+                0: channel_reset = `CAL_CHANNEL_INTEGER_DELAY_RESET;
+                1: channel_reset = `CAL_CHANNEL_FRACTIONAL_DELAY_Q20_RESET;
+                2: channel_reset = `CAL_CHANNEL_GAIN_REAL_RESET;
+                3: channel_reset = `CAL_CHANNEL_GAIN_IMAG_RESET;
+                4: channel_reset = `CAL_CHANNEL_CALIBRATION_FLAGS_RESET;
+                default: channel_reset = 32'd0;
+            endcase
+        end
+    endfunction
+
     always @(posedge S_AXI_aclk) begin
         if (!S_AXI_aresetn) begin
-            control_reg <= 32'h00000004;
+            control_reg <= `CAL_CONTROL_RESET;
             detect_threshold_reg <= `CAL_DETECT_THRESHOLD_RESET;
-            noise_alpha_reg <= 32'd2147484;
-            range_hold_reg <= 32'd64;
-            range_high_reg <= 32'd58982;
-            range_low_reg <= 32'd16384;
-            local_error_reg <= 32'd0;
-            config_version_o <= 32'd0;
+            noise_alpha_reg <= `CAL_NOISE_ALPHA_Q31_RESET;
+            range_hold_reg <= `CAL_RANGE_HOLD_SAMPLES_RESET;
+            range_high_reg <= `CAL_RANGE_HIGH_WATER_Q16_RESET;
+            range_low_reg <= `CAL_RANGE_LOW_WATER_Q16_RESET;
+            local_error_reg <= `CAL_STREAM_ERRORS_RESET;
+            config_version_o <= `CAL_CONFIG_VERSION_RESET;
             aw_pending <= 1'b0;
             w_pending <= 1'b0;
             S_AXI_bvalid <= 1'b0;
@@ -165,7 +178,7 @@ module calibrator_control_axi (
             S_AXI_rdata <= 32'd0;
             for (channel_index = 0; channel_index < 8; channel_index = channel_index + 1)
                 for (word_index = 0; word_index < 8; word_index = word_index + 1)
-                    channel_shadow[channel_index][word_index] <= (word_index == 2) ? 32'h00100000 : 32'd0;
+                    channel_shadow[channel_index][word_index] <= channel_reset(word_index);
         end else begin
             if (S_AXI_awready && S_AXI_awvalid) begin
                 awaddr_latch <= S_AXI_awaddr;

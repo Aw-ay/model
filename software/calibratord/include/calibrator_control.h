@@ -39,6 +39,7 @@ enum cal_json_line_status {
     CAL_JSON_LINE_EXTRA_DATA = -3,
     CAL_JSON_LINE_READ_ERROR = -4,
     CAL_JSON_LINE_TIMEOUT = -5,
+    CAL_JSON_LINE_INVALID_BYTE = -6,
 };
 
 struct cal_json_line_reader {

@@ -490,6 +490,8 @@ int main(void)
             send_error(client, "request must be newline terminated");
         else if (count == CAL_JSON_LINE_TIMEOUT)
             send_error(client, "request timed out before newline");
+        else if (count == CAL_JSON_LINE_INVALID_BYTE)
+            send_error(client, "request contains an invalid byte");
         else if (count != CAL_JSON_LINE_COMPLETE)
             send_error(client, "request read failed");
         else if (cal_parse_control_request(line, &request) != 0)

@@ -212,6 +212,8 @@ class DeploymentContractTest(unittest.TestCase):
             ),
         )
         self.assertFalse(manifest["build_evidence"]["board_execution_claimed"])
+        self.assertEqual(manifest["deployment_status"], "superseded_do_not_deploy")
+        self.assertIn("DO NOT DEPLOY", guide)
 
     def test_vitis_platform_script_is_xsa_driven_and_version_locked(self) -> None:
         script = (ROOT / "software/vitis/create_linux_platform.py").read_text("utf-8")
@@ -255,6 +257,11 @@ class DeploymentContractTest(unittest.TestCase):
         self.assertIn("petalinux-2025.2-artifacts.json", script)
         self.assertIn("sha256sum", script)
         self.assertIn("XSA digest does not match the qualified Vivado artifact", script)
+        staged_copy = 'install -m 0644 "$XSA_PATH" "$PROJECT_PATH/hardware/calibrator.xsa"'
+        staged_hash = 'sha256sum "$PROJECT_PATH/hardware/calibrator.xsa"'
+        self.assertIn(staged_copy, script)
+        self.assertIn(staged_hash, script)
+        self.assertLess(script.index(staged_copy), script.index(staged_hash))
 
     def test_embedded_xsa_bitstream_helper_emits_the_archived_payload(self) -> None:
         helper = ROOT / "software/petalinux/extract_xsa_bitstream.py"

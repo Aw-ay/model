@@ -152,6 +152,8 @@ class ControlAbi:
         for register in self.all_expanded_registers():
             lines.append(f"`define CAL_{register.name}_OFFSET 32'h{register.offset:08X}")
             lines.append(f"`define CAL_{register.name}_RESET 32'h{register.reset:08X}")
+        for register in self.channel_registers:
+            lines.append(f"`define CAL_CHANNEL_{register.name}_RESET 32'h{register.reset:08X}")
         lines.append("`endif")
         return "\n".join(lines) + "\n"
 

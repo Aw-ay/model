@@ -30,11 +30,8 @@ if [[ ! -f "$XSA_MANIFEST" ]]; then
     exit 2
 fi
 EXPECTED_XSA_SHA256="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["vivado"]["xsa"]["sha256"])' "$XSA_MANIFEST")"
-ACTUAL_XSA_SHA256="$(sha256sum "$XSA_PATH" | awk '{print $1}')"
-if [[ ! "$EXPECTED_XSA_SHA256" =~ ^[0-9a-f]{64}$ || "$ACTUAL_XSA_SHA256" != "$EXPECTED_XSA_SHA256" ]]; then
-    echo "XSA digest does not match the qualified Vivado artifact" >&2
-    echo "expected: $EXPECTED_XSA_SHA256" >&2
-    echo "actual:   $ACTUAL_XSA_SHA256" >&2
+if [[ ! "$EXPECTED_XSA_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "qualified artifact manifest contains an invalid XSA digest" >&2
     exit 2
 fi
 if [[ "${PETALINUX:-}" != *"$REQUIRED_VERSION"* ]]; then
@@ -87,6 +84,13 @@ mkdir -p "$PROJECT_PARENT"
 
 mkdir -p "$PROJECT_PATH/hardware"
 install -m 0644 "$XSA_PATH" "$PROJECT_PATH/hardware/calibrator.xsa"
+ACTUAL_XSA_SHA256="$(sha256sum "$PROJECT_PATH/hardware/calibrator.xsa" | awk '{print $1}')"
+if [[ "$ACTUAL_XSA_SHA256" != "$EXPECTED_XSA_SHA256" ]]; then
+    echo "XSA digest does not match the qualified Vivado artifact" >&2
+    echo "expected: $EXPECTED_XSA_SHA256" >&2
+    echo "actual:   $ACTUAL_XSA_SHA256" >&2
+    exit 2
+fi
 cp -a "$REPOSITORY_ROOT/petalinux/project-spec/meta-user/." \
       "$PROJECT_PATH/project-spec/meta-user/"
 

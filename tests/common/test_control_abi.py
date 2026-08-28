@@ -68,6 +68,7 @@ class ControlAbiTest(unittest.TestCase):
             self.assertIn("COMMIT_CALIBRATION", artifact)
         self.assertIn("reg = <0x0 0xa0000000 0x0 0x10000>;", device_tree)
         self.assertIn("`define CAL_DETECT_THRESHOLD_RESET 32'h000003E8", verilog)
+        self.assertIn("`define CAL_CHANNEL_GAIN_REAL_RESET 32'h00100000", verilog)
 
     def test_root_and_package_maps_are_byte_identical(self) -> None:
         root = Path(__file__).resolve().parents[2]

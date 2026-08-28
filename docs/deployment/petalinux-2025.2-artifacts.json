@@ -1,5 +1,7 @@
 {
   "schema_version": 1,
+  "deployment_status": "superseded_do_not_deploy",
+  "superseded_reason": "The archived rootfs predates authenticated, peer-restricted TCP control. Rebuild from the current source before board deployment.",
   "verification_date": "2026-08-28",
   "runtime_source_git_commit": "d039dcf582e6cea1a69c569f3890b9b4e9825289",
   "toolchain": {

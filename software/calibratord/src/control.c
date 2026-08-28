@@ -31,9 +31,14 @@ enum request_field {
     FIELD_FLAGS = 1u << 8,
 };
 
+static bool is_json_space(char character)
+{
+    return character == ' ' || character == '\t' || character == '\r' || character == '\n';
+}
+
 static void skip_space(const char **cursor)
 {
-    while (isspace((unsigned char)**cursor))
+    while (is_json_space(**cursor))
         ++*cursor;
 }
 
@@ -271,6 +276,8 @@ int cal_json_line_append(struct cal_json_line_reader *reader, char *line,
     if (reader->complete)
         return CAL_JSON_LINE_EXTRA_DATA;
     for (index = 0; index < chunk_length; ++index) {
+        if (chunk[index] == '\0')
+            return CAL_JSON_LINE_INVALID_BYTE;
         if (chunk[index] == '\n') {
             line[reader->length] = '\0';
             reader->complete = true;

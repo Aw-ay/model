@@ -34,11 +34,21 @@ class CalibratorRtlContractTest(unittest.TestCase):
     def test_control_implements_identity_safety_and_shadow_commit_guards(self) -> None:
         self.assertIn("32'h43414C31", self.control)
         self.assertIn("32'h00010000", self.control)
-        self.assertIn("control_reg <= 32'h00000004", self.control)
+        self.assertIn("control_reg <= `CAL_CONTROL_RESET", self.control)
         self.assertIn("if (!control_reg[0])", self.control)
         self.assertIn("config_version_o <= config_version_o + 1'b1", self.control)
         self.assertIn("address >= 12'h100", self.control)
         self.assertIn("address < 12'h200", self.control)
+
+    def test_all_abi_owned_reset_values_come_from_the_generated_header(self) -> None:
+        for name in (
+            "CONTROL", "DETECT_THRESHOLD", "NOISE_ALPHA_Q31",
+            "RANGE_HOLD_SAMPLES", "RANGE_HIGH_WATER_Q16",
+            "RANGE_LOW_WATER_Q16", "STREAM_ERRORS", "CONFIG_VERSION",
+            "CHANNEL_INTEGER_DELAY", "CHANNEL_FRACTIONAL_DELAY_Q20",
+            "CHANNEL_GAIN_REAL", "CHANNEL_GAIN_IMAG", "CHANNEL_CALIBRATION_FLAGS",
+        ):
+            self.assertIn(f"`CAL_{name}_RESET", self.control)
 
 
 if __name__ == "__main__":

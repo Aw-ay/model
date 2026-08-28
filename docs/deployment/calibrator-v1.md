@@ -173,11 +173,17 @@ closed while the DAC remains muted. Set the UDP receiver address in
 service; it powers off Linux only when `CALIBRATOR_ALLOW_POWEROFF=1` is
 explicitly enabled.
 
-### Gate-enabled PetaLinux artifact handoff (2026-08-28)
+### Gate-enabled PetaLinux artifact handoff — superseded (2026-08-28)
 
-The PetaLinux 2025.2 build in the Ubuntu 22.04.5 VM completed its untargeted
-incremental build with `6,498/6,498` tasks successful, of which 6,438 were
-reused. The exact generated
+**DO NOT DEPLOY this archived WIC/rootfs.** It was built from `d039dcf`, before
+the authenticated and peer-restricted TCP control changes. It is retained only
+as historical Vivado/PetaLinux reproducibility evidence. A fresh WIC must be
+built from the current source, reinspected, and recorded with new hashes before
+board deployment or eMMC programming.
+
+That historical PetaLinux 2025.2 build in the Ubuntu 22.04.5 VM completed its
+untargeted incremental build with `6,498/6,498` tasks successful, of which
+6,438 were reused. The exact generated
 artifacts were then verified in
 `/home/petalinux/work/calibrator-petalinux/images/linux`, copied to the
 ignored local handoff directory `build/petalinux_output_gate/`, and hashed again on
