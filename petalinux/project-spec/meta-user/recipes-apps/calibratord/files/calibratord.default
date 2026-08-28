@@ -1,3 +1,8 @@
 CALIBRATOR_UDP_HOST=192.168.1.100
+# Fail-closed defaults. Set these to the board's GEM3 address and the one
+# authorized control PC address when commissioning an isolated control LAN.
+CALIBRATOR_CONTROL_BIND=127.0.0.1
+CALIBRATOR_CONTROL_PEER=127.0.0.1
+CALIBRATOR_CONTROL_TOKEN_FILE=/etc/calibratord/control.token
 # Set to 1 only on an isolated control network if the shutdown command may power off Linux.
 # CALIBRATOR_ALLOW_POWEROFF=1

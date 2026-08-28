@@ -1,4 +1,5 @@
 `timescale 1ns/1ps
+`include "calibrator_registers.vh"
 
 module calibrator_control_axi (
     (* X_INTERFACE_PARAMETER = "XIL_INTERFACENAME S_AXI, PROTOCOL AXI4LITE, DATA_WIDTH 32, ADDR_WIDTH 12" *)
@@ -150,7 +151,7 @@ module calibrator_control_axi (
     always @(posedge S_AXI_aclk) begin
         if (!S_AXI_aresetn) begin
             control_reg <= 32'h00000004;
-            detect_threshold_reg <= 32'd1000;
+            detect_threshold_reg <= `CAL_DETECT_THRESHOLD_RESET;
             noise_alpha_reg <= 32'd2147484;
             range_hold_reg <= 32'd64;
             range_high_reg <= 32'd58982;

@@ -23,6 +23,7 @@ class ControlAbiTest(unittest.TestCase):
         self.assertEqual(abi.register("PROJECT_ID").reset, 0x43414C31)
         self.assertEqual(abi.register("CONTROL").offset, 0x008)
         self.assertEqual(abi.register("COMMIT_CALIBRATION").access, "wo")
+        self.assertEqual(abi.register("DETECT_THRESHOLD").reset, 1000)
         self.assertEqual(abi.register("EVENT_COUNT_LO").offset, 0x01C)
         self.assertEqual(abi.register("DROP_COUNT_HI").offset, 0x028)
         self.assertEqual(abi.channel_base, 0x100)
@@ -66,6 +67,7 @@ class ControlAbiTest(unittest.TestCase):
             self.assertIn("00000008", artifact)
             self.assertIn("COMMIT_CALIBRATION", artifact)
         self.assertIn("reg = <0x0 0xa0000000 0x0 0x10000>;", device_tree)
+        self.assertIn("`define CAL_DETECT_THRESHOLD_RESET 32'h000003E8", verilog)
 
     def test_root_and_package_maps_are_byte_identical(self) -> None:
         root = Path(__file__).resolve().parents[2]

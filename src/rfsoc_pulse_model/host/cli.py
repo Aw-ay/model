@@ -74,7 +74,16 @@ def _parse_parameters(value: str) -> dict[str, Any]:
 
 
 def _control(arguments: argparse.Namespace) -> int:
-    response = ControlClient(arguments.host, port=arguments.port, timeout=arguments.timeout).request(
+    try:
+        auth_token = arguments.token_file.read_text("ascii").strip()
+    except (OSError, UnicodeError) as error:
+        raise ControlProtocolError(f"cannot read authentication token: {error}") from error
+    response = ControlClient(
+        arguments.host,
+        auth_token=auth_token,
+        port=arguments.port,
+        timeout=arguments.timeout,
+    ).request(
         arguments.command, **arguments.parameters
     )
     print(json.dumps(response, indent=2, sort_keys=True))
@@ -134,6 +143,7 @@ def build_parser() -> argparse.ArgumentParser:
     control = subcommands.add_parser("control", help="send one TCP JSON-lines command")
     control.add_argument("host")
     control.add_argument("command")
+    control.add_argument("--token-file", type=Path, required=True)
     control.add_argument("--parameters", type=_parse_parameters, default={})
     control.add_argument("--port", type=int, default=47001)
     control.add_argument("--timeout", type=float, default=5.0)

@@ -21,6 +21,24 @@ SUPPORTED_COMMANDS = frozenset(
         "commit_calibration", "run_mts", "clear_errors", "shutdown",
     }
 )
+_COMMAND_PARAMETERS: dict[str, dict[str, tuple[int, int]]] = {
+    "get_status": {},
+    "start": {},
+    "stop": {},
+    "set_threshold": {"threshold": (0, 0xFFFFFFFF)},
+    "set_calibration": {
+        "channel": (0, 7),
+        "integer_delay": (0, 2047),
+        "fractional_delay_q20": (0, 1048575),
+        "gain_real": (-8388608, 8388607),
+        "gain_imag": (-8388608, 8388607),
+        "flags": (0, 1),
+    },
+    "commit_calibration": {},
+    "run_mts": {},
+    "clear_errors": {},
+    "shutdown": {},
+}
 
 
 class ControlProtocolError(ValueError):
@@ -118,10 +136,27 @@ class EventReassembler:
         self.evicted_events += 1
 
 
-def encode_control_request(command: str, **parameters: Any) -> bytes:
-    if command not in SUPPORTED_COMMANDS:
-        raise ControlProtocolError(f"unsupported command: {command}")
-    request = {"command": command, **parameters}
+def _validate_auth_token(auth_token: str) -> str:
+    if (
+        not isinstance(auth_token, str)
+        or len(auth_token) != 64
+        or any(character not in "0123456789abcdefABCDEF" for character in auth_token)
+    ):
+        raise ControlProtocolError("authentication token must contain exactly 64 hexadecimal characters")
+    return auth_token
+
+
+def encode_control_request(command_name: str, *, auth_token: str, **parameters: Any) -> bytes:
+    if command_name not in SUPPORTED_COMMANDS:
+        raise ControlProtocolError(f"unsupported command: {command_name}")
+    schema = _COMMAND_PARAMETERS[command_name]
+    if set(parameters) != set(schema):
+        raise ControlProtocolError(f"invalid parameters for command: {command_name}")
+    for name, (minimum, maximum) in schema.items():
+        value = parameters[name]
+        if not isinstance(value, int) or isinstance(value, bool) or not minimum <= value <= maximum:
+            raise ControlProtocolError(f"invalid {name} for command: {command_name}")
+    request = {"auth": _validate_auth_token(auth_token), "command": command_name, **parameters}
     try:
         encoded = json.dumps(request, separators=(",", ":"), sort_keys=True, allow_nan=False)
     except (TypeError, ValueError) as error:
@@ -146,13 +181,14 @@ def decode_control_response(line: bytes) -> dict[str, Any]:
 class ControlClient:
     """One-request/one-response TCP JSON-lines client."""
 
-    def __init__(self, host: str, *, port: int = 47001, timeout: float = 5.0) -> None:
+    def __init__(self, host: str, *, auth_token: str, port: int = 47001, timeout: float = 5.0) -> None:
         self.host = host
+        self.auth_token = _validate_auth_token(auth_token)
         self.port = port
         self.timeout = timeout
 
-    def request(self, command: str, **parameters: Any) -> dict[str, Any]:
-        request = encode_control_request(command, **parameters)
+    def request(self, command_name: str, **parameters: Any) -> dict[str, Any]:
+        request = encode_control_request(command_name, auth_token=self.auth_token, **parameters)
         with socket.create_connection((self.host, self.port), timeout=self.timeout) as connection:
             connection.sendall(request)
             connection.settimeout(self.timeout)

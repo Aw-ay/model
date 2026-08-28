@@ -15,7 +15,7 @@ SRC_URI = "file://calibratord.c \
            file://uio-pdrv-genirq.conf"
 
 S = "${WORKDIR}"
-DEPENDS = "libmetal librfdc"
+DEPENDS = "libmetal librfdc calibrator-dma-proxy"
 
 inherit systemd
 
@@ -29,7 +29,9 @@ do_compile() {
 
 do_install() {
     install -d ${D}${sbindir} ${D}${systemd_system_unitdir} ${D}${sysconfdir}/default \
-        ${D}${sysconfdir}/modules-load.d ${D}${sysconfdir}/modprobe.d
+        ${D}${sysconfdir}/modules-load.d ${D}${sysconfdir}/modprobe.d \
+        ${D}${sysconfdir}/calibratord
+    chmod 0700 ${D}${sysconfdir}/calibratord
     install -m 0755 calibratord ${D}${sbindir}/calibratord
     install -m 0644 ${WORKDIR}/calibratord.service ${D}${systemd_system_unitdir}/calibratord.service
     install -m 0644 ${WORKDIR}/calibratord.default ${D}${sysconfdir}/default/calibratord
@@ -39,5 +41,5 @@ do_install() {
 
 FILES:${PN} += "${sbindir}/calibratord ${systemd_system_unitdir}/calibratord.service \
     ${sysconfdir}/default/calibratord ${sysconfdir}/modules-load.d/calibrator-uio.conf \
-    ${sysconfdir}/modprobe.d/uio-pdrv-genirq.conf"
+    ${sysconfdir}/modprobe.d/uio-pdrv-genirq.conf ${sysconfdir}/calibratord"
 RDEPENDS:${PN} += "libmetal librfdc kernel-module-calibrator-dma-proxy kernel-module-uio-pdrv-genirq"

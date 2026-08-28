@@ -58,11 +58,48 @@ class CalibratordControlContractTest(unittest.TestCase):
             "    return cal_json_line_append(&reader, line, sizeof(line), \"b\\n\", 2) != CAL_JSON_LINE_EXTRA_DATA;\n"
             "}\n"
             "\n"
+            "static int strict_request_contract(void) {\n"
+            "    const char *token = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\";\n"
+            "    struct cal_control_request request;\n"
+            "    if (cal_parse_control_request(\" { \\\"auth\\\" : \\\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\\", \\\"command\\\" : \\\"start\\\" } \", &request))\n"
+            "        return 1;\n"
+            "    if (request.command != CAL_CONTROL_COMMAND_START ||\n"
+            "        !cal_control_token_valid(token, request.auth))\n"
+            "        return 1;\n"
+            "    if (!cal_parse_control_request(\"{\\\"auth\\\":\\\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\\",\\\"command\\\":\\\"start\\\",\\\"command\\\":\\\"stop\\\"}\", &request))\n"
+            "        return 1;\n"
+            "    if (!cal_parse_control_request(\"{\\\"auth\\\":\\\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\\",\\\"command\\\":\\\"start\\\"}junk\", &request))\n"
+            "        return 1;\n"
+            "    if (!cal_parse_control_request(\"{\\\"auth\\\":\\\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\\",\\\"command\\\":\\\"start\\\",\\\"extra\\\":1}\", &request))\n"
+            "        return 1;\n"
+            "    if (!cal_parse_control_request(\"{\\\"auth\\\":\\\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\\",\\\"command\\\":\\\"set_threshold\\\",\\\"threshold\\\":123junk}\", &request))\n"
+            "        return 1;\n"
+            "    if (!cal_parse_control_request(\"{\\\"auth\\\":\\\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\\",\\\"command\\\":\\\"set_threshold\\\",\\\"threshold\\\":0x10}\", &request))\n"
+            "        return 1;\n"
+            "    if (!cal_parse_control_request(\"{\\\"auth\\\":\\\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\\",\\\"command\\\":\\\"set_threshold\\\",\\\"threshold\\\":+1}\", &request))\n"
+            "        return 1;\n"
+            "    return cal_control_token_valid(token, \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\");\n"
+            "}\n"
+            "\n"
+            "static int calibration_request_contract(void) {\n"
+            "    struct cal_control_request request;\n"
+            "    const char *line = \"{\\\"auth\\\":\\\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\\\",\\\"command\\\":\\\"set_calibration\\\",\\\"channel\\\":7,\\\"integer_delay\\\":2047,\\\"fractional_delay_q20\\\":1048575,\\\"gain_real\\\":-8388608,\\\"gain_imag\\\":8388607,\\\"flags\\\":1}\";\n"
+            "    if (cal_parse_control_request(line, &request))\n"
+            "        return 1;\n"
+            "    return request.command != CAL_CONTROL_COMMAND_SET_CALIBRATION ||\n"
+            "           request.channel != 7 || request.integer_delay != 2047 ||\n"
+            "           request.fractional_delay_q20 != 1048575 ||\n"
+            "           request.gain_real != -8388608 || request.gain_imag != 8388607 ||\n"
+            "           request.flags != 1;\n"
+            "}\n"
+            "\n"
             "int main(int argc, char **argv) {\n"
             "    if (argc != 2) return 2;\n"
             "    if (!strcmp(argv[1], \"poweroff\")) return poweroff_contract();\n"
             "    if (!strcmp(argv[1], \"fragmented\")) return fragmented_line_contract();\n"
             "    if (!strcmp(argv[1], \"invalid\")) return invalid_line_contract();\n"
+            "    if (!strcmp(argv[1], \"strict\")) return strict_request_contract();\n"
+            "    if (!strcmp(argv[1], \"calibration\")) return calibration_request_contract();\n"
             "    return 2;\n"
             "}\n",
             encoding="utf-8",
@@ -94,6 +131,12 @@ class CalibratordControlContractTest(unittest.TestCase):
     def test_missing_newline_and_overlong_input_are_rejected_but_only_first_line_is_consumed(self) -> None:
         self._run_contract("invalid")
 
+    def test_control_json_is_strict_and_authenticated(self) -> None:
+        self._run_contract("strict")
+
+    def test_calibration_schema_accepts_only_bounded_fields(self) -> None:
+        self._run_contract("calibration")
+
     def test_socket_reader_is_timeout_bounded_and_one_request_per_connection(self) -> None:
         source = (ROOT / "software/calibratord/src/control.c").read_text("utf-8")
         daemon = (ROOT / "software/calibratord/src/calibratord.c").read_text("utf-8")
@@ -104,6 +147,14 @@ class CalibratordControlContractTest(unittest.TestCase):
         self.assertIn("CAL_JSON_LINE_TIMEOUT", source)
         self.assertIn("cal_read_json_request(client, line, CAL_MAX_LINE, CAL_REQUEST_TIMEOUT_MS)", daemon)
         self.assertNotIn("read_request_line", daemon)
+
+    def test_daemon_binds_to_configured_address_and_rejects_other_peers(self) -> None:
+        daemon = (ROOT / "software/calibratord/src/calibratord.c").read_text("utf-8")
+        self.assertNotIn("INADDR_ANY", daemon)
+        self.assertIn("CALIBRATOR_CONTROL_BIND", daemon)
+        self.assertIn("CALIBRATOR_CONTROL_PEER", daemon)
+        self.assertIn("CALIBRATOR_CONTROL_TOKEN_FILE", daemon)
+        self.assertIn("peer.sin_addr.s_addr != state.control_peer.s_addr", daemon)
 
 
 if __name__ == "__main__":

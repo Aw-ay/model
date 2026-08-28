@@ -148,9 +148,30 @@ to create `/dev/calibrator-events` backed by a 256-entry coherent DMA ring,
 validate RFDC state, run DAC0–1 / ADC0–3 MTS, and keep the DAC fail-safe muted
 until initialization succeeds. These runtime outcomes remain board-only gates.
 
-Set the receiver address in `/etc/default/calibratord`. The `shutdown`
-command stops acquisition and the service; it powers off Linux only when
-`CALIBRATOR_ALLOW_POWEROFF=1` is explicitly enabled.
+Commission TCP control only on an isolated control LAN. The shipped defaults
+bind TCP to `127.0.0.1` and allow only that peer, so remote RF commands remain
+disabled until `/etc/default/calibratord` sets `CALIBRATOR_CONTROL_BIND` to the
+board's GEM3 IPv4 address and `CALIBRATOR_CONTROL_PEER` to the one authorized
+Windows PC IPv4 address. Never configure a wildcard bind.
+
+Provision a separate 256-bit shared secret on the board before starting the
+service. The file is deliberately absent from the image:
+
+```sh
+install -d -m 0700 /etc/calibratord
+openssl rand -hex 32 > /etc/calibratord/control.token
+chown root:root /etc/calibratord/control.token
+chmod 0600 /etc/calibratord/control.token
+```
+
+Copy that token through the commissioning channel to a Windows file readable
+only by the operator. Every TCP request is strict, bounded JSON and must carry
+the token; malformed, duplicate, unknown or unauthenticated fields are
+rejected. Missing or insecure token configuration makes the service fail
+closed while the DAC remains muted. Set the UDP receiver address in
+`/etc/default/calibratord`. The `shutdown` command stops acquisition and the
+service; it powers off Linux only when `CALIBRATOR_ALLOW_POWEROFF=1` is
+explicitly enabled.
 
 ### Gate-enabled PetaLinux artifact handoff (2026-08-28)
 
@@ -199,13 +220,13 @@ Install the repository package, then use the generated console command:
 
 ```powershell
 python -m pip install -e .
-calibrator-cli control 192.168.1.10 get_status
+calibrator-cli control 192.168.1.10 get_status --token-file .\control.token
 calibrator-cli control 192.168.1.10 set_threshold `
-  --parameters '{"threshold":1000000}'
-calibrator-cli control 192.168.1.10 start
+  --token-file .\control.token --parameters '{"threshold":1000000}'
+calibrator-cli control 192.168.1.10 start --token-file .\control.token
 calibrator-cli receive --bind 0.0.0.0 --port 47000 `
   --output acceptance-capture --duration 7200 --require-events 100000
-calibrator-cli control 192.168.1.10 stop
+calibrator-cli control 192.168.1.10 stop --token-file .\control.token
 ```
 
 The receiver rejects bad magic/version/length/CRC, tracks 64-bit sequence

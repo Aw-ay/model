@@ -149,10 +149,9 @@ class ControlAbi:
 
     def emit_verilog_header(self) -> str:
         lines = ["`ifndef CALIBRATOR_REGISTERS_VH", "`define CALIBRATOR_REGISTERS_VH"]
-        lines.extend(
-            f"`define CAL_{register.name}_OFFSET 32'h{register.offset:08X}"
-            for register in self.all_expanded_registers()
-        )
+        for register in self.all_expanded_registers():
+            lines.append(f"`define CAL_{register.name}_OFFSET 32'h{register.offset:08X}")
+            lines.append(f"`define CAL_{register.name}_RESET 32'h{register.reset:08X}")
         lines.append("`endif")
         return "\n".join(lines) + "\n"
 

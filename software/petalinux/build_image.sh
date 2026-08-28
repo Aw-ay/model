@@ -21,6 +21,22 @@ if [[ -e "$PROJECT_PATH" ]]; then
     echo "refusing to overwrite existing path: $PROJECT_PATH" >&2
     exit 2
 fi
+for command in python3 sha256sum; do
+    command -v "$command" >/dev/null || { echo "missing $command" >&2; exit 2; }
+done
+XSA_MANIFEST="$REPOSITORY_ROOT/docs/deployment/petalinux-2025.2-artifacts.json"
+if [[ ! -f "$XSA_MANIFEST" ]]; then
+    echo "qualified artifact manifest not found: $XSA_MANIFEST" >&2
+    exit 2
+fi
+EXPECTED_XSA_SHA256="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["vivado"]["xsa"]["sha256"])' "$XSA_MANIFEST")"
+ACTUAL_XSA_SHA256="$(sha256sum "$XSA_PATH" | awk '{print $1}')"
+if [[ ! "$EXPECTED_XSA_SHA256" =~ ^[0-9a-f]{64}$ || "$ACTUAL_XSA_SHA256" != "$EXPECTED_XSA_SHA256" ]]; then
+    echo "XSA digest does not match the qualified Vivado artifact" >&2
+    echo "expected: $EXPECTED_XSA_SHA256" >&2
+    echo "actual:   $ACTUAL_XSA_SHA256" >&2
+    exit 2
+fi
 if [[ "${PETALINUX:-}" != *"$REQUIRED_VERSION"* ]]; then
     echo "source the PetaLinux $REQUIRED_VERSION settings.sh before running this script" >&2
     exit 2

@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
+import importlib.util
 
 from rfsoc_pulse_model.common.control_abi import ControlAbi
 from rfsoc_pulse_model.common.network_protocol import encode_event_datagrams, encode_event_payload
@@ -68,19 +69,31 @@ class DeploymentContractTest(unittest.TestCase):
             re.sub(r"\s+", " ", abi.emit_device_tree_binding().strip()),
             re.sub(r"\s+", " ", overlay),
         )
+        vivado = (ROOT / "src/rfsoc_pulse_model/ip/calibrator_vivado.py").read_text("utf-8")
+        self.assertIn("calibrator_registers.vh", vivado)
 
     def test_daemon_is_fail_safe_and_implements_all_v1_commands(self) -> None:
         source = (ROOT / "software/calibratord/src/calibratord.c").read_text("utf-8")
         self.assertLess(source.index("cal_hw_force_safe"), source.index("cal_rfdc_initialize"))
+        parser_source = (ROOT / "software/calibratord/src/control.c").read_text("utf-8")
         for command in (
             "get_status", "start", "stop", "set_threshold", "set_calibration",
             "commit_calibration", "run_mts", "clear_errors", "shutdown",
         ):
-            self.assertIn(f'"{command}"', source)
+            self.assertIn(f'"{command}"', parser_source)
         self.assertIn("CAL_PROJECT_ID_OFFSET", source)
         self.assertIn("CAL_ABI_VERSION_OFFSET", source)
         self.assertIn("O_NONBLOCK", source)
         self.assertIn("pthread_join", source)
+        self.assertIn("configure_control_security(&state)", source)
+        defaults = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibratord/files/calibratord.default").read_text("utf-8")
+        unit = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibratord/files/calibratord.service").read_text("utf-8")
+        recipe = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibratord/calibratord.bb").read_text("utf-8")
+        self.assertIn("CALIBRATOR_CONTROL_BIND=127.0.0.1", defaults)
+        self.assertIn("CALIBRATOR_CONTROL_PEER=127.0.0.1", defaults)
+        self.assertIn("CALIBRATOR_CONTROL_TOKEN_FILE=/etc/calibratord/control.token", defaults)
+        self.assertIn("UMask=0077", unit)
+        self.assertIn("${sysconfdir}/calibratord", recipe)
 
     def test_dma_proxy_uses_dmaengine_coherent_ring_and_whole_event_reads(self) -> None:
         source = (ROOT / "software/kernel/calibrator_dma_proxy.c").read_text("utf-8")
@@ -209,6 +222,28 @@ class DeploymentContractTest(unittest.TestCase):
         self.assertIn("no_boot_bsp=True", script)
         self.assertIn("platform.build()", script)
         self.assertIn("Vitis Embedded ZynqMP Linux payload is incomplete", script)
+        self.assertIn("refusing to reuse existing workspace", script)
+        self.assertNotIn('workspace.rglob("*.xpfm")', script)
+
+    def test_vitis_platform_accepts_only_a_fresh_expected_xpfm(self) -> None:
+        module_path = ROOT / "software/vitis/create_linux_platform.py"
+        spec = importlib.util.spec_from_file_location("calibrator_vitis_platform", module_path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "workspace"
+            workspace.mkdir()
+            with self.assertRaisesRegex(RuntimeError, "refusing to reuse existing workspace"):
+                module.prepare_new_workspace(workspace)
+            fresh = Path(directory) / "fresh"
+            module.prepare_new_workspace(fresh)
+            expected = fresh / "calibrator_platform/export/calibrator_platform/calibrator_platform.xpfm"
+            expected.parent.mkdir(parents=True)
+            expected.write_text("platform", encoding="utf-8")
+            self.assertEqual(module.find_built_xpfm(fresh), expected)
+            (fresh / "unrelated.xpfm").write_text("stale", encoding="utf-8")
+            self.assertEqual(module.find_built_xpfm(fresh), expected)
 
     def test_petalinux_build_script_locks_2025_2_and_packages_boot_and_wic(self) -> None:
         script = (ROOT / "software/petalinux/build_image.sh").read_text("utf-8")
@@ -217,6 +252,9 @@ class DeploymentContractTest(unittest.TestCase):
         self.assertIn("petalinux-build", script)
         self.assertIn("petalinux-package --boot", script)
         self.assertIn("petalinux-package --wic", script)
+        self.assertIn("petalinux-2025.2-artifacts.json", script)
+        self.assertIn("sha256sum", script)
+        self.assertIn("XSA digest does not match the qualified Vivado artifact", script)
 
     def test_embedded_xsa_bitstream_helper_emits_the_archived_payload(self) -> None:
         helper = ROOT / "software/petalinux/extract_xsa_bitstream.py"
@@ -281,6 +319,7 @@ class DeploymentContractTest(unittest.TestCase):
         self.assertIn("librfdc", daemon_recipe)
         self.assertNotIn("libxrfdc", daemon_recipe)
         self.assertIn("kernel-module-calibrator-dma-proxy", daemon_recipe)
+        self.assertIn('DEPENDS = "libmetal librfdc calibrator-dma-proxy"', daemon_recipe)
         self.assertIn("kernel-module-uio-pdrv-genirq", daemon_recipe)
         self.assertIn("inherit module", module_recipe)
         self.assertIn("KERNEL_MODULE_AUTOLOAD", module_recipe)

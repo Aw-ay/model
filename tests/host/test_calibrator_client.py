@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 from pathlib import Path
 import struct
@@ -20,13 +22,14 @@ from rfsoc_pulse_model.common.types import (
     SampleDomain,
 )
 from rfsoc_pulse_model.host.calibrator_client import (
+    ControlClient,
     ControlProtocolError,
     EventReassembler,
     SequenceTracker,
     decode_control_response,
     encode_control_request,
 )
-from rfsoc_pulse_model.host.cli import EventArchive
+from rfsoc_pulse_model.host.cli import EventArchive, build_parser
 
 
 def _event(event_id: int = 9) -> PulseEvent:
@@ -106,14 +109,39 @@ class EventReassemblerTest(unittest.TestCase):
 
 class ControlProtocolTest(unittest.TestCase):
     def test_encodes_only_supported_commands_as_one_canonical_json_line(self) -> None:
-        encoded = encode_control_request("set_threshold", threshold=123)
+        token = "a" * 64
+        encoded = encode_control_request("set_threshold", auth_token=token, threshold=123)
         self.assertTrue(encoded.endswith(b"\n"))
         self.assertEqual(
             json.loads(encoded),
-            {"command": "set_threshold", "threshold": 123},
+            {"auth": token, "command": "set_threshold", "threshold": 123},
         )
         with self.assertRaises(ControlProtocolError):
-            encode_control_request("format_emmc")
+            encode_control_request("format_emmc", auth_token=token)
+
+    def test_requires_a_64_character_hex_authentication_token(self) -> None:
+        for token in ("", "a" * 63, "a" * 65, "g" * 64):
+            with self.subTest(token=token):
+                with self.assertRaises(ControlProtocolError):
+                    encode_control_request("get_status", auth_token=token)
+        with self.assertRaises(ControlProtocolError):
+            ControlClient("127.0.0.1", auth_token="short")
+
+    def test_client_enforces_the_exact_command_schema_and_integer_ranges(self) -> None:
+        token = "b" * 64
+        invalid = (
+            ("start", {"command": "stop"}),
+            ("get_status", {"extra": 1}),
+            ("set_threshold", {}),
+            ("set_threshold", {"threshold": True}),
+            ("set_calibration", {"channel": 8, "integer_delay": 0,
+                                 "fractional_delay_q20": 0, "gain_real": 0,
+                                 "gain_imag": 0, "flags": 0}),
+        )
+        for command, parameters in invalid:
+            with self.subTest(command=command, parameters=parameters):
+                with self.assertRaises(ControlProtocolError):
+                    encode_control_request(command, auth_token=token, **parameters)
 
     def test_rejects_non_object_malformed_or_failed_responses(self) -> None:
         self.assertEqual(decode_control_response(b'{"ok":true,"status":{}}\n')["status"], {})
@@ -121,6 +149,15 @@ class ControlProtocolTest(unittest.TestCase):
             with self.subTest(response=response):
                 with self.assertRaises(ControlProtocolError):
                     decode_control_response(response)
+
+    def test_control_cli_requires_an_explicit_token_file(self) -> None:
+        parser = build_parser()
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            parser.parse_args(["control", "192.0.2.1", "get_status"])
+        arguments = parser.parse_args(
+            ["control", "192.0.2.1", "get_status", "--token-file", "control.token"]
+        )
+        self.assertEqual(arguments.token_file, Path("control.token"))
 
 
 class EventArchiveTest(unittest.TestCase):

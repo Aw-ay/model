@@ -7,13 +7,29 @@ from pathlib import Path
 import os
 import sys
 
-import vitis
-
-
 EXPECTED_VERSION = "2025.2"
 
 
+def prepare_new_workspace(workspace: Path) -> None:
+    if workspace.exists():
+        raise RuntimeError(f"refusing to reuse existing workspace: {workspace}")
+    workspace.mkdir(parents=True)
+
+
+def find_built_xpfm(workspace: Path) -> Path:
+    component = workspace / "calibrator_platform"
+    candidates = sorted(component.rglob("calibrator_platform.xpfm"))
+    if len(candidates) != 1 or not candidates[0].is_file():
+        raise RuntimeError(
+            "Vitis build must produce exactly one calibrator_platform.xpfm "
+            "inside the newly created component"
+        )
+    return candidates[0]
+
+
 def main() -> int:
+    import vitis
+
     if len(sys.argv) != 3:
         raise SystemExit("usage: create_linux_platform.py <calibrator.xsa> <workspace>")
     xsa = Path(sys.argv[1]).resolve()
@@ -29,7 +45,7 @@ def main() -> int:
             "Vitis Embedded ZynqMP Linux payload is incomplete; reinstall the 2025.2 "
             f"component that supplies {qemu_payload}"
         )
-    workspace.mkdir(parents=True, exist_ok=True)
+    prepare_new_workspace(workspace)
 
     port_text = os.environ.get("CALIBRATOR_VITIS_SERVER_PORT")
     client = vitis.create_client(port=int(port_text) if port_text else None)
@@ -50,10 +66,8 @@ def main() -> int:
         )
         platform.report()
         platform.build()
-        candidates = sorted(workspace.rglob("*.xpfm"))
-        if not candidates:
-            raise RuntimeError("Vitis build completed without an XPFM")
-        print(f"CALIBRATOR_XPFM={candidates[0]}")
+        built_xpfm = find_built_xpfm(workspace)
+        print(f"CALIBRATOR_XPFM={built_xpfm}")
     finally:
         vitis.dispose()
     return 0

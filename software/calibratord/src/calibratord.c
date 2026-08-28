@@ -61,6 +61,9 @@ struct daemon_state {
     bool poweroff_requested;
     uint64_t sequence;
     uint64_t software_drops;
+    struct in_addr control_bind;
+    struct in_addr control_peer;
+    char control_token[CAL_CONTROL_TOKEN_HEX_LENGTH + 1u];
 };
 
 static struct daemon_state *signal_state;
@@ -239,49 +242,6 @@ retry:
     return NULL;
 }
 
-static const char *json_command(const char *line, const char *command)
-{
-    static char pattern[96];
-    snprintf(pattern, sizeof(pattern), "\"command\":\"%s\"", command);
-    return strstr(line, pattern);
-}
-
-static int json_u32(const char *line, const char *name, uint32_t maximum, uint32_t *value)
-{
-    char pattern[80];
-    char *end;
-    unsigned long parsed;
-    const char *position;
-    snprintf(pattern, sizeof(pattern), "\"%s\":", name);
-    position = strstr(line, pattern);
-    if (position == NULL)
-        return -1;
-    errno = 0;
-    parsed = strtoul(position + strlen(pattern), &end, 0);
-    if (errno != 0 || end == position + strlen(pattern) || parsed > maximum)
-        return -1;
-    *value = (uint32_t)parsed;
-    return 0;
-}
-
-static int json_i32(const char *line, const char *name, int32_t minimum, int32_t maximum, int32_t *value)
-{
-    char pattern[80];
-    char *end;
-    long parsed;
-    const char *position;
-    snprintf(pattern, sizeof(pattern), "\"%s\":", name);
-    position = strstr(line, pattern);
-    if (position == NULL)
-        return -1;
-    errno = 0;
-    parsed = strtol(position + strlen(pattern), &end, 0);
-    if (errno != 0 || end == position + strlen(pattern) || parsed < minimum || parsed > maximum)
-        return -1;
-    *value = (int32_t)parsed;
-    return 0;
-}
-
 static void send_error(int client, const char *message)
 {
     dprintf(client, "{\"ok\":false,\"error\":\"%s\"}\n", message);
@@ -302,62 +262,50 @@ static void send_status(struct daemon_state *state, int client)
             reg_read(&state->hw, CAL_STREAM_ERRORS_OFFSET));
 }
 
-static void handle_calibration(struct daemon_state *state, int client, const char *line)
+static void handle_calibration(struct daemon_state *state, int client,
+                               const struct cal_control_request *request)
 {
-    uint32_t channel;
-    uint32_t integer_delay;
-    uint32_t fractional_delay;
-    uint32_t flags;
-    int32_t gain_real;
-    int32_t gain_imag;
     uint32_t base;
     if (reg_read(&state->hw, CAL_CONTROL_OFFSET) & CAL_CONTROL_ACQUIRE) {
         send_error(client, "acquisition must be stopped");
         return;
     }
-    if (json_u32(line, "channel", 7, &channel) ||
-        json_u32(line, "integer_delay", 2047, &integer_delay) ||
-        json_u32(line, "fractional_delay_q20", 1048575, &fractional_delay) ||
-        json_i32(line, "gain_real", -8388608, 8388607, &gain_real) ||
-        json_i32(line, "gain_imag", -8388608, 8388607, &gain_imag) ||
-        json_u32(line, "flags", 1, &flags)) {
-        send_error(client, "invalid calibration fields");
-        return;
-    }
-    base = 0x100u + channel * 0x20u;
-    reg_write(&state->hw, base + 0x00u, integer_delay);
-    reg_write(&state->hw, base + 0x04u, fractional_delay);
-    reg_write(&state->hw, base + 0x08u, (uint32_t)gain_real);
-    reg_write(&state->hw, base + 0x0Cu, (uint32_t)gain_imag);
-    reg_write(&state->hw, base + 0x10u, flags);
+    base = 0x100u + request->channel * 0x20u;
+    reg_write(&state->hw, base + 0x00u, request->integer_delay);
+    reg_write(&state->hw, base + 0x04u, request->fractional_delay_q20);
+    reg_write(&state->hw, base + 0x08u, (uint32_t)request->gain_real);
+    reg_write(&state->hw, base + 0x0Cu, (uint32_t)request->gain_imag);
+    reg_write(&state->hw, base + 0x10u, request->flags);
     dprintf(client, "{\"ok\":true}\n");
 }
 
-static void handle_request(struct daemon_state *state, int client, const char *line)
+static void handle_request(struct daemon_state *state, int client,
+                           const struct cal_control_request *request)
 {
-    uint32_t value;
-    if (json_command(line, "get_status")) {
+    switch (request->command) {
+    case CAL_CONTROL_COMMAND_GET_STATUS:
         send_status(state, client);
-    } else if (json_command(line, "start")) {
+        break;
+    case CAL_CONTROL_COMMAND_START:
         if (!state->rfdc_ready || !state->mts_ready)
             send_error(client, "RFDC/MTS not ready");
         else {
             reg_write(&state->hw, CAL_CONTROL_OFFSET, CAL_CONTROL_ACQUIRE | CAL_CONTROL_LOOPBACK);
             dprintf(client, "{\"ok\":true}\n");
         }
-    } else if (json_command(line, "stop")) {
+        break;
+    case CAL_CONTROL_COMMAND_STOP:
         cal_hw_force_safe(&state->hw);
         dprintf(client, "{\"ok\":true}\n");
-    } else if (json_command(line, "set_threshold")) {
-        if (json_u32(line, "threshold", UINT32_MAX, &value))
-            send_error(client, "invalid threshold");
-        else {
-            reg_write(&state->hw, CAL_DETECT_THRESHOLD_OFFSET, value);
-            dprintf(client, "{\"ok\":true}\n");
-        }
-    } else if (json_command(line, "set_calibration")) {
-        handle_calibration(state, client, line);
-    } else if (json_command(line, "commit_calibration")) {
+        break;
+    case CAL_CONTROL_COMMAND_SET_THRESHOLD:
+        reg_write(&state->hw, CAL_DETECT_THRESHOLD_OFFSET, request->threshold);
+        dprintf(client, "{\"ok\":true}\n");
+        break;
+    case CAL_CONTROL_COMMAND_SET_CALIBRATION:
+        handle_calibration(state, client, request);
+        break;
+    case CAL_CONTROL_COMMAND_COMMIT_CALIBRATION:
         if (reg_read(&state->hw, CAL_CONTROL_OFFSET) & CAL_CONTROL_ACQUIRE)
             send_error(client, "acquisition must be stopped");
         else {
@@ -365,26 +313,82 @@ static void handle_request(struct daemon_state *state, int client, const char *l
             dprintf(client, "{\"ok\":true,\"config_version\":%u}\n",
                     reg_read(&state->hw, CAL_CONFIG_VERSION_OFFSET));
         }
-    } else if (json_command(line, "run_mts")) {
+        break;
+    case CAL_CONTROL_COMMAND_RUN_MTS:
         cal_hw_force_safe(&state->hw);
         if (cal_run_mts(state))
             send_error(client, "MTS failed");
         else
             dprintf(client, "{\"ok\":true}\n");
-    } else if (json_command(line, "clear_errors")) {
+        break;
+    case CAL_CONTROL_COMMAND_CLEAR_ERRORS:
         reg_write(&state->hw, CAL_STREAM_ERRORS_OFFSET, UINT32_MAX);
         dprintf(client, "{\"ok\":true}\n");
-    } else if (json_command(line, "shutdown")) {
+        break;
+    case CAL_CONTROL_COMMAND_SHUTDOWN:
         cal_hw_force_safe(&state->hw);
         state->poweroff_requested = cal_poweroff_allowed(getenv("CALIBRATOR_ALLOW_POWEROFF"));
         state->running = 0;
         dprintf(client, "{\"ok\":true}\n");
-    } else {
+        break;
+    default:
         send_error(client, "unknown command");
+        break;
     }
 }
 
-static int create_control_listener(void)
+static int load_control_token(struct daemon_state *state, const char *path)
+{
+    struct stat metadata;
+    char buffer[CAL_CONTROL_TOKEN_HEX_LENGTH + 2u];
+    ssize_t count;
+    int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0)
+        return -1;
+    if (fstat(fd, &metadata) != 0 || !S_ISREG(metadata.st_mode) ||
+        metadata.st_uid != 0 || (metadata.st_mode & 0077) != 0) {
+        close(fd);
+        errno = EACCES;
+        return -1;
+    }
+    count = read(fd, buffer, sizeof(buffer));
+    close(fd);
+    if (count == (ssize_t)(CAL_CONTROL_TOKEN_HEX_LENGTH + 1u) &&
+        buffer[CAL_CONTROL_TOKEN_HEX_LENGTH] == '\n')
+        count = CAL_CONTROL_TOKEN_HEX_LENGTH;
+    if (count != (ssize_t)CAL_CONTROL_TOKEN_HEX_LENGTH) {
+        errno = EINVAL;
+        return -1;
+    }
+    buffer[CAL_CONTROL_TOKEN_HEX_LENGTH] = '\0';
+    if (!cal_control_token_valid(buffer, buffer)) {
+        errno = EINVAL;
+        return -1;
+    }
+    memcpy(state->control_token, buffer, sizeof(state->control_token));
+    return 0;
+}
+
+static int configure_control_security(struct daemon_state *state)
+{
+    const char *bind_address = getenv("CALIBRATOR_CONTROL_BIND");
+    const char *allowed_peer = getenv("CALIBRATOR_CONTROL_PEER");
+    const char *token_file = getenv("CALIBRATOR_CONTROL_TOKEN_FILE");
+    if (bind_address == NULL)
+        bind_address = "127.0.0.1";
+    if (allowed_peer == NULL)
+        allowed_peer = "127.0.0.1";
+    if (token_file == NULL)
+        token_file = "/etc/calibratord/control.token";
+    if (inet_pton(AF_INET, bind_address, &state->control_bind) != 1 ||
+        state->control_bind.s_addr == 0 ||
+        inet_pton(AF_INET, allowed_peer, &state->control_peer) != 1 ||
+        state->control_peer.s_addr == 0)
+        return -1;
+    return load_control_token(state, token_file);
+}
+
+static int create_control_listener(const struct daemon_state *state)
 {
     struct sockaddr_in address;
     int enabled = 1;
@@ -394,7 +398,7 @@ static int create_control_listener(void)
     setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof(enabled));
     memset(&address, 0, sizeof(address));
     address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_ANY);
+    address.sin_addr = state->control_bind;
     address.sin_port = htons(CAL_CONTROL_PORT);
     if (bind(listener, (struct sockaddr *)&address, sizeof(address)) || listen(listener, 8)) {
         close(listener);
@@ -439,6 +443,8 @@ int main(void)
     if (cal_hw_open(&state.hw) != 0)
         goto fail;
     cal_hw_force_safe(&state.hw);
+    if (configure_control_security(&state) != 0)
+        goto fail;
     if (cal_rfdc_initialize(&state) != 0)
         goto fail;
     if (configure_udp(&state) != 0)
@@ -447,12 +453,15 @@ int main(void)
     if (state.event_fd < 0 || pthread_create(&state.event_thread, NULL, event_worker, &state) != 0)
         goto fail;
     state.event_thread_started = true;
-    listener = create_control_listener();
+    listener = create_control_listener(&state);
     if (listener < 0)
         goto fail;
 
     while (state.running) {
         char line[CAL_MAX_LINE];
+        struct cal_control_request request;
+        struct sockaddr_in peer;
+        socklen_t peer_length = sizeof(peer);
         struct pollfd ready = { .fd = listener, .events = POLLIN };
         ssize_t count;
         int poll_status = poll(&ready, 1, 250);
@@ -463,11 +472,16 @@ int main(void)
         }
         if (poll_status == 0)
             continue;
-        int client = accept4(listener, NULL, NULL, SOCK_CLOEXEC);
+        int client = accept4(listener, (struct sockaddr *)&peer, &peer_length, SOCK_CLOEXEC);
         if (client < 0) {
             if (errno == EINTR)
                 continue;
             goto fail;
+        }
+        if (peer.sin_family != AF_INET || peer.sin_addr.s_addr != state.control_peer.s_addr) {
+            send_error(client, "control peer is not allowed");
+            close(client);
+            continue;
         }
         count = cal_read_json_request(client, line, CAL_MAX_LINE, CAL_REQUEST_TIMEOUT_MS);
         if (count == CAL_JSON_LINE_TOO_LONG)
@@ -478,9 +492,12 @@ int main(void)
             send_error(client, "request timed out before newline");
         else if (count != CAL_JSON_LINE_COMPLETE)
             send_error(client, "request read failed");
-        else {
-            handle_request(&state, client, line);
-        }
+        else if (cal_parse_control_request(line, &request) != 0)
+            send_error(client, "invalid request");
+        else if (!cal_control_token_valid(state.control_token, request.auth))
+            send_error(client, "authentication failed");
+        else
+            handle_request(&state, client, &request);
         close(client);
     }
 
