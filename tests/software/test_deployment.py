@@ -183,7 +183,7 @@ class DeploymentContractTest(unittest.TestCase):
         self.assertIn("CALIBRATOR_XSCT_LIBTINFO_DIR", guide)
         self.assertIn("libtinfo.so.5", guide)
 
-    def test_gate_enabled_artifact_handoff_is_current_and_bounded(self) -> None:
+    def test_secure_petalinux_artifact_handoff_is_current_and_board_bounded(self) -> None:
         guide = (ROOT / "docs/deployment/calibrator-v1.md").read_text(encoding="utf-8")
         manifest = json.loads(
             (ROOT / "docs/deployment/petalinux-2025.2-artifacts.json").read_text(
@@ -191,8 +191,8 @@ class DeploymentContractTest(unittest.TestCase):
             )
         )
         self.assertIn("no bootable embedded rootfs/initramfs", guide)
-        self.assertIn("Gate-enabled PetaLinux artifact handoff", guide)
-        self.assertIn("build/petalinux_output_gate/", guide)
+        self.assertIn("Gate-enabled secure PetaLinux artifact handoff", guide)
+        self.assertIn("/home/petalinux/work/calibrator-secure-20260830", guide)
         self.assertIn(
             "a5a6a7a3c7eda7a0185a1666fcccbb7835424c29d4a66d8266193afdb43cbf70",
             guide,
@@ -212,8 +212,66 @@ class DeploymentContractTest(unittest.TestCase):
             ),
         )
         self.assertFalse(manifest["build_evidence"]["board_execution_claimed"])
-        self.assertEqual(manifest["deployment_status"], "superseded_do_not_deploy")
-        self.assertIn("DO NOT DEPLOY", guide)
+        self.assertTrue(manifest["build_evidence"]["wic_security_payload_inspected"])
+        self.assertFalse(manifest["build_evidence"]["control_token_preprovisioned"])
+        self.assertIs(
+            manifest["build_evidence"].get("artifacts_copied_to_windows"),
+            False,
+        )
+        self.assertIs(
+            manifest["build_evidence"].get("vm_to_windows_hashes_compared"),
+            False,
+        )
+        self.assertNotIn("vm_to_windows_hashes_match", manifest["build_evidence"])
+        self.assertIsNone(manifest["local_handoff_directory"])
+        self.assertEqual(
+            manifest["vm_source_directory"],
+            "/home/petalinux/work/calibrator-secure-20260830",
+        )
+        self.assertEqual(
+            manifest["build_evidence"]["untargeted_petalinux_build"],
+            "6498/6498 tasks succeeded; 6474 reused",
+        )
+        self.assertEqual(
+            manifest["deployment_status"],
+            "secure_image_generated_board_execution_pending",
+        )
+        self.assertEqual(
+            manifest["runtime_source_git_commit"],
+            "9b3b14ff29979bc25b41b30623f7b35b066e634f",
+        )
+        artifacts = {artifact["name"]: artifact for artifact in manifest["artifacts"]}
+        self.assertEqual(
+            artifacts["petalinux-sdimage.wic"],
+            {
+                "name": "petalinux-sdimage.wic",
+                "bytes": 6442455040,
+                "sha256": "352e12ce7663d02c5e08adf5ddde33c3dba3adf19d4831451aca86df57efa041",
+            },
+        )
+        self.assertEqual(
+            artifacts["rootfs.ext4"],
+            {
+                "name": "rootfs.ext4",
+                "bytes": 200202240,
+                "sha256": "e22f74dc67cf612598b35ddfae8753d00670ddf7f60783ffc3a1bf0c031f985b",
+            },
+        )
+        self.assertEqual(
+            artifacts["rootfs.tar.gz"],
+            {
+                "name": "rootfs.tar.gz",
+                "bytes": 46750951,
+                "sha256": "4e4326c5893afdd7a03845ec2ce4acab6b8b7e099b22c79afa2319835081a001",
+            },
+        )
+        payload = {entry["path"]: entry["bytes"] for entry in manifest["rootfs_payload"]}
+        self.assertEqual(payload["/usr/sbin/calibratord"], 67632)
+        self.assertEqual(payload["/usr/lib/systemd/system/calibratord.service"], 498)
+        self.assertEqual(payload["/etc/default/calibratord"], 435)
+        self.assertIn("physical-board execution", guide)
+        self.assertIn("remains pending", guide)
+        self.assertNotIn("DO NOT DEPLOY this archived WIC/rootfs", guide)
 
     def test_vitis_platform_script_is_xsa_driven_and_version_locked(self) -> None:
         script = (ROOT / "software/vitis/create_linux_platform.py").read_text("utf-8")

@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "deployment_status": "superseded_do_not_deploy",
-  "superseded_reason": "The archived rootfs predates authenticated, peer-restricted TCP control. Rebuild from the current source before board deployment.",
-  "verification_date": "2026-08-28",
-  "runtime_source_git_commit": "d039dcf582e6cea1a69c569f3890b9b4e9825289",
+  "deployment_status": "secure_image_generated_board_execution_pending",
+  "board_execution_pending_reason": "The current authenticated image passed offline build and filesystem inspection but has not yet completed physical-board boot, RFDC, DMA, network, eMMC, or two-hour acceptance testing.",
+  "verification_date": "2026-08-31",
+  "runtime_source_git_commit": "9b3b14ff29979bc25b41b30623f7b35b066e634f",
   "toolchain": {
     "host_os": "Ubuntu 22.04.5 LTS",
     "vivado_version": "2025.2",
@@ -24,14 +24,17 @@
     "route_failures": 0,
     "drc_errors": 0
   },
-  "vm_source_directory": "/home/petalinux/work/calibrator-petalinux/images/linux",
-  "local_handoff_directory": "build/petalinux_output_gate",
+  "vm_source_directory": "/home/petalinux/work/calibrator-secure-20260830",
+  "local_handoff_directory": null,
   "build_evidence": {
-    "untargeted_petalinux_build": "6498/6498 tasks succeeded; 6438 reused",
+    "untargeted_petalinux_build": "6498/6498 tasks succeeded; 6474 reused",
     "dac_safety_gate_in_bitstream": true,
-    "vm_to_windows_hashes_match": true,
+    "artifacts_copied_to_windows": false,
+    "vm_to_windows_hashes_compared": false,
     "wic_boot_partition_inspected": true,
     "wic_root_partition_inspected": true,
+    "wic_security_payload_inspected": true,
+    "control_token_preprovisioned": false,
     "boot_bin_contains_named_system_bit_partition": true,
     "wic_boot_partition_contains_boot_bin": true,
     "board_execution_claimed": false
@@ -40,16 +43,16 @@
     { "name": "BOOT.BIN", "bytes": 36177568, "sha256": "42dca14ef82ff06109c4ccf52f9dff88aee77bb7d682c4058150685261b874c5" },
     { "name": "Image", "bytes": 32371200, "sha256": "a7660de82ddff9fc6b7d49b5c82df21e88f4e2cc534339f4269cd6d7399c3ba5" },
     { "name": "boot.scr", "bytes": 3837, "sha256": "d54bbcd5bb8112c53d22d340752c80309c8c9dcf1e91edc86448eef3416c6309" },
-    { "name": "rootfs.tar.gz", "bytes": 46752507, "sha256": "7d97cbf82fad6b26a5127a030f588cb36368a12ad41af1af12fc166c93b0040f" },
-    { "name": "rootfs.ext4", "bytes": 200197120, "sha256": "1a87221b21f4944ff8146a72d6244fb19239242614b560d004fb7b69ac4e900a" },
-    { "name": "petalinux-sdimage.wic", "bytes": 6442455040, "sha256": "4d6946121e1d896b12ed9ed763bbb1afddbdec0fb75d4e4424b7d819e3d83076" },
+    { "name": "rootfs.tar.gz", "bytes": 46750951, "sha256": "4e4326c5893afdd7a03845ec2ce4acab6b8b7e099b22c79afa2319835081a001" },
+    { "name": "rootfs.ext4", "bytes": 200202240, "sha256": "e22f74dc67cf612598b35ddfae8753d00670ddf7f60783ffc3a1bf0c031f985b" },
+    { "name": "petalinux-sdimage.wic", "bytes": 6442455040, "sha256": "352e12ce7663d02c5e08adf5ddde33c3dba3adf19d4831451aca86df57efa041" },
     { "name": "system.dtb", "bytes": 42825, "sha256": "e3089512849a4593cb0e62c20a26f49773e437654974828117a13b4eda3bb0ae" },
     { "name": "system.bit", "bytes": 34437496, "sha256": "a5a6a7a3c7eda7a0185a1666fcccbb7835424c29d4a66d8266193afdb43cbf70" }
   ],
   "rootfs_payload": [
-    { "path": "/usr/sbin/calibratord", "bytes": 67560 },
-    { "path": "/usr/lib/systemd/system/calibratord.service", "bytes": 487 },
-    { "path": "/etc/default/calibratord", "bytes": 156 },
+    { "path": "/usr/sbin/calibratord", "bytes": 67632 },
+    { "path": "/usr/lib/systemd/system/calibratord.service", "bytes": 498 },
+    { "path": "/etc/default/calibratord", "bytes": 435 },
     { "path": "/usr/lib/modules/6.12.40-xilinx-g31626ef92ff1/updates/calibrator_dma_proxy.ko", "bytes": 12288 }
   ]
 }

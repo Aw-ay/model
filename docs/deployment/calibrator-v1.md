@@ -173,43 +173,48 @@ closed while the DAC remains muted. Set the UDP receiver address in
 service; it powers off Linux only when `CALIBRATOR_ALLOW_POWEROFF=1` is
 explicitly enabled.
 
-### Gate-enabled PetaLinux artifact handoff — superseded (2026-08-28)
+### Gate-enabled secure PetaLinux artifact handoff — offline-inspected (2026-08-31)
 
-**DO NOT DEPLOY this archived WIC/rootfs.** It was built from `d039dcf`, before
-the authenticated and peer-restricted TCP control changes. It is retained only
-as historical Vivado/PetaLinux reproducibility evidence. A fresh WIC must be
-built from the current source, reinspected, and recorded with new hashes before
-board deployment or eMMC programming.
+The authenticated and peer-restricted runtime from commit `9b3b14f` was rebuilt
+with PetaLinux 2025.2 in the Ubuntu 22.04.5 VM. The untargeted incremental build
+completed `6,498/6,498` tasks successfully, with 6,474 reused. Before the build,
+SHA-256 checks confirmed that the ten daemon, protocol-header, recipe, default
+and systemd-unit inputs in the VM were byte-identical to the current branch.
 
-That historical PetaLinux 2025.2 build in the Ubuntu 22.04.5 VM completed its
-untargeted incremental build with `6,498/6,498` tasks successful, of which
-6,438 were reused. The exact generated
-artifacts were then verified in
-`/home/petalinux/work/calibrator-petalinux/images/linux`, copied to the
-ignored local handoff directory `build/petalinux_output_gate/`, and hashed again on
-Windows.  Each local SHA-256 exactly matched the VM source.  The
-machine-readable source manifest is
-[`petalinux-2025.2-artifacts.json`](petalinux-2025.2-artifacts.json); an
-identical copy is placed alongside the ignored local artifacts.
+The fresh release is retained in
+`/home/petalinux/work/calibrator-secure-20260830`. It has not been copied back
+to a Windows handoff directory; the older ignored `build/petalinux_output_gate/`
+contents remain superseded historical evidence. No VM-to-Windows hash
+comparison is claimed for the fresh release. The machine-readable record is
+[`petalinux-2025.2-artifacts.json`](petalinux-2025.2-artifacts.json).
 
 | Artifact | Bytes | SHA-256 |
 | --- | ---: | --- |
 | `BOOT.BIN` | 36,177,568 | `42dca14ef82ff06109c4ccf52f9dff88aee77bb7d682c4058150685261b874c5` |
 | `Image` | 32,371,200 | `a7660de82ddff9fc6b7d49b5c82df21e88f4e2cc534339f4269cd6d7399c3ba5` |
 | `boot.scr` | 3,837 | `d54bbcd5bb8112c53d22d340752c80309c8c9dcf1e91edc86448eef3416c6309` |
-| `rootfs.tar.gz` | 46,752,507 | `7d97cbf82fad6b26a5127a030f588cb36368a12ad41af1af12fc166c93b0040f` |
-| `rootfs.ext4` | 200,197,120 | `1a87221b21f4944ff8146a72d6244fb19239242614b560d004fb7b69ac4e900a` |
-| `petalinux-sdimage.wic` | 6,442,455,040 | `4d6946121e1d896b12ed9ed763bbb1afddbdec0fb75d4e4424b7d819e3d83076` |
+| `rootfs.tar.gz` | 46,750,951 | `4e4326c5893afdd7a03845ec2ce4acab6b8b7e099b22c79afa2319835081a001` |
+| `rootfs.ext4` | 200,202,240 | `e22f74dc67cf612598b35ddfae8753d00670ddf7f60783ffc3a1bf0c031f985b` |
+| `petalinux-sdimage.wic` | 6,442,455,040 | `352e12ce7663d02c5e08adf5ddde33c3dba3adf19d4831451aca86df57efa041` |
 | `system.dtb` | 42,825 | `e3089512849a4593cb0e62c20a26f49773e437654974828117a13b4eda3bb0ae` |
 | `system.bit` | 34,437,496 | `a5a6a7a3c7eda7a0185a1666fcccbb7835424c29d4a66d8266193afdb43cbf70` |
 
-The `rootfs.ext4` inspection proves the runtime payload: `/usr/sbin/calibratord`
-(67,560 bytes), `/usr/lib/systemd/system/calibratord.service` (487 bytes),
-`/etc/default/calibratord` (156 bytes), and
+The rootfs and direct read-only WIC inspections prove the current runtime
+payload: `/usr/sbin/calibratord` (67,632 bytes),
+`/usr/lib/systemd/system/calibratord.service` (498 bytes),
+`/etc/default/calibratord` (435 bytes), and
 `/usr/lib/modules/6.12.40-xilinx-g31626ef92ff1/updates/calibrator_dma_proxy.ko`
-(12,288 bytes).  A fresh Bootgen read finds six boot images, including the
-FSBL, PL `system.bit`, BL31, `system.dtb`, and U-Boot.  `fdisk` identifies a
-bootable 2 GiB FAT32 WIC partition and a 4 GiB Linux partition. The FAT
+(12,288 bytes). The root-owned `/etc/calibratord` directory is mode `0700`
+and empty: `control.token` is deliberately not preprovisioned. The enabled
+systemd service keeps `NoNewPrivileges`, a strict read-only system view,
+private temporary storage and `UMask=0077`. The shipped TCP defaults bind to
+and authorize only `127.0.0.1` until commissioning supplies explicit GEM3 and
+operator-PC addresses.
+
+The unchanged deterministic `BOOT.BIN` contains the previously inspected six
+boot images, including the FSBL, PL `system.bit`, BL31, `system.dtb`, and
+U-Boot. WIC inspection identifies a 2 GiB FAT32 partition and a 4 GiB ext4
+partition. The FAT
 partition contains `BOOT.BIN`, `Image`, `boot.scr`, and the rebuilt
 `system.dtb`. The DTB selects `root=/dev/mmcblk0p2 rootwait rw`; the unchanged
 kernel has no bootable embedded rootfs/initramfs. Direct read-only WIC
@@ -219,6 +224,11 @@ autoload, `of_id=generic-uio`, the DMA proxy module, and the daemon's absolute
 TCP request-deadline diagnostic. The packaged `system.bit` hash exactly
 matches the gate-enabled Vivado bitstream and the bitstream embedded in the
 recorded XSA.
+
+This is the current commissioning candidate, but physical-board execution
+remains pending. Actual boot, driver probe, RFDC/MTS, DMA, GEM3, eMMC cold boot,
+and the two-hour/100,000-event acceptance are not claimed by this offline
+artifact inspection.
 
 ## Windows control and capture
 
