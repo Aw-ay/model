@@ -93,6 +93,17 @@ class CalibratorVivadoTclTest(unittest.TestCase):
         self.assertIn("calibrator_control_0/dac_mute_o", script)
         self.assertIn("calibrator_control_cdc_0/dac_loopback_enable_rx_o", script)
         self.assertIn("calibrator_control_cdc_0/dac_mute_rx_o", script)
+        for signal in (
+            "calibration_integer_delay",
+            "calibration_fractional_delay",
+            "calibration_gain_real",
+            "calibration_gain_imag",
+            "calibration_flags",
+        ):
+            self.assertIn(f"calibrator_control_0/{signal}_o", script)
+            self.assertIn(f"calibrator_control_cdc_0/{signal}_ctrl_i", script)
+            self.assertIn(f"calibrator_control_cdc_0/{signal}_rx_o", script)
+            self.assertIn(f"calibrator_core_0/{signal}_i", script)
         self.assertIn("dac${channel}_mute_gate/loopback_enable_i", script)
         self.assertIn("dac${channel}_mute_gate/mute_i", script)
         self.assertIn("dac${channel}_mute_gate/aclk", script)

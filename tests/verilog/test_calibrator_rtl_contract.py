@@ -40,6 +40,22 @@ class CalibratorRtlContractTest(unittest.TestCase):
         self.assertIn("address >= 12'h100", self.control)
         self.assertIn("address < 12'h200", self.control)
 
+    def test_control_commits_a_compact_active_calibration_snapshot(self) -> None:
+        """The RX domain must never observe live, partly-written shadow words."""
+        for declaration in (
+            "output wire [87:0] calibration_integer_delay_o",
+            "output wire [159:0] calibration_fractional_delay_o",
+            "output wire [191:0] calibration_gain_real_o",
+            "output wire [191:0] calibration_gain_imag_o",
+            "output wire [7:0] calibration_flags_o",
+        ):
+            self.assertIn(declaration, self.control)
+        self.assertIn("channel_active", self.control)
+        self.assertIn("channel_active[channel_index][word_index] <=", self.control)
+        self.assertIn("channel_shadow[channel_index][word_index]", self.control)
+        self.assertIn("ERROR_COMMIT_WHILE_RUNNING", self.control)
+        self.assertIn("ERROR_INVALID_CALIBRATION", self.control)
+
     def test_all_abi_owned_reset_values_come_from_the_generated_header(self) -> None:
         for name in (
             "CONTROL", "DETECT_THRESHOLD", "NOISE_ALPHA_Q31",

@@ -36,8 +36,16 @@ module calibrator_control_axi (
     output wire dac_loopback_enable_o,
     output wire dac_mute_o,
     output wire [31:0] detect_threshold_o,
+    output wire [87:0] calibration_integer_delay_o,
+    output wire [159:0] calibration_fractional_delay_o,
+    output wire [191:0] calibration_gain_real_o,
+    output wire [191:0] calibration_gain_imag_o,
+    output wire [7:0] calibration_flags_o,
     output reg [31:0] config_version_o
 );
+
+    localparam [31:0] ERROR_COMMIT_WHILE_RUNNING = 32'h00000002;
+    localparam [31:0] ERROR_INVALID_CALIBRATION = 32'h00000004;
 
     reg [31:0] control_reg;
     reg [31:0] detect_threshold_reg;
@@ -47,6 +55,7 @@ module calibrator_control_axi (
     reg [31:0] range_low_reg;
     reg [31:0] local_error_reg;
     reg [31:0] channel_shadow [0:7][0:7];
+    reg [31:0] channel_active [0:7][0:4];
     reg [11:0] awaddr_latch;
     reg [31:0] wdata_latch;
     reg [3:0] wstrb_latch;
@@ -54,11 +63,25 @@ module calibrator_control_axi (
     reg w_pending;
     integer channel_index;
     integer word_index;
+    genvar output_channel;
 
     assign acquisition_enable_o = control_reg[0];
     assign dac_loopback_enable_o = control_reg[1];
     assign dac_mute_o = control_reg[2];
     assign detect_threshold_o = detect_threshold_reg;
+    generate
+        for (output_channel = 0; output_channel < 8; output_channel = output_channel + 1) begin : pack_active_calibration
+            assign calibration_integer_delay_o[output_channel * 11 +: 11] =
+                channel_active[output_channel][0][10:0];
+            assign calibration_fractional_delay_o[output_channel * 20 +: 20] =
+                channel_active[output_channel][1][19:0];
+            assign calibration_gain_real_o[output_channel * 24 +: 24] =
+                channel_active[output_channel][2][23:0];
+            assign calibration_gain_imag_o[output_channel * 24 +: 24] =
+                channel_active[output_channel][3][23:0];
+            assign calibration_flags_o[output_channel] = channel_active[output_channel][4][0];
+        end
+    endgenerate
     assign S_AXI_awready = !aw_pending && !S_AXI_bvalid;
     assign S_AXI_wready = !w_pending && !S_AXI_bvalid;
     assign S_AXI_bresp = 2'b00;
@@ -86,15 +109,26 @@ module calibrator_control_axi (
     );
         integer selected_channel;
         integer selected_word;
+        integer commit_channel;
+        integer commit_word;
+        reg [31:0] merged_value;
+        reg calibration_value_valid;
         begin
             case (address)
                 12'h008: control_reg <= merge_wstrb(control_reg, value, strobes) & 32'h00000007;
                 12'h02C: local_error_reg <= local_error_reg & ~value;
                 12'h030: begin
-                    if (!control_reg[0])
+                    if (!(strobes[0] && value[0])) begin
+                        // Writing a cleared command bit is a no-op.
+                    end else if (!control_reg[0]) begin
+                        for (commit_channel = 0; commit_channel < 8; commit_channel = commit_channel + 1)
+                            for (commit_word = 0; commit_word < 5; commit_word = commit_word + 1)
+                                channel_active[commit_channel][commit_word] <=
+                                    channel_shadow[commit_channel][commit_word];
                         config_version_o <= config_version_o + 1'b1;
-                    else
-                        local_error_reg <= local_error_reg | 32'h00000002;
+                    end else begin
+                        local_error_reg <= local_error_reg | ERROR_COMMIT_WHILE_RUNNING;
+                    end
                 end
                 12'h034: detect_threshold_reg <= merge_wstrb(detect_threshold_reg, value, strobes);
                 12'h038: noise_alpha_reg <= merge_wstrb(noise_alpha_reg, value, strobes) & 32'h7FFFFFFF;
@@ -105,8 +139,22 @@ module calibrator_control_axi (
                     if (address >= 12'h100 && address < 12'h200) begin
                         selected_channel = (address - 12'h100) >> 5;
                         selected_word = address[4:2];
-                        channel_shadow[selected_channel][selected_word] <=
-                            merge_wstrb(channel_shadow[selected_channel][selected_word], value, strobes);
+                        merged_value = merge_wstrb(
+                            channel_shadow[selected_channel][selected_word], value, strobes
+                        );
+                        calibration_value_valid = 1'b0;
+                        case (selected_word)
+                            0: calibration_value_valid = merged_value <= 32'd2047;
+                            1: calibration_value_valid = merged_value <= 32'd1048575;
+                            2, 3: calibration_value_valid =
+                                merged_value[31:24] == {8{merged_value[23]}};
+                            4: calibration_value_valid = merged_value[31:1] == 31'd0;
+                            default: calibration_value_valid = 1'b0;
+                        endcase
+                        if (calibration_value_valid)
+                            channel_shadow[selected_channel][selected_word] <= merged_value;
+                        else
+                            local_error_reg <= local_error_reg | ERROR_INVALID_CALIBRATION;
                     end
                 end
             endcase
@@ -177,8 +225,11 @@ module calibrator_control_axi (
             S_AXI_rvalid <= 1'b0;
             S_AXI_rdata <= 32'd0;
             for (channel_index = 0; channel_index < 8; channel_index = channel_index + 1)
-                for (word_index = 0; word_index < 8; word_index = word_index + 1)
+                for (word_index = 0; word_index < 8; word_index = word_index + 1) begin
                     channel_shadow[channel_index][word_index] <= channel_reset(word_index);
+                    if (word_index < 5)
+                        channel_active[channel_index][word_index] <= channel_reset(word_index);
+                end
         end else begin
             if (S_AXI_awready && S_AXI_awvalid) begin
                 awaddr_latch <= S_AXI_awaddr;

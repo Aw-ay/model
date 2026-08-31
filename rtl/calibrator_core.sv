@@ -10,6 +10,11 @@ module calibrator_core (
     input  wire          acquisition_enable_i,
     input  wire [31:0]   detect_threshold_i,
     input  wire [31:0]   config_version_i,
+    input  wire [87:0]   calibration_integer_delay_i,
+    input  wire [159:0]  calibration_fractional_delay_i,
+    input  wire [191:0]  calibration_gain_real_i,
+    input  wire [191:0]  calibration_gain_imag_i,
+    input  wire [7:0]    calibration_flags_i,
 
     (* X_INTERFACE_INFO = "xilinx.com:interface:axis:1.0 s00_axis TDATA" *) input  wire [63:0]  s00_axis_tdata,
     (* X_INTERFACE_INFO = "xilinx.com:interface:axis:1.0 s00_axis TVALID" *) input  wire         s00_axis_tvalid,
