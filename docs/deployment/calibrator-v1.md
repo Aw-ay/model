@@ -119,13 +119,18 @@ python3 software/petalinux/build_sdk.py \
   /home/petalinux/work/calibrator-secure-20260830 \
   /home/petalinux/work/calibrator-sdk-2025.2
 source /home/petalinux/work/calibrator-sdk-2025.2/environment-setup-*
+python3 software/petalinux/build_calibratord.py \
+  /home/petalinux/work/calibratord-sdk-build
 ```
 
 The helper refuses a stale output directory and does not report success until
 the environment setup file, AArch64 compiler, `metal/device.h`, `metal/sys.h`
 and `xrfdc.h` all exist. Successful completion prints
 `CALIBRATOR_SDK_VERIFY_OK=1` and the four resolved paths needed by the
-application build.
+application build. The application helper then compiles the repository source
+with the SDK flags and rejects a non-AArch64 ELF or an ELF without
+`libmetal`, `librfdc` and `libc` dependencies. Its success marker is
+`CALIBRATORD_SDK_BUILD_OK=1`.
 
 ## Build PetaLinux and an eMMC image
 
