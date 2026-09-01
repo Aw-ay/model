@@ -75,27 +75,31 @@ the generated Tcl fail.
 
 ## Vitis 2025.2 Linux platform
 
-The platform is generated only from the embedded-bit XSA:
+The platform is generated only from the embedded-bit XSA. On Windows use the
+XSCT launcher, which validates the 2025.2 tool payload, refuses stale output
+directories, and verifies the exact generated XPFM instead of trusting the
+XSCT process exit code alone:
 
 ```powershell
-& 'C:\AMDDesignTools\2025.2\Vitis\bin\vitis.bat' -s `
-  software\vitis\create_linux_platform.py `
+python software\vitis\build_linux_platform.py `
+  --vitis-root 'C:\AMDDesignTools\2025.2\Vitis' `
   build\calibrator_project_gate\calibrator.xsa `
-  build\vitis_workspace
+  build\vitis_platform
 ```
 
-On the current workstation this correctly stops before generation because the
-2025.2 installation lacks:
+The required ZynqMP Embedded Linux payload is:
 
 ```text
 C:\AMDDesignTools\2025.2\Vitis\data\emulation\platforms\zynqmp\sw\a53_linux\qemu
 ```
 
-Repair the 2025.2 installation by adding its ZynqMP Embedded Linux platform
-payload, then rerun the command. Do not copy the available 2025.1 payload into
-2025.2: mixed tool versions are explicitly rejected. Successful completion
-prints `CALIBRATOR_XPFM=<path>` and also verifies that an `.xpfm` was actually
-created, because the Vitis launcher may return zero after a Python-side error.
+Do not copy a 2025.1 payload into 2025.2: mixed tool versions are explicitly
+rejected. Successful completion prints `CALIBRATOR_XPFM=<path>`. The existing
+Unified Vitis Python flow in `create_linux_platform.py` remains available, but
+the XSCT flow is the qualified Windows path because it does not depend on the
+Unified Vitis Server Java selector. Delete or choose a new output directory
+before rebuilding; an existing directory is rejected to prevent stale XPFM
+reuse.
 
 ## Build PetaLinux and an eMMC image
 

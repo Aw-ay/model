@@ -305,6 +305,164 @@ class DeploymentContractTest(unittest.TestCase):
             (fresh / "unrelated.xpfm").write_text("stale", encoding="utf-8")
             self.assertEqual(module.find_built_xpfm(fresh), expected)
 
+    def test_xsct_platform_launcher_rejects_false_success_without_xpfm(self) -> None:
+        module_path = ROOT / "software/vitis/build_linux_platform.py"
+        spec = importlib.util.spec_from_file_location("calibrator_xsct_platform", module_path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            vitis_root = root / "AMDDesignTools/2025.2/Vitis"
+            qemu = vitis_root / "data/emulation/platforms/zynqmp/sw/a53_linux/qemu"
+            qemu.mkdir(parents=True)
+            xsct = vitis_root / "bin/xsct.bat"
+            xsct.parent.mkdir(parents=True)
+            xsct.write_text("fake xsct", encoding="utf-8")
+            xsa = root / "calibrator.xsa"
+            xsa.write_text("fake xsa", encoding="utf-8")
+
+            def false_success(*args, **kwargs):
+                return subprocess.CompletedProcess(args[0], 0, "ERROR: Tcl failed\n", "")
+
+            with self.assertRaisesRegex(RuntimeError, "exactly one calibrator_platform.xpfm"):
+                module.build_xsct_platform(
+                    vitis_root=vitis_root,
+                    xsa=xsa,
+                    output_dir=root / "output",
+                    runner=false_success,
+                )
+
+    def test_xsct_platform_launcher_refuses_an_existing_output_directory(self) -> None:
+        module_path = ROOT / "software/vitis/build_linux_platform.py"
+        spec = importlib.util.spec_from_file_location("calibrator_xsct_platform", module_path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output_dir = root / "output"
+            output_dir.mkdir()
+
+            def false_success(*args, **kwargs):
+                return subprocess.CompletedProcess(args[0], 0, "", "")
+
+            with self.assertRaisesRegex(RuntimeError, "refusing to reuse existing output directory"):
+                module.build_xsct_platform(
+                    vitis_root=root / "AMDDesignTools/2025.2/Vitis",
+                    xsa=root / "calibrator.xsa",
+                    output_dir=output_dir,
+                    runner=false_success,
+                )
+
+    def test_xsct_platform_launcher_builds_the_expected_fresh_xpfm(self) -> None:
+        module_path = ROOT / "software/vitis/build_linux_platform.py"
+        spec = importlib.util.spec_from_file_location("calibrator_xsct_platform", module_path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            vitis_root = root / "AMDDesignTools/2025.2/Vitis"
+            qemu = vitis_root / "data/emulation/platforms/zynqmp/sw/a53_linux/qemu"
+            qemu.mkdir(parents=True)
+            xsct = vitis_root / "bin/xsct.bat"
+            xsct.parent.mkdir(parents=True)
+            xsct.write_text("fake xsct", encoding="utf-8")
+            xsa = root / "calibrator.xsa"
+            xsa.write_text("fake xsa", encoding="utf-8")
+            output_dir = (root / "output").resolve()
+            expected = output_dir / "calibrator_platform/export/calibrator_platform/calibrator_platform.xpfm"
+            calls = []
+
+            def successful_build(command, **kwargs):
+                calls.append(command)
+                expected.parent.mkdir(parents=True)
+                expected.write_text("platform", encoding="utf-8")
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    f"CALIBRATOR_XPFM={expected}\n",
+                    "",
+                )
+
+            built = module.build_xsct_platform(
+                vitis_root=vitis_root,
+                xsa=xsa,
+                output_dir=output_dir,
+                runner=successful_build,
+            )
+
+            self.assertEqual(built, expected)
+            self.assertEqual(len(calls), 1)
+            command_text = " ".join(str(part) for part in calls[0])
+            self.assertIn(str(xsct), command_text)
+            self.assertIn("-quiet", command_text)
+            self.assertIn("create_linux_platform.tcl", command_text)
+            self.assertIn(str(xsa), command_text)
+            self.assertIn(str(output_dir), command_text)
+
+    def test_xsct_platform_launcher_rejects_a_mixed_vitis_version(self) -> None:
+        module_path = ROOT / "software/vitis/build_linux_platform.py"
+        spec = importlib.util.spec_from_file_location("calibrator_xsct_platform", module_path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            vitis_root = root / "AMDDesignTools/2025.1/Vitis"
+            (vitis_root / "data/emulation/platforms/zynqmp/sw/a53_linux/qemu").mkdir(parents=True)
+            xsct = vitis_root / "bin/xsct.bat"
+            xsct.parent.mkdir(parents=True)
+            xsct.write_text("fake xsct", encoding="utf-8")
+            xsa = root / "calibrator.xsa"
+            xsa.write_text("fake xsa", encoding="utf-8")
+
+            def false_success(*args, **kwargs):
+                return subprocess.CompletedProcess(args[0], 0, "", "")
+
+            with self.assertRaisesRegex(RuntimeError, "Vitis 2025.2 required"):
+                module.build_xsct_platform(
+                    vitis_root=vitis_root,
+                    xsa=xsa,
+                    output_dir=root / "output",
+                    runner=false_success,
+                )
+
+    def test_xsct_platform_launcher_requires_the_zynqmp_linux_payload(self) -> None:
+        module_path = ROOT / "software/vitis/build_linux_platform.py"
+        spec = importlib.util.spec_from_file_location("calibrator_xsct_platform", module_path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            vitis_root = root / "AMDDesignTools/2025.2/Vitis"
+            xsct = vitis_root / "bin/xsct.bat"
+            xsct.parent.mkdir(parents=True)
+            xsct.write_text("fake xsct", encoding="utf-8")
+            xsa = root / "calibrator.xsa"
+            xsa.write_text("fake xsa", encoding="utf-8")
+
+            def false_success(*args, **kwargs):
+                return subprocess.CompletedProcess(args[0], 0, "", "")
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Vitis Embedded ZynqMP Linux payload is incomplete",
+            ):
+                module.build_xsct_platform(
+                    vitis_root=vitis_root,
+                    xsa=xsa,
+                    output_dir=root / "output",
+                    runner=false_success,
+                )
+
     def test_petalinux_build_script_locks_2025_2_and_packages_boot_and_wic(self) -> None:
         script = (ROOT / "software/petalinux/build_image.sh").read_text("utf-8")
         self.assertIn('REQUIRED_VERSION="2025.2"', script)
