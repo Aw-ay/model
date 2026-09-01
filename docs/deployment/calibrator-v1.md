@@ -101,6 +101,32 @@ Unified Vitis Server Java selector. Delete or choose a new output directory
 before rebuilding; an existing directory is rejected to prevent stale XPFM
 reuse.
 
+The qualified workstation run produced and re-imported
+`calibrator_platform.xpfm`. The imported platform reports the `linux_a53`
+domain, `psu_cortexa53` processor and Linux OS. A Windows-only Linux
+application probe reaches that domain, but the Windows process has no AArch64
+Linux compiler. The independent application compile therefore runs inside the
+Ubuntu VM with the PetaLinux SDK/sysroot.
+
+Generate that SDK from the already-built PetaLinux project in the Ubuntu VM;
+this is an incremental SDK task and does not recreate the Vivado or PetaLinux
+project:
+
+```bash
+source ~/petalinux/2025.2/settings.sh
+cd /path/to/RFSOC-model-calibrator
+python3 software/petalinux/build_sdk.py \
+  /home/petalinux/work/calibrator-secure-20260830 \
+  /home/petalinux/work/calibrator-sdk-2025.2
+source /home/petalinux/work/calibrator-sdk-2025.2/environment-setup-*
+```
+
+The helper refuses a stale output directory and does not report success until
+the environment setup file, AArch64 compiler, `metal/device.h`, `metal/sys.h`
+and `xrfdc.h` all exist. Successful completion prints
+`CALIBRATOR_SDK_VERIFY_OK=1` and the four resolved paths needed by the
+application build.
+
 ## Build PetaLinux and an eMMC image
 
 Use a supported Ubuntu 22.04 VM with PetaLinux 2025.2 installed and sourced:
@@ -264,6 +290,9 @@ Verified on this workstation:
 - threshold-hit PDW plus exact 16-before/16-after IQ capture skeleton;
 - common ABI generation across RTL/C/device-tree/Python;
 - C/Python UDP byte and CRC equivalence;
+- Vitis 2025.2 XPFM generation and Linux A53 domain re-import;
+- AArch64 `calibratord` ELF and all four runtime library dependencies in the
+  packaged root filesystem;
 - host control, reassembly, sequence accounting and archive tests.
 
 Not yet release-verified:
@@ -276,8 +305,12 @@ Not yet release-verified:
 2. The PetaLinux image and runtime payload are now built and hash-verified,
    but their actual boot, service start, DMA, RFDC and network behavior remain
    board-only gates.
-3. The Vitis `.xpfm` is blocked by the incomplete local 2025.2 installation
-   described above.
+3. The Vitis `.xpfm` is generated and re-imports correctly. A fresh Linux
+   application reaches `linux_a53`, but its compiler discovery currently stops
+   at the missing `aarch64-linux-gnu-gcc`. Generate and validate the PetaLinux
+   SDK/sysroot in the Ubuntu VM, then complete the independent application
+   compile there. The current VM cannot start until the Windows
+   `VBoxSup` driver service is started by an administrator.
 4. JTAG load, real RFDC clocks/SYSREF, MTS, low-power RF loopback, GEM3 traffic,
    ten cold boots, eMMC boot and the two-hour/100,000-event acceptance require
    the physical board and have not been claimed.
