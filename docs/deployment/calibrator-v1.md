@@ -114,9 +114,10 @@ project:
 
 ```bash
 source ~/petalinux/2025.2/settings.sh
+export CALIBRATOR_XSCT_LIBTINFO_DIR="$HOME/.local/calibrator-xsct-libtinfo5/root/lib/x86_64-linux-gnu"
 cd /path/to/RFSOC-model-calibrator
 python3 software/petalinux/build_sdk.py \
-  /home/petalinux/work/calibrator-secure-20260830 \
+  /home/petalinux/work/calibrator-petalinux \
   /home/petalinux/work/calibrator-sdk-2025.2
 source /home/petalinux/work/calibrator-sdk-2025.2/environment-setup-*
 python3 software/petalinux/build_calibratord.py \
@@ -162,8 +163,11 @@ test -f "$CALIBRATOR_XSCT_LIBTINFO_DIR/libtinfo.so.5"
 
 `build_image.sh` uses that directory only for its parse-time launcher and the
 four XSCT-invoking recipes (`device-tree`, `bitstream-extraction`,
-`pmu-firmware`, and `fsbl-firmware`); normal tasks keep both `LD_PRELOAD` and
-`LIBRARY_PATH` empty.
+`pmu-firmware`, and `fsbl-firmware`). `build_sdk.py` passes the same directory
+through `LIBRARY_PATH` while keeping `LD_PRELOAD` unset. During SDK generation
+it temporarily restores the host CRT directory only for `gcc-crosssdk`, then
+restores `build/conf/local.conf` byte-for-byte; normal tasks remain free of a
+global preload.
 
 The script refuses an existing destination, verifies Ubuntu/tool versions,
 creates a ZynqMP project, imports the XSA and repository `meta-user` layer,
