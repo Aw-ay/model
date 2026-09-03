@@ -62,6 +62,7 @@
 | Discovery provenance | `generated_tcl_sha256` always means discovery Tcl | [architecture design](../superpowers/specs/2026-08-11-ip-architecture-normalization-design.md) | Realization Tcl changes do not make the catalog lock self-referential. |
 | Connected shell | exact-part disk project, declared cells only, generated Tcl only | [connected-shell design](../superpowers/specs/2026-08-13-connected-rfdc-shell-design.md) | Manual BD/Tcl edits and BD automation-inserted undeclared cells are invalid. |
 | Reset release | separate control/RX/TX reset controllers and explicit active-high clock-stable qualifications | [connected-shell design](../superpowers/specs/2026-08-13-connected-rfdc-shell-design.md) | A reset synchronized in one domain cannot be reused in another. |
+| Current connected-OOC provenance | Task 4 hardening code is CLEAN; fresh execution is blocked before catalog by unavailable Python 3.12 | [tracked evidence bundle](connected_evidence_bundle.json), [tracked environment manifest](environment_manifest.json) | Recreate a compliant Python 3.12 environment, then rerun catalog, RFDC probe, and connected OOC; no prior report is current evidence. |
 
 ## Event and Software Contracts
 
@@ -79,7 +80,7 @@
 | Production RX/TX 2SPC boundaries | architecture pending | Cycle structure, generated RTL, bit/cycle equivalence, continuous-stream fault semantics |
 | Continuous reflection Cycle path | architecture pending | fixed widths, bounded delay memory, scheduling, throughput and equivalence |
 | Monitor event hardware | planned/pending | FIR/detector/refinement/event queues, no-backpressure proof and overflow tests |
-| Connected RFDC shell | Task 5/6 OOC structural CLEAN | Fresh environment-bound real Vivado reports, immutable report/Tcl/readback hashes, atomic success publication, exact RFDC CDC-11/13/15 waiver endpoints, BD validation, OOC synthesis, 24 BD AXIS boundaries, and 0 bonded IOBs |
+| Connected RFDC shell | fresh OOC evidence pending after Python 3.12 environment recovery | Fresh catalog/probe/OOC reports, immutable report/Tcl/readback hashes, exact RFDC CDC-11/13/15 endpoint inventory, measured zero bonded IOBs, BD validation, and OOC synthesis |
 | GEM3 board I/O | pending fail-closed | board-authoritative PHY address, reset ownership/timing, RGMII delay/link mode and enabled PS binding |
 | DMA and Ethernet event transport | pending | S2MM/DDR ring, packet protocol, loss accounting and software validation |
 | CDC and timing | pending | synthesized and implemented reports without broad waivers |

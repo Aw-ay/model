@@ -1,0 +1,36 @@
+{
+  "control_abi_schema_version": 1,
+  "base_address": 2684354560,
+  "span_bytes": 65536,
+  "abi_version": 65536,
+  "channel_base": 256,
+  "channel_stride": 32,
+  "channel_count": 8,
+  "registers": [
+    {"name": "PROJECT_ID", "offset": 0, "access": "ro", "reset": 1128352817, "maximum": 4294967295},
+    {"name": "ABI_VERSION", "offset": 4, "access": "ro", "reset": 65536, "maximum": 4294967295},
+    {"name": "CONTROL", "offset": 8, "access": "rw", "reset": 4, "maximum": 7},
+    {"name": "STATUS", "offset": 12, "access": "ro", "reset": 0, "maximum": 4294967295},
+    {"name": "RFDC_STATUS", "offset": 16, "access": "ro", "reset": 0, "maximum": 4294967295},
+    {"name": "MTS_STATUS", "offset": 20, "access": "ro", "reset": 0, "maximum": 4294967295},
+    {"name": "CONFIG_VERSION", "offset": 24, "access": "ro", "reset": 0, "maximum": 4294967295},
+    {"name": "EVENT_COUNT_LO", "offset": 28, "access": "ro", "reset": 0, "maximum": 4294967295},
+    {"name": "EVENT_COUNT_HI", "offset": 32, "access": "ro", "reset": 0, "maximum": 4294967295},
+    {"name": "DROP_COUNT_LO", "offset": 36, "access": "ro", "reset": 0, "maximum": 4294967295},
+    {"name": "DROP_COUNT_HI", "offset": 40, "access": "ro", "reset": 0, "maximum": 4294967295},
+    {"name": "STREAM_ERRORS", "offset": 44, "access": "w1c", "reset": 0, "maximum": 4294967295},
+    {"name": "COMMIT_CALIBRATION", "offset": 48, "access": "wo", "reset": 0, "maximum": 1},
+    {"name": "DETECT_THRESHOLD", "offset": 52, "access": "rw", "reset": 1000, "maximum": 4294967295},
+    {"name": "NOISE_ALPHA_Q31", "offset": 56, "access": "rw", "reset": 2147484, "maximum": 2147483647},
+    {"name": "RANGE_HOLD_SAMPLES", "offset": 60, "access": "rw", "reset": 64, "maximum": 65535},
+    {"name": "RANGE_HIGH_WATER_Q16", "offset": 64, "access": "rw", "reset": 58982, "maximum": 65535},
+    {"name": "RANGE_LOW_WATER_Q16", "offset": 68, "access": "rw", "reset": 16384, "maximum": 65535}
+  ],
+  "channel_registers": [
+    {"name": "INTEGER_DELAY", "offset": 0, "access": "rw", "reset": 0, "maximum": 2047},
+    {"name": "FRACTIONAL_DELAY_Q20", "offset": 4, "access": "rw", "reset": 0, "maximum": 1048575},
+    {"name": "GAIN_REAL", "offset": 8, "access": "rw", "reset": 1048576, "maximum": 8388607},
+    {"name": "GAIN_IMAG", "offset": 12, "access": "rw", "reset": 0, "maximum": 8388607},
+    {"name": "CALIBRATION_FLAGS", "offset": 16, "access": "rw", "reset": 0, "maximum": 1}
+  ]
+}

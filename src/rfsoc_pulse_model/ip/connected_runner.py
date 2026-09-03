@@ -22,6 +22,7 @@ import tempfile
 
 from rfsoc_pulse_model.common.config import ModelConfig
 
+from .cdc_inventory import CDC15_ENDPOINT_PAIRS
 from .connected import (
     ConnectedAuthorityBytes,
     ConnectedShellEvidence,
@@ -456,7 +457,8 @@ def build_candidate_evidence(
         # This truth is derived only after exact RFDC CONFIG readback above.
         True, booleans["mts_runtime_verified"],
         booleans["validate_bd_design_passed"], booleans["synthesis_completed"],
-        report_safety["cdc_safe"], report_safety["clock_safety_verified"], reports,
+        report_safety["cdc_safe"], report_safety["clock_safety_verified"],
+        report_safety["bonded_iob_used"], reports,
         request.environment_manifest_sha256,
     )
 
@@ -533,7 +535,7 @@ def _parse_readback(raw: bytes) -> dict[str, object]:
 
 def _validate_report_safety(
     attempt: ConnectedShellAttempt, *, ooc_boundary: bool = False,
-) -> dict[str, bool]:
+) -> dict[str, bool | int]:
     """Parse only the measured Vivado 2025.2 synthesized-report grammar."""
     reports = {
         name: _read_attempt_report(attempt, path).decode("utf-8", "strict")
@@ -542,8 +544,12 @@ def _validate_report_safety(
     cdc_pairs = _parse_cdc_report(reports["cdc"])
     _parse_clock_interaction_report(reports["clock_interaction"], cdc_pairs)
     _parse_timing_summary_report(reports["timing_summary"], ooc_boundary=ooc_boundary)
-    _parse_utilization_report(reports["utilization"])
-    return {"cdc_safe": True, "clock_safety_verified": True}
+    bonded_iob_used = _parse_utilization_report(reports["utilization"])
+    return {
+        "cdc_safe": True,
+        "clock_safety_verified": True,
+        "bonded_iob_used": bonded_iob_used,
+    }
 
 
 _REPORT_HEADER = re.compile(
@@ -635,27 +641,27 @@ def _is_exact_vendor_cdc_waiver(
             source_match and destination_match
             and source_match.group(1) == destination_match.group(1)
         )
-    if identifier != "CDC-15" or re.fullmatch(
-        r".*/rfdc_0/inst/IP2Bus_Data_reg\[[0-9]+\]/D", destination,
-    ) is None:
-        return False
-    return any(
-        re.fullmatch(pattern, source) is not None
-        for pattern in (
-            r".*/rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc[0-9]+/mrk_(?:cntr|loc)_ff_reg\[[0-9]+\]/C",
-            r".*/rfdc_0/inst/connected_.*_rf_wrapper_i/rx[0-3]_u_adc/INTERNAL_FBRC_DIV2_MUX",
-            r".*/rfdc_0/inst/connected_.*_rf_wrapper_i/tx[0-1]_u_dac/INTERNAL_FBRC_MUX",
-        )
+    return identifier == "CDC-15" and _canonical_cdc15_pair(source, destination) is not None
+
+
+def _canonical_cdc15_pair(source: str, destination: str) -> tuple[str, str] | None:
+    return next(
+        (pair for pair in CDC15_ENDPOINT_PAIRS
+         if source.endswith(pair[0]) and destination.endswith(pair[1])),
+        None,
     )
 
 
 def _parse_cdc_report(report: str) -> set[tuple[str, str]]:
     report = _normalize_report_newlines(report)
     _validate_report_header(report, "report_cdc -details")
+    requires_cdc15_inventory = "report_cdc -details -show_waiver" in report
     if "\nCDC Report\n" not in report:
         raise ValueError("CDC report title is missing")
     cdc_body = report.split("\nCDC Report\n", 1)[1].strip()
     if cdc_body == "All paths are Safely Timed.":
+        if requires_cdc15_inventory:
+            raise ValueError("CDC-15 endpoint inventory does not match the measured set")
         return set()
     summary_area = report.split("Source Clock:", 1)[0]
     summary_rows = re.findall(
@@ -690,6 +696,7 @@ def _parse_cdc_report(report: str) -> set[tuple[str, str]]:
     pairs: set[tuple[str, str]] = set()
     observed: dict[str, int] = {}
     observed_waived: dict[str, int] = {}
+    observed_cdc15_pairs: set[tuple[str, str]] = set()
     for block in blocks:
         pair = (block.group(1), block.group(2))
         if pair in pairs: raise ValueError("duplicate CDC clock-pair block")
@@ -705,12 +712,16 @@ def _parse_cdc_report(report: str) -> set[tuple[str, str]]:
         if not details: raise ValueError("CDC clock-pair block lacks detail rows")
         for identifier, severity, source, destination, waived in details:
             if waived == "Y":
-                if (
-                    identifier not in _VENDOR_CDC_WAIVER_IDS
-                    or not _is_exact_vendor_cdc_waiver(identifier, source, destination)
-                ):
+                if identifier == "CDC-15" and _canonical_cdc15_pair(source, destination) is None:
+                    raise ValueError("CDC-15 endpoint inventory contains an unapproved vendor waiver")
+                if identifier not in _VENDOR_CDC_WAIVER_IDS or not _is_exact_vendor_cdc_waiver(identifier, source, destination):
                     raise ValueError("CDC detail contains an unapproved vendor waiver")
                 observed_waived[identifier] = observed_waived.get(identifier, 0) + 1
+                if identifier == "CDC-15":
+                    canonical = _canonical_cdc15_pair(source, destination)
+                    if canonical is None or canonical in observed_cdc15_pairs:
+                        raise ValueError("CDC-15 endpoint inventory is invalid")
+                    observed_cdc15_pairs.add(canonical)
             else:
                 if severity != "Info": raise ValueError("CDC detail contains unsafe circuitry")
                 observed[identifier] = observed.get(identifier, 0) + 1
@@ -733,6 +744,8 @@ def _parse_cdc_report(report: str) -> set[tuple[str, str]]:
         or bool(blocks) != bool(summary or waived_summary)
     ):
         raise ValueError("CDC summary/detail counts do not match")
+    if requires_cdc15_inventory and observed_cdc15_pairs != set(CDC15_ENDPOINT_PAIRS):
+        raise ValueError("CDC-15 endpoint inventory does not match the measured set")
     return pairs
 
 
@@ -851,8 +864,8 @@ def _parse_timing_summary_report(
             raise ValueError("OOC timing report contains non-boundary unconstrained paths")
 
 
-def _parse_utilization_report(report: str) -> None:
-    """Require the measured Vivado utilization table, not a placeholder token."""
+def _parse_utilization_report(report: str) -> int:
+    """Return the measured zero Bonded IOB count from a valid utilization table."""
     report = _normalize_report_newlines(report)
     _validate_report_header(report, "report_utilization")
     if (
@@ -880,6 +893,7 @@ def _parse_utilization_report(report: str) -> None:
     if not rows:
         raise ValueError("utilization table has no measured rows")
     seen: set[str] = set()
+    bonded_iob_used: int | None = None
     for site, used_text, fixed_text, prohibited_text, available_text, util_text in rows:
         site = site.strip()
         if not site or site in seen:
@@ -898,6 +912,13 @@ def _parse_utilization_report(report: str) -> None:
             or utilization > 100.0
         ):
             raise ValueError("utilization table contains impossible measured values")
+        if site == "Bonded IOB":
+            bonded_iob_used = used
+    if bonded_iob_used is None:
+        raise ValueError("utilization table is missing the measured Bonded IOB row")
+    if bonded_iob_used != 0:
+        raise ValueError("Bonded IOB utilization must be zero")
+    return bonded_iob_used
 
 
 def _read_attempt_report(attempt: ConnectedShellAttempt, path: Path) -> bytes:

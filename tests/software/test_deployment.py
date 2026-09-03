@@ -1,0 +1,552 @@
+from __future__ import annotations
+
+from pathlib import Path
+import ctypes
+import json
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+import unittest
+import zipfile
+import importlib.util
+
+from rfsoc_pulse_model.common.control_abi import ControlAbi
+from rfsoc_pulse_model.common.network_protocol import encode_event_datagrams, encode_event_payload
+from tests.host.test_calibrator_client import _event
+
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+class DeploymentContractTest(unittest.TestCase):
+    def test_c_udp_encoder_is_byte_identical_to_python_protocol(self) -> None:
+        compiler = shutil.which("gcc")
+        if compiler is None:
+            self.skipTest("gcc is unavailable")
+        event = _event()
+        payload = encode_event_payload(event)
+        dma_event = (
+            struct.pack("<IIIIQ", 0x31414D44, 192, event.event_id, event.config_version, event.toa_samples)
+            + payload
+        )
+        self.assertEqual(len(dma_event), 192)
+        expected = encode_event_datagrams(event, sequence=77)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            library = Path(directory) / "protocol.dll"
+            subprocess.run(
+                [compiler, "-shared", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                 "-Isoftware/calibratord/include", "software/calibratord/src/protocol.c",
+                 "-o", str(library)],
+                cwd=ROOT, check=True, capture_output=True,
+            )
+            protocol = ctypes.CDLL(str(library))
+            protocol.cal_dma_event_to_datagram.argtypes = [
+                ctypes.POINTER(ctypes.c_ubyte), ctypes.c_uint64,
+                ctypes.POINTER(ctypes.c_ubyte),
+            ]
+            source = (ctypes.c_ubyte * len(dma_event)).from_buffer_copy(dma_event)
+            target = (ctypes.c_ubyte * len(expected))()
+            size = protocol.cal_dma_event_to_datagram(source, 77, target)
+            self.assertEqual(size, len(expected))
+            self.assertEqual(bytes(target), expected)
+            if hasattr(ctypes, "windll"):
+                free_library = ctypes.windll.kernel32.FreeLibrary
+                free_library.argtypes = [ctypes.c_void_p]
+                free_library.restype = ctypes.c_int
+                self.assertNotEqual(free_library(ctypes.c_void_p(protocol._handle)), 0)
+
+    def test_generated_register_header_and_device_tree_match_single_source(self) -> None:
+        abi = ControlAbi.load_default()
+        self.assertEqual(
+            (ROOT / "software/calibratord/include/calibrator_regs.h").read_text("utf-8"),
+            abi.emit_c_header(),
+        )
+        overlay = (ROOT / "petalinux/project-spec/meta-user/recipes-bsp/device-tree/files/system-user.dtsi").read_text("utf-8")
+        self.assertIn(
+            re.sub(r"\s+", " ", abi.emit_device_tree_binding().strip()),
+            re.sub(r"\s+", " ", overlay),
+        )
+        vivado = (ROOT / "src/rfsoc_pulse_model/ip/calibrator_vivado.py").read_text("utf-8")
+        self.assertIn("calibrator_registers.vh", vivado)
+
+    def test_daemon_is_fail_safe_and_implements_all_v1_commands(self) -> None:
+        source = (ROOT / "software/calibratord/src/calibratord.c").read_text("utf-8")
+        self.assertLess(source.index("cal_hw_force_safe"), source.index("cal_rfdc_initialize"))
+        parser_source = (ROOT / "software/calibratord/src/control.c").read_text("utf-8")
+        for command in (
+            "get_status", "start", "stop", "set_threshold", "set_calibration",
+            "commit_calibration", "run_mts", "clear_errors", "shutdown",
+        ):
+            self.assertIn(f'"{command}"', parser_source)
+        self.assertIn("CAL_PROJECT_ID_OFFSET", source)
+        self.assertIn("CAL_ABI_VERSION_OFFSET", source)
+        self.assertIn("O_NONBLOCK", source)
+        self.assertIn("pthread_join", source)
+        self.assertIn("configure_control_security(&state)", source)
+        defaults = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibratord/files/calibratord.default").read_text("utf-8")
+        unit = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibratord/files/calibratord.service").read_text("utf-8")
+        recipe = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibratord/calibratord.bb").read_text("utf-8")
+        self.assertIn("CALIBRATOR_CONTROL_BIND=127.0.0.1", defaults)
+        self.assertIn("CALIBRATOR_CONTROL_PEER=127.0.0.1", defaults)
+        self.assertIn("CALIBRATOR_CONTROL_TOKEN_FILE=/etc/calibratord/control.token", defaults)
+        self.assertIn("UMask=0077", unit)
+        self.assertIn("${sysconfdir}/calibratord", recipe)
+
+    def test_dma_proxy_uses_dmaengine_coherent_ring_and_whole_event_reads(self) -> None:
+        source = (ROOT / "software/kernel/calibrator_dma_proxy.c").read_text("utf-8")
+        makefile = (ROOT / "software/kernel/Makefile").read_text("utf-8")
+        for contract in (
+            "dma_request_chan", "dma_alloc_coherent", "dmaengine_prep_slave_single",
+            "CAL_EVENT_BYTES", "copy_to_user", "dmaengine_terminate_sync", "O_NONBLOCK",
+        ):
+            self.assertIn(contract, source)
+        self.assertIn(".llseek = noop_llseek", source)
+        self.assertIn("static void cal_remove", source)
+        self.assertIn("all:", makefile)
+        self.assertIn("$(MAKE) -C $(KERNEL_SRC) M=$(PWD) modules", makefile)
+        self.assertIn("modules_install:", makefile)
+        self.assertIn("$(MAKE) -C $(KERNEL_SRC) M=$(PWD) modules_install", makefile)
+
+    def test_daemon_compiles_against_the_public_libmetal_2025_2_headers(self) -> None:
+        """Reject removed umbrella headers before a PetaLinux image build does."""
+        source = (ROOT / "software/calibratord/src/calibratord.c").read_text("utf-8")
+        self.assertIn("#include <metal/sys.h>", source)
+        self.assertIn("#include <metal/device.h>", source)
+        self.assertNotIn("#include <metal/metal.h>", source)
+
+    def test_petalinux_recipe_installs_daemon_module_and_systemd_unit(self) -> None:
+        recipe = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibratord/calibratord.bb").read_text("utf-8")
+        module_recipe = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibrator-dma-proxy/calibrator-dma-proxy.bb").read_text("utf-8")
+        unit = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibratord/files/calibratord.service").read_text("utf-8")
+        script = (ROOT / "software/petalinux/build_image.sh").read_text("utf-8")
+        self.assertIn("inherit systemd", recipe)
+        self.assertNotIn("inherit module", recipe)
+        self.assertIn("${sbindir}/calibratord", recipe)
+        self.assertIn("inherit module", module_recipe)
+        self.assertIn("file://calibrator_dma_proxy.c", module_recipe)
+        self.assertIn("KERNEL_MODULE_AUTOLOAD", module_recipe)
+        self.assertIn('FILESEXTRAPATHS:prepend := "${THISDIR}/files:"', recipe)
+        self.assertIn("file://control.c", recipe)
+        self.assertIn("file://calibrator_control.h", recipe)
+        self.assertIn('CALIBRATORD_RECIPE_FILES="$PROJECT_PATH/project-spec/meta-user/recipes-apps/calibratord/files"', script)
+        self.assertIn('DMA_PROXY_RECIPE_FILES="$PROJECT_PATH/project-spec/meta-user/recipes-apps/calibrator-dma-proxy/files"', script)
+        self.assertIn('"$REPOSITORY_ROOT/software/calibratord/src/calibratord.c"', script)
+        self.assertIn('"$REPOSITORY_ROOT/software/calibratord/src/control.c"', script)
+        self.assertIn('"$CALIBRATORD_RECIPE_FILES/calibratord.c"', script)
+        self.assertIn('"$CALIBRATORD_RECIPE_FILES/control.c"', script)
+        self.assertIn('"$REPOSITORY_ROOT/software/calibratord/include/calibrator_control.h"', script)
+        self.assertIn('"$CALIBRATORD_RECIPE_FILES/calibrator_control.h"', script)
+        self.assertIn('"$REPOSITORY_ROOT/software/kernel/Makefile"', script)
+        self.assertIn("Restart=on-failure", unit)
+        self.assertIn("network-online.target", unit)
+        self.assertIn("After=systemd-modules-load.service", unit)
+
+    def test_emmc_wic_boots_the_ext4_rootfs_and_carries_an_explicit_dtb(self) -> None:
+        overlay = (ROOT / "petalinux/project-spec/meta-user/recipes-bsp/device-tree/files/system-user.dtsi").read_text("utf-8")
+        script = (ROOT / "software/petalinux/build_image.sh").read_text("utf-8")
+        self.assertIn("root=/dev/mmcblk0p2 rootwait rw", overlay)
+        self.assertNotIn("root=/dev/ram0", overlay)
+        self.assertIn('--bootfiles "BOOT.BIN Image boot.scr system.dtb"', script)
+
+    def test_generic_uio_is_configured_and_loaded_before_the_daemon(self) -> None:
+        recipe = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibratord/calibratord.bb").read_text("utf-8")
+        modules = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibratord/files/calibrator-uio-modules.conf").read_text("utf-8")
+        options = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibratord/files/uio-pdrv-genirq.conf").read_text("utf-8")
+        self.assertEqual(modules, "uio_pdrv_genirq\n")
+        self.assertEqual(options, "options uio_pdrv_genirq of_id=generic-uio\n")
+        self.assertIn("file://calibrator-uio-modules.conf", recipe)
+        self.assertIn("file://uio-pdrv-genirq.conf", recipe)
+        self.assertIn("${sysconfdir}/modules-load.d/calibrator-uio.conf", recipe)
+        self.assertIn("${sysconfdir}/modprobe.d/uio-pdrv-genirq.conf", recipe)
+
+    def test_petalinux_build_automates_the_recipe_scoped_xsct_compatibility_library(self) -> None:
+        script = (ROOT / "software/petalinux/build_image.sh").read_text("utf-8")
+        self.assertIn("CALIBRATOR_XSCT_LIBTINFO_DIR", script)
+        self.assertIn("PetaLinux XSCT requires libtinfo.so.5", script)
+        self.assertIn('LD_PRELOAD="$XSCT_LIBTINFO_DIR/libtinfo.so.5"', script)
+        self.assertIn(
+            "run_petalinux_xsct petalinux-config --get-hw-description=",
+            script,
+        )
+        for recipe in ("device-tree", "bitstream-extraction", "pmu-firmware", "fsbl-firmware"):
+            self.assertIn(f"LD_PRELOAD:pn-{recipe}", script)
+            self.assertIn(f"LIBRARY_PATH:pn-{recipe}", script)
+        self.assertIn("env -u LD_PRELOAD", script)
+
+    def test_petalinux_reproduction_documents_nonroot_libtinfo5_extraction(self) -> None:
+        guide = (ROOT / "docs/deployment/calibrator-v1.md").read_text(encoding="utf-8")
+        self.assertIn("apt download libtinfo5", guide)
+        self.assertIn("dpkg-deb -x libtinfo5_*.deb", guide)
+        self.assertIn("CALIBRATOR_XSCT_LIBTINFO_DIR", guide)
+        self.assertIn("libtinfo.so.5", guide)
+
+    def test_secure_petalinux_artifact_handoff_is_current_and_board_bounded(self) -> None:
+        guide = (ROOT / "docs/deployment/calibrator-v1.md").read_text(encoding="utf-8")
+        manifest = json.loads(
+            (ROOT / "docs/deployment/petalinux-2025.2-artifacts.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertIn("no bootable embedded rootfs/initramfs", guide)
+        self.assertIn("Gate-enabled secure PetaLinux artifact handoff", guide)
+        self.assertIn("/home/petalinux/work/calibrator-secure-20260830", guide)
+        self.assertIn(
+            "a5a6a7a3c7eda7a0185a1666fcccbb7835424c29d4a66d8266193afdb43cbf70",
+            guide,
+        )
+        self.assertIn("has not yet been integrated into the bitstream", guide)
+        self.assertIn("have not been claimed", guide)
+        self.assertEqual(
+            manifest["vivado"]["xsa_path"],
+            "build/calibrator_project_gate/calibrator.xsa",
+        )
+        self.assertEqual(
+            manifest["vivado"]["bitstream"]["sha256"],
+            next(
+                artifact["sha256"]
+                for artifact in manifest["artifacts"]
+                if artifact["name"] == "system.bit"
+            ),
+        )
+        self.assertFalse(manifest["build_evidence"]["board_execution_claimed"])
+        self.assertTrue(manifest["build_evidence"]["wic_security_payload_inspected"])
+        self.assertFalse(manifest["build_evidence"]["control_token_preprovisioned"])
+        self.assertIs(
+            manifest["build_evidence"].get("artifacts_copied_to_windows"),
+            False,
+        )
+        self.assertIs(
+            manifest["build_evidence"].get("vm_to_windows_hashes_compared"),
+            False,
+        )
+        self.assertNotIn("vm_to_windows_hashes_match", manifest["build_evidence"])
+        self.assertIsNone(manifest["local_handoff_directory"])
+        self.assertEqual(
+            manifest["vm_source_directory"],
+            "/home/petalinux/work/calibrator-secure-20260830",
+        )
+        self.assertEqual(
+            manifest["build_evidence"]["untargeted_petalinux_build"],
+            "6498/6498 tasks succeeded; 6474 reused",
+        )
+        self.assertEqual(
+            manifest["deployment_status"],
+            "secure_image_generated_board_execution_pending",
+        )
+        self.assertEqual(
+            manifest["runtime_source_git_commit"],
+            "9b3b14ff29979bc25b41b30623f7b35b066e634f",
+        )
+        artifacts = {artifact["name"]: artifact for artifact in manifest["artifacts"]}
+        self.assertEqual(
+            artifacts["petalinux-sdimage.wic"],
+            {
+                "name": "petalinux-sdimage.wic",
+                "bytes": 6442455040,
+                "sha256": "352e12ce7663d02c5e08adf5ddde33c3dba3adf19d4831451aca86df57efa041",
+            },
+        )
+        self.assertEqual(
+            artifacts["rootfs.ext4"],
+            {
+                "name": "rootfs.ext4",
+                "bytes": 200202240,
+                "sha256": "e22f74dc67cf612598b35ddfae8753d00670ddf7f60783ffc3a1bf0c031f985b",
+            },
+        )
+        self.assertEqual(
+            artifacts["rootfs.tar.gz"],
+            {
+                "name": "rootfs.tar.gz",
+                "bytes": 46750951,
+                "sha256": "4e4326c5893afdd7a03845ec2ce4acab6b8b7e099b22c79afa2319835081a001",
+            },
+        )
+        payload = {entry["path"]: entry["bytes"] for entry in manifest["rootfs_payload"]}
+        self.assertEqual(payload["/usr/sbin/calibratord"], 67632)
+        self.assertEqual(payload["/usr/lib/systemd/system/calibratord.service"], 498)
+        self.assertEqual(payload["/etc/default/calibratord"], 435)
+        self.assertIn("physical-board execution", guide)
+        self.assertIn("remains pending", guide)
+        self.assertNotIn("DO NOT DEPLOY this archived WIC/rootfs", guide)
+
+    def test_vitis_platform_script_is_xsa_driven_and_version_locked(self) -> None:
+        script = (ROOT / "software/vitis/create_linux_platform.py").read_text("utf-8")
+        self.assertIn('EXPECTED_VERSION = "2025.2"', script)
+        self.assertIn("create_platform_component", script)
+        self.assertIn('os="linux"', script)
+        self.assertIn('cpu="psu_cortexa53"', script)
+        self.assertIn("no_boot_bsp=True", script)
+        self.assertIn("platform.build()", script)
+        self.assertIn("Vitis Embedded ZynqMP Linux payload is incomplete", script)
+        self.assertIn("refusing to reuse existing workspace", script)
+        self.assertNotIn('workspace.rglob("*.xpfm")', script)
+
+    def test_vitis_platform_accepts_only_a_fresh_expected_xpfm(self) -> None:
+        module_path = ROOT / "software/vitis/create_linux_platform.py"
+        spec = importlib.util.spec_from_file_location("calibrator_vitis_platform", module_path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "workspace"
+            workspace.mkdir()
+            with self.assertRaisesRegex(RuntimeError, "refusing to reuse existing workspace"):
+                module.prepare_new_workspace(workspace)
+            fresh = Path(directory) / "fresh"
+            module.prepare_new_workspace(fresh)
+            expected = fresh / "calibrator_platform/export/calibrator_platform/calibrator_platform.xpfm"
+            expected.parent.mkdir(parents=True)
+            expected.write_text("platform", encoding="utf-8")
+            self.assertEqual(module.find_built_xpfm(fresh), expected)
+            (fresh / "unrelated.xpfm").write_text("stale", encoding="utf-8")
+            self.assertEqual(module.find_built_xpfm(fresh), expected)
+
+    def test_xsct_platform_launcher_rejects_false_success_without_xpfm(self) -> None:
+        module_path = ROOT / "software/vitis/build_linux_platform.py"
+        spec = importlib.util.spec_from_file_location("calibrator_xsct_platform", module_path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            vitis_root = root / "AMDDesignTools/2025.2/Vitis"
+            qemu = vitis_root / "data/emulation/platforms/zynqmp/sw/a53_linux/qemu"
+            qemu.mkdir(parents=True)
+            xsct = vitis_root / "bin/xsct.bat"
+            xsct.parent.mkdir(parents=True)
+            xsct.write_text("fake xsct", encoding="utf-8")
+            xsa = root / "calibrator.xsa"
+            xsa.write_text("fake xsa", encoding="utf-8")
+
+            def false_success(*args, **kwargs):
+                return subprocess.CompletedProcess(args[0], 0, "ERROR: Tcl failed\n", "")
+
+            with self.assertRaisesRegex(RuntimeError, "exactly one calibrator_platform.xpfm"):
+                module.build_xsct_platform(
+                    vitis_root=vitis_root,
+                    xsa=xsa,
+                    output_dir=root / "output",
+                    runner=false_success,
+                )
+
+    def test_xsct_platform_launcher_refuses_an_existing_output_directory(self) -> None:
+        module_path = ROOT / "software/vitis/build_linux_platform.py"
+        spec = importlib.util.spec_from_file_location("calibrator_xsct_platform", module_path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output_dir = root / "output"
+            output_dir.mkdir()
+
+            def false_success(*args, **kwargs):
+                return subprocess.CompletedProcess(args[0], 0, "", "")
+
+            with self.assertRaisesRegex(RuntimeError, "refusing to reuse existing output directory"):
+                module.build_xsct_platform(
+                    vitis_root=root / "AMDDesignTools/2025.2/Vitis",
+                    xsa=root / "calibrator.xsa",
+                    output_dir=output_dir,
+                    runner=false_success,
+                )
+
+    def test_xsct_platform_launcher_builds_the_expected_fresh_xpfm(self) -> None:
+        module_path = ROOT / "software/vitis/build_linux_platform.py"
+        spec = importlib.util.spec_from_file_location("calibrator_xsct_platform", module_path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            vitis_root = root / "AMDDesignTools/2025.2/Vitis"
+            qemu = vitis_root / "data/emulation/platforms/zynqmp/sw/a53_linux/qemu"
+            qemu.mkdir(parents=True)
+            xsct = vitis_root / "bin/xsct.bat"
+            xsct.parent.mkdir(parents=True)
+            xsct.write_text("fake xsct", encoding="utf-8")
+            xsa = root / "calibrator.xsa"
+            xsa.write_text("fake xsa", encoding="utf-8")
+            output_dir = (root / "output").resolve()
+            expected = output_dir / "calibrator_platform/export/calibrator_platform/calibrator_platform.xpfm"
+            calls = []
+
+            def successful_build(command, **kwargs):
+                calls.append(command)
+                expected.parent.mkdir(parents=True)
+                expected.write_text("platform", encoding="utf-8")
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    f"CALIBRATOR_XPFM={expected}\n",
+                    "",
+                )
+
+            built = module.build_xsct_platform(
+                vitis_root=vitis_root,
+                xsa=xsa,
+                output_dir=output_dir,
+                runner=successful_build,
+            )
+
+            self.assertEqual(built, expected)
+            self.assertEqual(len(calls), 1)
+            command_text = " ".join(str(part) for part in calls[0])
+            self.assertIn(str(xsct), command_text)
+            self.assertIn("-quiet", command_text)
+            self.assertIn("create_linux_platform.tcl", command_text)
+            self.assertIn(str(xsa), command_text)
+            self.assertIn(str(output_dir), command_text)
+
+    def test_xsct_platform_launcher_rejects_a_mixed_vitis_version(self) -> None:
+        module_path = ROOT / "software/vitis/build_linux_platform.py"
+        spec = importlib.util.spec_from_file_location("calibrator_xsct_platform", module_path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            vitis_root = root / "AMDDesignTools/2025.1/Vitis"
+            (vitis_root / "data/emulation/platforms/zynqmp/sw/a53_linux/qemu").mkdir(parents=True)
+            xsct = vitis_root / "bin/xsct.bat"
+            xsct.parent.mkdir(parents=True)
+            xsct.write_text("fake xsct", encoding="utf-8")
+            xsa = root / "calibrator.xsa"
+            xsa.write_text("fake xsa", encoding="utf-8")
+
+            def false_success(*args, **kwargs):
+                return subprocess.CompletedProcess(args[0], 0, "", "")
+
+            with self.assertRaisesRegex(RuntimeError, "Vitis 2025.2 required"):
+                module.build_xsct_platform(
+                    vitis_root=vitis_root,
+                    xsa=xsa,
+                    output_dir=root / "output",
+                    runner=false_success,
+                )
+
+    def test_xsct_platform_launcher_requires_the_zynqmp_linux_payload(self) -> None:
+        module_path = ROOT / "software/vitis/build_linux_platform.py"
+        spec = importlib.util.spec_from_file_location("calibrator_xsct_platform", module_path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            vitis_root = root / "AMDDesignTools/2025.2/Vitis"
+            xsct = vitis_root / "bin/xsct.bat"
+            xsct.parent.mkdir(parents=True)
+            xsct.write_text("fake xsct", encoding="utf-8")
+            xsa = root / "calibrator.xsa"
+            xsa.write_text("fake xsa", encoding="utf-8")
+
+            def false_success(*args, **kwargs):
+                return subprocess.CompletedProcess(args[0], 0, "", "")
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Vitis Embedded ZynqMP Linux payload is incomplete",
+            ):
+                module.build_xsct_platform(
+                    vitis_root=vitis_root,
+                    xsa=xsa,
+                    output_dir=root / "output",
+                    runner=false_success,
+                )
+
+    def test_petalinux_build_script_locks_2025_2_and_packages_boot_and_wic(self) -> None:
+        script = (ROOT / "software/petalinux/build_image.sh").read_text("utf-8")
+        self.assertIn('REQUIRED_VERSION="2025.2"', script)
+        self.assertIn("petalinux-config --get-hw-description", script)
+        self.assertIn("petalinux-build", script)
+        self.assertIn("petalinux-package --boot", script)
+        self.assertIn("petalinux-package --wic", script)
+        self.assertIn("petalinux-2025.2-artifacts.json", script)
+        self.assertIn("sha256sum", script)
+        self.assertIn("XSA digest does not match the qualified Vivado artifact", script)
+        staged_copy = 'install -m 0644 "$XSA_PATH" "$PROJECT_PATH/hardware/calibrator.xsa"'
+        staged_hash = 'sha256sum "$PROJECT_PATH/hardware/calibrator.xsa"'
+        self.assertIn(staged_copy, script)
+        self.assertIn(staged_hash, script)
+        self.assertLess(script.index(staged_copy), script.index(staged_hash))
+
+    def test_embedded_xsa_bitstream_helper_emits_the_archived_payload(self) -> None:
+        helper = ROOT / "software/petalinux/extract_xsa_bitstream.py"
+        payload = b"calibrator-bitstream-fixture\x00\xff"
+        with tempfile.TemporaryDirectory() as directory:
+            xsa = Path(directory) / "fixture.xsa"
+            output = Path(directory) / "images/linux/system.bit"
+            with zipfile.ZipFile(xsa, "w") as archive:
+                archive.writestr("fixture.bit", payload)
+                archive.writestr("fixture.hwh", "hardware")
+            completed = subprocess.run(
+                [sys.executable, str(helper), str(xsa), str(output)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(output.read_bytes(), payload)
+            self.assertIn("fixture.bit", completed.stdout)
+            self.assertIn(str(len(payload)), completed.stdout)
+
+    def test_embedded_xsa_bitstream_helper_rejects_an_xsa_without_a_bitstream(self) -> None:
+        helper = ROOT / "software/petalinux/extract_xsa_bitstream.py"
+        with tempfile.TemporaryDirectory() as directory:
+            xsa = Path(directory) / "fixture.xsa"
+            output = Path(directory) / "images/linux/system.bit"
+            with zipfile.ZipFile(xsa, "w") as archive:
+                archive.writestr("fixture.hwh", "hardware")
+            completed = subprocess.run(
+                [sys.executable, str(helper), str(xsa), str(output)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertFalse(output.exists())
+            self.assertIn("exactly one embedded .bit", completed.stderr)
+
+    def test_rootfs_selection_registers_the_deployable_daemon_with_2025_2_symbols(self) -> None:
+        rootfs_menu = (ROOT / "petalinux/project-spec/meta-user/conf/user-rootfsconfig").read_text("utf-8")
+        fragment = (ROOT / "petalinux/project-spec/configs/rootfs_config.fragment").read_text("utf-8").splitlines()
+        self.assertIn("CONFIG_calibratord", rootfs_menu)
+        self.assertIn("CONFIG_calibrator-dma-proxy", rootfs_menu)
+        self.assertEqual(
+            {
+                "CONFIG_calibratord=y",
+                "CONFIG_calibrator-dma-proxy=y",
+                "CONFIG_libmetal=y",
+                "CONFIG_packagegroup-networking-stack=y",
+                "CONFIG_Init-manager-systemd=y",
+            },
+            set(fragment),
+        )
+        self.assertNotIn("CONFIG_libxrfdc=y", fragment)
+        self.assertNotIn("CONFIG_kernel-module-uio-pdrv-genirq=y", fragment)
+
+    def test_daemon_recipe_owns_daemon_payload_and_depends_on_split_proxy_module(self) -> None:
+        daemon_recipe = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibratord/calibratord.bb").read_text("utf-8")
+        module_recipe = (ROOT / "petalinux/project-spec/meta-user/recipes-apps/calibrator-dma-proxy/calibrator-dma-proxy.bb").read_text("utf-8")
+        self.assertNotIn("inherit module", daemon_recipe)
+        self.assertIn("inherit systemd", daemon_recipe)
+        self.assertIn("${sbindir}/calibratord", daemon_recipe)
+        self.assertIn("librfdc", daemon_recipe)
+        self.assertNotIn("libxrfdc", daemon_recipe)
+        self.assertIn("kernel-module-calibrator-dma-proxy", daemon_recipe)
+        self.assertIn('DEPENDS = "libmetal librfdc calibrator-dma-proxy"', daemon_recipe)
+        self.assertIn("kernel-module-uio-pdrv-genirq", daemon_recipe)
+        self.assertIn("inherit module", module_recipe)
+        self.assertIn("KERNEL_MODULE_AUTOLOAD", module_recipe)
+
+
+if __name__ == "__main__":
+    unittest.main()

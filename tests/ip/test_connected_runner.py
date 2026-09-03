@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import subprocess
 from unittest.mock import patch
@@ -158,6 +160,66 @@ Row  ID     Severity  Description                                 Depth  Excepti
 """)
 
 
+def measured_cdc15_pairs() -> tuple[tuple[str, str], ...]:
+    """The 60 CDC-15 endpoint suffix pairs measured from the RFDC OOC run."""
+    ipif = lambda index: f"rfdc_0/inst/IP2Bus_Data_reg[{index}]/D"
+    marker_counter = (
+        ("rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc11/mrk_cntr_ff_reg[0]/C", ipif(0)),
+        ("rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc12/mrk_cntr_ff_reg[1]/C", ipif(1)),
+        ("rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc33/mrk_cntr_ff_reg[2]/C", ipif(2)),
+        ("rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc33/mrk_cntr_ff_reg[3]/C", ipif(3)),
+        ("rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc02/mrk_cntr_ff_reg[4]/C", ipif(4)),
+        ("rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc30/mrk_cntr_ff_reg[5]/C", ipif(5)),
+        ("rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc03/mrk_cntr_ff_reg[6]/C", ipif(6)),
+        ("rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc03/mrk_cntr_ff_reg[7]/C", ipif(7)),
+    )
+    marker_location = (
+        ("rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc13/mrk_loc_ff_reg[0]/C", ipif(16)),
+        ("rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc12/mrk_loc_ff_reg[1]/C", ipif(17)),
+        ("rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc12/mrk_loc_ff_reg[2]/C", ipif(18)),
+        ("rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc12/mrk_loc_ff_reg[3]/C", ipif(19)),
+    )
+    internal_destinations = tuple(ipif(index) for index in range(8, 16))
+    adc_internal = tuple(
+        (f"rfdc_0/inst/connected_rfdc_shell_rfdc_0_0_rf_wrapper_i/rx{tile}_u_adc/INTERNAL_FBRC_DIV2_MUX", destination)
+        for tile in range(4) for destination in internal_destinations
+    )
+    dac_internal = tuple(
+        (f"rfdc_0/inst/connected_rfdc_shell_rfdc_0_0_rf_wrapper_i/tx{tile}_u_dac/INTERNAL_FBRC_MUX", destination)
+        for tile in range(2) for destination in internal_destinations
+    )
+    assert tuple(map(len, (marker_counter, marker_location, adc_internal, dac_internal))) == (8, 4, 32, 16)
+    return marker_counter + marker_location + adc_internal + dac_internal
+
+
+def measured_cdc15_report(*, extra_pair: tuple[str, str] | None = None) -> bytes:
+    """A canonical CDC-15 fixture with optional regex-legal inventory drift."""
+    pairs = measured_cdc15_pairs() + (() if extra_pair is None else (extra_pair,))
+    rows = "\n".join(
+        "{row:3d}  CDC-15  Warning   Clock enable controlled CDC structure detected      0  False Path  "
+        "connected_rfdc_shell_i/{source}  connected_rfdc_shell_i/{destination}  Y".format(
+            row=index, source=source, destination=destination,
+        )
+        for index, (source, destination) in enumerate(pairs, 1)
+    )
+    return vivado_report_bytes(report_header(
+        "report_cdc -details -show_waiver -file ./cdc.rpt"
+    ) + f"""CDC Report
+
+ID      Waived Endpoints
+------  ----------------
+CDC-15                {len(pairs)}
+
+Source Clock: RFADC0_CLK
+Destination Clock: clk_pl_0
+CDC Type: No Common Primary Clock
+
+Row  ID      Severity  Description                                     Depth  Exception   Source (From)  Destination (To)  Waived
+---  ------  --------  ----------------------------------------------  -----  ----------  -------------  ----------------  ------
+{rows}
+""")
+
+
 def clean_clock_report() -> bytes:
     return vivado_report_bytes(report_header("report_clock_interaction -file ./clock_interaction.rpt") + """Clock Interaction Report
 
@@ -219,6 +281,7 @@ def clean_utilization_report() -> bytes:
 +----------------------------+------+-------+-----------+-------+
 | CLB LUTs                   | 10   | 0     | 100       | 10.00%|
 | CLB Registers              | 20   | 0     | 200       | 10.00%|
+| Bonded IOB                 | 0    | 0     | 728       | 0.00% |
 +----------------------------+------+-------+-----------+-------+
 
 """)
@@ -253,9 +316,10 @@ All paths are Safely Timed.
 |          Site Type         |  Used | Fixed | Prohibited | Available | Util% |
 | CLB LUTs                   |    10 |     0 |          0 |       100 | 10.00 |
 | CLB Registers              |    20 |     0 |          0 |       200 | 10.00 |
+| Bonded IOB                 |     0 |     0 |          0 |       728 | 0.00  |
 
 """)
-        _parse_utilization_report(utilization.decode("utf-8"))
+        self.assertEqual(_parse_utilization_report(utilization.decode("utf-8")), 0)
 
         clock = vivado_report_bytes(report_header(
             "report_clock_interaction -file ./clock_interaction.rpt"
@@ -271,6 +335,32 @@ clk_a         clk_b         Ignored                    False Path
 
 """)
         _parse_clock_interaction_report(clock.decode("utf-8"), {("clk_a", "clk_b")})
+
+    def test_utilization_requires_exactly_one_zero_bonded_iob_row(self) -> None:
+        """Omitting or using a package IOB must block structural evidence."""
+        from rfsoc_pulse_model.ip.connected_runner import _parse_utilization_report
+
+        clean = clean_utilization_report().decode("utf-8").replace("\r\n", "\n")
+        missing = clean.replace(
+            "| Bonded IOB                 | 0    | 0     | 728       | 0.00% |\n",
+            "",
+        )
+        used_one = clean.replace(
+            "| Bonded IOB                 | 0    | 0     | 728       | 0.00% |",
+            "| Bonded IOB                 | 1    | 0     | 728       | 0.14% |",
+        )
+        duplicate = clean.replace(
+            "+----------------------------+------+-------+-----------+-------+\n\n",
+            "| Bonded IOB                 | 0    | 0     | 728       | 0.00% |\n"
+            "+----------------------------+------+-------+-----------+-------+\n\n",
+        )
+
+        with self.assertRaisesRegex(ValueError, "Bonded IOB"):
+            _parse_utilization_report(missing)
+        with self.assertRaisesRegex(ValueError, "Bonded IOB"):
+            _parse_utilization_report(used_one)
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            _parse_utilization_report(duplicate)
 
     def test_clock_interaction_accepts_clean_partial_false_path(self) -> None:
         from rfsoc_pulse_model.ip.connected_runner import _parse_clock_interaction_report
@@ -293,7 +383,7 @@ clk_a         clk_a         Clean                      Partial False Path
         from rfsoc_pulse_model.ip.connected_runner import _parse_cdc_report
 
         self.assertEqual(
-            _parse_cdc_report(waived_vendor_cdc_report().decode("utf-8")),
+            _parse_cdc_report(waived_vendor_cdc_report().decode("utf-8").replace(" -show_waiver", "")),
             {("clk_pl_0", "RFADC0_CLK")},
         )
 
@@ -308,11 +398,48 @@ clk_a         clk_a         Clean                      Partial False Path
         with self.assertRaisesRegex(ValueError, "vendor waiver"):
             _parse_cdc_report(unsafe)
 
+    def test_cdc15_requires_the_measured_exact_endpoint_inventory(self) -> None:
+        """A legal-looking extra CDC-15 row must not broaden the vendor waiver."""
+        from rfsoc_pulse_model.ip.cdc_inventory import CDC15_ENDPOINT_PAIRS
+        from rfsoc_pulse_model.ip.connected_runner import _parse_cdc_report
+
+        canonical = measured_cdc15_pairs()
+        self.assertEqual(len(canonical), 60)
+        self.assertEqual(CDC15_ENDPOINT_PAIRS, canonical)
+        self.assertEqual(_parse_cdc_report(measured_cdc15_report().decode("utf-8")), {
+            ("RFADC0_CLK", "clk_pl_0"),
+        })
+        with self.assertRaisesRegex(ValueError, "CDC-15.*inventory"):
+            _parse_cdc_report(measured_cdc15_report(extra_pair=(
+                "rfdc_0/inst/i_rf_conv_mt_mrk_counter_adc99/mrk_cntr_ff_reg[8]/C",
+                "rfdc_0/inst/IP2Bus_Data_reg[20]/D",
+            )).decode("utf-8"))
+
+    def test_cdc15_waiver_report_requires_all_measured_rows(self) -> None:
+        """A post-waiver report cannot omit the complete CDC-15 inventory."""
+        from rfsoc_pulse_model.ip.connected_runner import _parse_cdc_report
+
+        with self.assertRaisesRegex(ValueError, "CDC-15.*inventory"):
+            _parse_cdc_report(waived_vendor_cdc_report().decode("utf-8"))
+
+    def test_cdc15_waiver_report_rejects_empty_safely_timed_report(self) -> None:
+        """The early safely-timed branch must not bypass the CDC-15 gate."""
+        from rfsoc_pulse_model.ip.connected_runner import _parse_cdc_report
+
+        empty_show_waiver = vivado_report_bytes(report_header(
+            "report_cdc -details -show_waiver -file ./cdc.rpt"
+        ) + """CDC Report
+
+All paths are Safely Timed.
+""")
+        with self.assertRaisesRegex(ValueError, "CDC-15.*inventory"):
+            _parse_cdc_report(empty_show_waiver.decode("utf-8"))
+
     def test_cdc_accepts_exact_rfdc_clk_valid_reset_waiver(self) -> None:
         from rfsoc_pulse_model.ip.connected_runner import _parse_cdc_report
 
         self.assertEqual(
-            _parse_cdc_report(waived_vendor_reset_cdc_report().decode("utf-8")),
+            _parse_cdc_report(waived_vendor_reset_cdc_report().decode("utf-8").replace(" -show_waiver", "")),
             {("RFADC0_CLK", "clk_pl_0")},
         )
 
@@ -594,6 +721,7 @@ clk_a         clk_a         Clean                      Partial False Path
             self.assertFalse(accepted.production_integration_ready)
             loaded = runner.load_validated_success(*context)
             self.assertEqual(loaded.connected_request_sha256, evidence.connected_request_sha256)
+            self.assertEqual(loaded.bonded_iob_used, 0)
             with self.assertRaisesRegex(RuntimeError, "launcher failed"):
                 runner.run(artifacts, *context, launcher=lambda _attempt: 9)
             with self.assertRaisesRegex(ValueError, "success"):
@@ -631,6 +759,8 @@ clk_a         clk_a         Clean                      Partial False Path
             "unsafe_clock": lambda attempt: attempt.report_paths["clock_interaction"].write_bytes(clean_clock_report().replace(b"clk_a         clk_b", b"clk_a         clk_c")),
             "unconstrained_timing": lambda attempt: attempt.report_paths["timing_summary"].write_bytes(clean_timing_report().rstrip() + b"\nclk_a         clk_a         clk_b\n"),
             "synthetic_utilization": lambda attempt: attempt.report_paths["utilization"].write_bytes(b"UTILIZATION_OK\n"),
+            "missing_bonded_iob": lambda attempt: attempt.report_paths["utilization"].write_bytes(clean_utilization_report().replace(b"| Bonded IOB                 | 0    | 0     | 728       | 0.00% |", b"")),
+            "used_bonded_iob": lambda attempt: attempt.report_paths["utilization"].write_bytes(clean_utilization_report().replace(b"| Bonded IOB                 | 0    | 0     | 728       | 0.00% |", b"| Bonded IOB                 | 1    | 0     | 728       | 0.14% |")),
             "wrong_version": lambda attempt: attempt.report_paths["cdc"].write_bytes(clean_cdc_report().replace(b"Vivado v.2025.2", b"Vivado v.2025.1")),
             "wrong_build": lambda attempt: attempt.report_paths["cdc"].write_bytes(clean_cdc_report().replace(b"Build 6299465", b"Build 6299464")),
             "oversized_report": lambda attempt: attempt.report_paths["cdc"].write_bytes(clean_cdc_report() + b"x" * 1_000_000),
@@ -781,6 +911,129 @@ clk_a         clk_a         Clean                      Partial False Path
                 return 0
             with self.assertRaisesRegex(RuntimeError, "reparse"):
                 runner.run(artifacts, *context, launcher=junction_fake)
+
+    def test_tracked_connected_evidence_bundle_is_honest_and_boundary_scoped(self) -> None:
+        """Handoff evidence must not turn a blocked attempt into an OOC success claim."""
+        repository = Path(__file__).resolve().parents[2]
+        bundle = json.loads(
+            (repository / "docs" / "handoff" / "connected_evidence_bundle.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(bundle["bundle_schema_version"], 2)
+        checkout = bundle["evidence_checkout"]
+        source_head = checkout["source_head"]
+        self.assertRegex(source_head, r"^[0-9a-f]{40}$")
+        environment = bundle["environment"]
+        self.assertRegex(environment["manifest_sha256"], r"^[0-9a-f]{64}$")
+        manifest_path = repository / environment["manifest_path"]
+        self.assertTrue(manifest_path.is_file())
+        manifest_bytes = manifest_path.read_bytes()
+        self.assertEqual(
+            hashlib.sha256(manifest_bytes).hexdigest(), environment["manifest_sha256"]
+        )
+        manifest = json.loads(manifest_bytes)
+        authority_paths = {
+            "default.json": repository / "config" / "default.json",
+            "ip_architecture.json": repository / "config" / "ip_architecture.json",
+            "ip_lock.json": repository / "config" / "ip_lock.json",
+            "ps_platform.json": repository / "config" / "ps_platform.json",
+        }
+        expected_authority_hashes = {
+            name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for name, path in authority_paths.items()
+        }
+
+        def assert_authority_binding(candidate: dict[str, object]) -> None:
+            self.assertEqual(candidate["authority_sha256"], expected_authority_hashes)
+
+        assert_authority_binding(bundle)
+        tampered_bundle = dict(bundle)
+        tampered_hashes = dict(bundle["authority_sha256"])
+        tampered_hashes["default.json"] = "0" * 64
+        tampered_bundle["authority_sha256"] = tampered_hashes
+        with self.assertRaises(AssertionError):
+            assert_authority_binding(tampered_bundle)
+        self.assertEqual(manifest["evidence_source_head"], source_head)
+        self.assertEqual(environment["python"], "3.13.2")
+        self.assertFalse(environment["ready"])
+        self.assertEqual(environment["blocking_reasons"], ["python_3_12_required"])
+        self.assertEqual(manifest["python"], environment["python"])
+        self.assertEqual(manifest["vivado"], environment["vivado"])
+        self.assertEqual(manifest["vivado_build"], environment["vivado_build"])
+        self.assertEqual(manifest["ready"], environment["ready"])
+        self.assertEqual(manifest["blocking_reasons"], environment["blocking_reasons"])
+        current_head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repository, capture_output=True,
+            text=True, check=True,
+        ).stdout.strip()
+        self.assertEqual(
+            subprocess.run(
+                ["git", "merge-base", "--is-ancestor", source_head, current_head],
+                cwd=repository, capture_output=True, text=True, check=False,
+            ).returncode,
+            0,
+            "evidence source HEAD must be an ancestor of the current checkout",
+        )
+        handoff = bundle["handoff_commit"]
+        parent_head = handoff["parent_head"]
+        self.assertEqual(
+            subprocess.run(
+                ["git", "merge-base", "--is-ancestor", parent_head, current_head],
+                cwd=repository, capture_output=True, text=True, check=False,
+            ).returncode,
+            0,
+            "declared pre-bundle parent must remain an ancestor of the current checkout",
+        )
+        self.assertIn("cannot self-reference", handoff["bundle_commit_relation"])
+        self.assertEqual(bundle["focused_test_counts"], {"calibrated_hv": 14, "cycle": 57})
+        connected = bundle["connected"]
+        self.assertEqual(connected["timing_scope"], "ooc_boundary_only")
+        self.assertFalse(connected["production_integration_ready"])
+        self.assertEqual(connected["cdc15_endpoint_count"], 60)
+        from rfsoc_pulse_model.ip.cdc_inventory import CDC15_ENDPOINT_PAIRS
+
+        expected_inventory_hash = hashlib.sha256(
+            json.dumps(
+                [list(pair) for pair in CDC15_ENDPOINT_PAIRS],
+                separators=(",", ":"),
+            ).encode("utf-8") + b"\n"
+        ).hexdigest()
+        self.assertEqual(connected["cdc15_endpoint_set_sha256"], expected_inventory_hash)
+        hash_fields = (
+            "request_sha256",
+            "realization_tcl_sha256",
+            "verification_tcl_sha256",
+        )
+        report_hashes = connected["report_hashes"]
+        self.assertEqual(set(report_hashes), {"cdc", "clock_interaction", "timing_summary", "utilization"})
+        self.assertEqual(connected["fresh_attempt_status"], "blocked_before_catalog")
+        self.assertFalse(connected["production_integration_ready"])
+        for value in (*(connected[name] for name in hash_fields), *report_hashes.values()):
+            self.assertIsNone(value)
+        self.assertIsNone(connected["bonded_iob_used"])
+
+        handoff_text = "\n".join(
+            (repository / "docs" / "handoff" / name).read_text(encoding="utf-8")
+            for name in (
+                "CURRENT_STATE.md",
+                "VERIFICATION_EVIDENCE.md",
+                "IMPLEMENTATION_HISTORY.md",
+                "NEXT_STEPS.md",
+                "OPEN_ISSUES.md",
+                "DECISIONS.md",
+                "NEW_CHAT_PROMPT.md",
+            )
+        )
+        self.assertIn("connected_evidence_bundle.json", handoff_text)
+        self.assertIn("ooc_boundary_only", handoff_text)
+        self.assertIn("production_integration_ready=false", handoff_text)
+        self.assertIn("baseline `c118362`", handoff_text)
+        self.assertIn("14 calibrated-H/V tests and 57 Cycle", handoff_text)
+        self.assertNotIn("51 Cycle", handoff_text)
+        self.assertNotIn("full Python regression reports 327", handoff_text)
+        self.assertNotIn("Task 5/6 OOC structural CLEAN", handoff_text)
+        self.assertNotIn("Do not start Task 6 again", handoff_text)
 
 
 if __name__ == "__main__":

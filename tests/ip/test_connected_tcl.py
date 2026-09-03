@@ -129,8 +129,24 @@ class ConnectedTclTest(unittest.TestCase):
             verification,
         )
         self.assertIn("AMD RFDC CDC-13 waiver endpoint discovery mismatch", verification)
-        self.assertIn("AMD RFDC CDC-15 waiver endpoint inventory mismatch", verification)
+        self.assertIn("set vendor_cdc15_expected_marker_counter 8", verification)
+        self.assertIn("set vendor_cdc15_expected_marker_location 4", verification)
+        self.assertIn("set vendor_cdc15_expected_adc_internal 32", verification)
+        self.assertIn("set vendor_cdc15_expected_dac_internal 16", verification)
+        self.assertIn("AMD RFDC CDC-15 exact endpoint inventory mismatch", verification)
+        self.assertIn(
+            "NAME =~ */rfdc_0/inst/IP2Bus_Data_reg\\[0\\]/D",
+            verification,
+        )
         self.assertIn("open_run synth_1", verification)
+        self.assertIn(
+            "set bonded_iob_used [llength [get_sites -quiet -filter {SITE_TYPE == IOB && IS_USED == 1}]]",
+            verification,
+        )
+        self.assertIn(
+            "if {$bonded_iob_used != 0} { error {Bonded IOB utilization must be zero} }",
+            verification,
+        )
         self.assertIn(
             'connected_emit BOOL validate_bd_design_passed [expr {[llength $validate_result] == 0 ? "true" : "false"}]',
             verification,

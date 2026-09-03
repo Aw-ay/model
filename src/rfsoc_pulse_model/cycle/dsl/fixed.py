@@ -16,7 +16,8 @@ def _require_positive_width(result_width: int) -> None:
 
 
 def _signed_literal(width: int, value: int) -> str:
-    return f"{width}'sd{int(value)}"
+    literal = f"{width}'sd{abs(int(value))}"
+    return f"-{literal}" if value < 0 else literal
 
 
 def _signed_expr(expr: Expr) -> str:
@@ -36,7 +37,7 @@ def _truncate_signed_verilog(expr: Expr, target_width: int) -> str:
         return f"$signed({_sign_extend_verilog(expr, target_width)})"
     if target_width == expr.width:
         return _signed_expr(expr)
-    return f"$signed(({expr.verilog()})[{target_width - 1}:0])"
+    return f"$signed({target_width}'({expr.verilog()}))"
 
 
 def _resize_signed_verilog_text(
@@ -50,7 +51,7 @@ def _resize_signed_verilog_text(
         return f"$signed({{{{{extra}{{{sign_bit}}}}}, {expression}}})"
     if target_width == source_width:
         return f"$signed({expression})"
-    return f"$signed(({expression})[{target_width - 1}:0])"
+    return f"$signed({target_width}'({expression}))"
 
 
 @dataclass(frozen=True)
@@ -80,7 +81,12 @@ class SignedMulExpr(Expr):
     def verilog(self) -> str:
         left = _sign_extend_verilog(self.left, self.result_width)
         right = _sign_extend_verilog(self.right, self.result_width)
-        return f"({left} * {right})"
+        product = f"({left} * {right})"
+        return _resize_signed_verilog_text(
+            product,
+            max(self.left.width, self.right.width, self.result_width),
+            self.result_width,
+        )
 
 
 @dataclass(frozen=True)

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import hashlib
 import re
 
+from .cdc_inventory import CDC15_CATEGORY_COUNTS, CDC15_ENDPOINT_PAIRS
 from .connected import ConnectedShellRequest, canonical_connected_json_bytes
 from .platform import PsPlatformConfig
 from .rfdc_probe import RfdcProbeInterface, RfdcProbeResult
@@ -30,6 +31,11 @@ def _value(value: str, field: str) -> str:
     if not isinstance(value, str) or not _VALUE.fullmatch(value):
         raise ValueError(f"{field} is not safe for Tcl braces")
     return value
+
+
+def _vivado_name_filter(suffix: str) -> str:
+    """Return a literal NAME =~ expression safe for bracketed Vivado pin names."""
+    return "NAME =~ */" + suffix.replace("[", r"\[").replace("]", r"\]")
 
 
 @dataclass(frozen=True)
@@ -253,7 +259,7 @@ def _emit_verification(request: ConnectedShellRequest, rfdc: str, properties: tu
         "connected_emit META verification_tcl_sha256 $::env(CONNECTED_VERIFICATION_TCL_SHA256)",
         "connected_emit META vivado_version [version -short]", "connected_emit META device_part [get_property PART [current_project]]",
         "set validate_result [validate_bd_design -quiet]", "if {[llength $validate_result] != 0} { error {validate_bd_design returned violations} }", "set connected_bd_design [get_bd_designs -quiet connected_rfdc_shell]", "if {[llength $connected_bd_design] != 1} { error {connected BD design is not unique} }", "set connected_bd_file [get_files -quiet [get_property FILE_NAME $connected_bd_design]]", "if {[llength $connected_bd_file] != 1} { error {connected BD file is not unique} }", "generate_target all $connected_bd_file", "set wrapper [make_wrapper -files $connected_bd_file -top]", "add_files -norecurse $wrapper", "set_property top connected_rfdc_shell_wrapper [current_fileset]", "set synth_run [get_runs -quiet synth_1]", "if {[llength $synth_run] != 1} { error {synth_1 run is not unique} }", "set_property -name {STEPS.SYNTH_DESIGN.ARGS.MORE OPTIONS} -value {-mode out_of_context} -objects $synth_run", "connected_emit META synthesis_mode out_of_context", "connected_emit META axis_boundary bd_external_interfaces", "launch_runs synth_1 -jobs 1", "wait_on_run synth_1", "set synth_status [get_property STATUS [get_runs synth_1]]", "if {$synth_status ne {synth_design Complete!}} { error {synthesis incomplete} }", "open_run synth_1",
-        "report_cdc -details -file [file join $::env(CONNECTED_REPORT_DIR) {cdc.rpt}]", "report_clock_interaction -file [file join $::env(CONNECTED_REPORT_DIR) {clock_interaction.rpt}]", "report_timing_summary -report_unconstrained -no_detailed_paths -file [file join $::env(CONNECTED_REPORT_DIR) {timing_summary.rpt}]", "report_utilization -file [file join $::env(CONNECTED_REPORT_DIR) {utilization.rpt}]",
+        "report_cdc -details -file [file join $::env(CONNECTED_REPORT_DIR) {cdc.rpt}]", "report_clock_interaction -file [file join $::env(CONNECTED_REPORT_DIR) {clock_interaction.rpt}]", "report_timing_summary -report_unconstrained -no_detailed_paths -file [file join $::env(CONNECTED_REPORT_DIR) {timing_summary.rpt}]", "report_utilization -file [file join $::env(CONNECTED_REPORT_DIR) {utilization.rpt}]", "set bonded_iob_used [llength [get_sites -quiet -filter {SITE_TYPE == IOB && IS_USED == 1}]]", "if {$bonded_iob_used != 0} { error {Bonded IOB utilization must be zero} }",
     ]
     lines += [
         "connected_emit META timing_scope ooc_boundary_only",
@@ -307,17 +313,34 @@ def _emit_verification(request: ConnectedShellRequest, rfdc: str, properties: tu
         "  if {[llength $from_pin] != 1 || [llength $to_pin] != 1} { error {AMD RFDC CDC-13 waiver endpoint discovery mismatch} }",
         "  create_waiver -user $vendor_waiver_user -type CDC -id CDC-13 -tags $vendor_waiver_tag -description {Passing the MTS FIFO enable from the management to the fabric clock} -from $from_pin -to $to_pin",
         "}",
-        "set vendor_ipif_to [get_pins -hier -filter {NAME =~ */IP2Bus_Data_reg* && REF_PIN_NAME == D}]",
-        "if {[llength $vendor_ipif_to] != 32} { error {AMD RFDC CDC waiver IPIF endpoint inventory mismatch} }",
-        "set vendor_marker_cntr_from [get_pins -hier -filter {NAME =~ */i_rf_conv_mt_mrk_counter_adc*/*mrk_cntr_ff_reg* && REF_PIN_NAME == C}]",
-        "set vendor_marker_loc_from [get_pins -hier -filter {NAME =~ */i_rf_conv_mt_mrk_counter_adc*/*mrk_loc_ff_reg* && REF_PIN_NAME == C}]",
-        "set vendor_adc_internal_from [get_pins -hier -filter {NAME =~ */connected_*_rf_wrapper_i/rx*_u_adc/INTERNAL_FBRC_DIV2_MUX}]",
-        "set vendor_dac_internal_from [get_pins -hier -filter {NAME =~ */connected_*_rf_wrapper_i/tx*_u_dac/INTERNAL_FBRC_MUX}]",
-        "if {[llength $vendor_marker_cntr_from] == 0 || [llength $vendor_marker_loc_from] == 0 || [llength $vendor_adc_internal_from] != 4 || [llength $vendor_dac_internal_from] != 2} { error {AMD RFDC CDC-15 waiver endpoint inventory mismatch} }",
-        "create_waiver -user $vendor_waiver_user -type CDC -id CDC-15 -tags $vendor_waiver_tag -description {Passing the marker counter signals from the fabric to the management clock} -from $vendor_marker_cntr_from -to $vendor_ipif_to",
-        "create_waiver -user $vendor_waiver_user -type CDC -id CDC-15 -tags $vendor_waiver_tag -description {Passing the marker counter signals from the fabric to the management clock} -from $vendor_marker_loc_from -to $vendor_ipif_to",
-        "create_waiver -user $vendor_waiver_user -type CDC -id CDC-15 -tags $vendor_waiver_tag -description {Passing DAC and ADC outputs to the status registers} -from $vendor_adc_internal_from -to $vendor_ipif_to",
-        "create_waiver -user $vendor_waiver_user -type CDC -id CDC-15 -tags $vendor_waiver_tag -description {Passing DAC and ADC outputs to the status registers} -from $vendor_dac_internal_from -to $vendor_ipif_to",
+        f"set vendor_cdc15_expected_marker_counter {CDC15_CATEGORY_COUNTS['marker_counter']}",
+        f"set vendor_cdc15_expected_marker_location {CDC15_CATEGORY_COUNTS['marker_location']}",
+        f"set vendor_cdc15_expected_adc_internal {CDC15_CATEGORY_COUNTS['adc_internal']}",
+        f"set vendor_cdc15_expected_dac_internal {CDC15_CATEGORY_COUNTS['dac_internal']}",
+        "proc vendor_cdc15_exact_pins {suffix candidates} { set result {}; foreach candidate $candidates { set name [get_property NAME $candidate]; if {[string equal $suffix [string range $name end-[expr {[string length $suffix] - 1}] end]]} { lappend result $candidate } }; return $result }",
+        "set vendor_cdc15_expected_pairs [list "
+        + " ".join(
+            f"[list {{{source}}} {{{destination}}} "
+            f"{{{_vivado_name_filter(source)}}} {{{_vivado_name_filter(destination)}}}]"
+            for source, destination in CDC15_ENDPOINT_PAIRS
+        ) + "]",
+        "set vendor_cdc15_discovered_pairs {}",
+        "set vendor_cdc15_resolved_pairs {}",
+        "foreach vendor_cdc15_pair $vendor_cdc15_expected_pairs {",
+        "  lassign $vendor_cdc15_pair vendor_cdc15_source_suffix vendor_cdc15_destination_suffix vendor_cdc15_source_filter vendor_cdc15_destination_filter",
+        "  set vendor_cdc15_source_candidates [get_pins -hier -quiet -filter $vendor_cdc15_source_filter]",
+        "  set vendor_cdc15_destination_candidates [get_pins -hier -quiet -filter $vendor_cdc15_destination_filter]",
+        "  set vendor_cdc15_source_pin [vendor_cdc15_exact_pins $vendor_cdc15_source_suffix $vendor_cdc15_source_candidates]",
+        "  set vendor_cdc15_destination_pin [vendor_cdc15_exact_pins $vendor_cdc15_destination_suffix $vendor_cdc15_destination_candidates]",
+        "  if {[llength $vendor_cdc15_source_pin] != 1 || [llength $vendor_cdc15_destination_pin] != 1} { error {AMD RFDC CDC-15 waiver endpoint inventory mismatch} }",
+        "  lappend vendor_cdc15_discovered_pairs $vendor_cdc15_pair",
+        "  lappend vendor_cdc15_resolved_pairs [list $vendor_cdc15_source_pin $vendor_cdc15_destination_pin]",
+        "}",
+        "if {[llength $vendor_cdc15_discovered_pairs] != 60 || [lsort -unique $vendor_cdc15_discovered_pairs] ne [lsort -unique $vendor_cdc15_expected_pairs]} { error {AMD RFDC CDC-15 exact endpoint inventory mismatch} }",
+        "foreach vendor_cdc15_resolved_pair $vendor_cdc15_resolved_pairs {",
+        "  lassign $vendor_cdc15_resolved_pair vendor_cdc15_source_pin vendor_cdc15_destination_pin",
+        "  create_waiver -user $vendor_waiver_user -type CDC -id CDC-15 -tags $vendor_waiver_tag -description {Passing exact measured RFDC CDC-15 endpoints} -from $vendor_cdc15_source_pin -to $vendor_cdc15_destination_pin",
+        "}",
         "report_cdc -details -show_waiver -file [file join $::env(CONNECTED_REPORT_DIR) {cdc.rpt}]",
     ]
     for cell in request.cells: lines.append(f"connected_emit CELL {cell.name} [get_property VLNV [get_bd_cells {{{cell.name}}}]]")

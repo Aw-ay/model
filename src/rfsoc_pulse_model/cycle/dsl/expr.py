@@ -54,7 +54,9 @@ class ConstExpr(Expr):
 
     def verilog(self) -> str:
         if self.signed:
-            return f"{self.width}'sd{int(self.value)}"
+            value = int(self.value)
+            literal = f"{self.width}'sd{abs(value)}"
+            return f"-{literal}" if value < 0 else literal
         return f"{self.width}'d{int(self.value) & _mask(self.width)}"
 
 

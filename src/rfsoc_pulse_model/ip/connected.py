@@ -31,7 +31,7 @@ _EVIDENCE_KEYS = frozenset({
     "cells", "interfaces", "clocks", "resets", "address_path", "irq_path",
     "rfdc_semantics", "mts_groups", "mts_configuration_verified", "mts_runtime_verified",
     "validate_bd_design_passed", "synthesis_completed", "cdc_safe", "clock_safety_verified",
-    "report_hashes",
+    "bonded_iob_used", "report_hashes",
 })
 _EVIDENCE_KEYS_V2 = _EVIDENCE_KEYS | {"environment_manifest_sha256"}
 _REQUEST_KEYS = frozenset({
@@ -315,6 +315,7 @@ class ConnectedShellEvidence:
     synthesis_completed: bool
     cdc_safe: bool
     clock_safety_verified: bool
+    bonded_iob_used: int
     report_hashes: tuple[tuple[str, str], ...]
     environment_manifest_sha256: str | None = None
 
@@ -345,6 +346,7 @@ class ConnectedShellEvidence:
                       "validate_bd_design_passed", "synthesis_completed", "cdc_safe",
                       "clock_safety_verified"):
             _boolean(getattr(self, field), field)
+        _integer(self.bonded_iob_used, "bonded_iob_used")
         if not isinstance(self.report_hashes, tuple):
             raise ValueError("report_hashes must be a tuple")
         if any(
@@ -373,6 +375,7 @@ def summarize_connected_shell_evidence(
         "synthesis_completed": evidence.synthesis_completed,
         "cdc_safe": evidence.cdc_safe,
         "clock_safety_verified": evidence.clock_safety_verified,
+        "bonded_iob_used_zero": evidence.bonded_iob_used == 0,
         "mts_configuration_verified": evidence.mts_configuration_verified,
     }
     structural_ready = all(structural_checks.values())
@@ -397,6 +400,7 @@ def summarize_connected_shell_evidence(
         "synthesis_completed": evidence.synthesis_completed,
         "cdc_safe": evidence.cdc_safe,
         "clock_safety_verified": evidence.clock_safety_verified,
+        "bonded_iob_used": evidence.bonded_iob_used,
         "mts_configuration_verified": evidence.mts_configuration_verified,
         "mts_runtime_verified": evidence.mts_runtime_verified,
         "report_hashes": {
@@ -858,6 +862,7 @@ def parse_connected_evidence(raw_bytes: bytes) -> ConnectedShellEvidence:
         _tuple_text(payload["address_path"], "address_path"), _tuple_text(payload["irq_path"], "irq_path"),
         _semantics(_mapping(payload["rfdc_semantics"], "rfdc_semantics")), _object_tuple(payload["mts_groups"], _mts, "mts_groups"),
         *(_boolean(payload[field], field) for field in ("mts_configuration_verified", "mts_runtime_verified", "validate_bd_design_passed", "synthesis_completed", "cdc_safe", "clock_safety_verified")),
+        _integer(payload["bonded_iob_used"], "bonded_iob_used"),
         tuple(report_pairs),
         _sha256(payload["environment_manifest_sha256"], "environment_manifest_sha256")
         if schema == 2 else None)
@@ -914,4 +919,5 @@ def validate_connected_evidence(
     if not evidence.synthesis_completed: reasons.append("synthesis_failed")
     if not evidence.cdc_safe: reasons.append("cdc_unsafe")
     if not evidence.clock_safety_verified: reasons.append("clock_safety_failed")
+    if evidence.bonded_iob_used != 0: reasons.append("bonded_iob_nonzero")
     return ConnectedShellReadiness(not reasons, False, tuple(reasons))
